@@ -117,7 +117,12 @@ To find your sandbox name: `openshell sandbox list`
 
 **Authentication (as of March 2026):** Due to a known bug in the current OpenClaw
 version, the dashboard requires the gateway token passed directly in the URL.
-Connect to the sandbox to get the token:
+
+The gateway token is a secret string generated during NemoClaw onboarding that
+authenticates the browser to the OpenClaw gateway WebSocket. It is stored in
+`openclaw.json` inside the sandbox and is unique to your sandbox instance.
+
+To retrieve it, connect to the sandbox:
 ```bash
 nemoclaw <sandbox-name> connect
 ```
@@ -129,6 +134,7 @@ Open the dashboard with the token in the URL:
 ```
 http://127.0.0.1:18789/?token=<token-value>
 ```
+The token persists across sandbox restarts — you only need to retrieve it once.
 This workaround will not be needed once the OpenClaw authentication bug is fixed.
 
 ## Inference Modes
