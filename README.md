@@ -2,15 +2,44 @@
 
 This fork adapts the original [JetsonHacks/NemoClaw-Thor](https://github.com/JetsonHacks/NemoClaw-Thor) flow for a stricter local-first setup on Jetson AGX Thor.
 
-The upstream repository assumes local Nemotron 3 Nano inference. This fork is being rewritten to use locally served Qwen models from [`../thor_llm/models`](../thor_llm/models) and to document a tighter sandbox policy for repository development.
+The upstream repository assumes local Nemotron 3 Nano inference. This fork now targets locally served Qwen models from [`../thor_llm/models`](../thor_llm/models), a hardened sandbox policy baseline, and a more reversible host-setup flow for repository development on Thor.
 
 ## Status
 
-This repository is a work in progress.
+This repository is a usable draft, not yet fully validated end-to-end on Thor hardware.
 
-- `install.sh`, `check-prerequisites.sh`, `status.sh`, and `configure-local-provider.sh` now follow the Qwen-based local-provider flow.
-- The README describes the target setup and the planned changes from upstream.
+For a more operational handoff note aimed at future coding sessions, see
+[`AGENT_NOTES.md`](AGENT_NOTES.md).
+
+Implemented now:
+
+- `install.sh`, `check-prerequisites.sh`, `status.sh`, and `configure-local-provider.sh` follow the Qwen-based local-provider flow.
+- `start-model.sh` and the Qwen convenience wrappers provide local vLLM launch paths for the supported model profiles.
+- Static and dynamic sandbox policy tooling is in place for `strict-local`, `local-hardened`, and `research-lite`.
+- Host backup/apply/restore scripts are in place for the Thor-specific OpenShell fixes.
+
+Still incomplete or not yet validated:
+
+- The full flow has not yet been run and validated end-to-end on the target Thor from this fork.
+- The upstream `NemoClaw` onboarding path is still interactive and cloud-first, and still asks for an NVIDIA API key before the local provider override is applied.
 - The old `nemotron3-thor*.sh` launchers are still upstream leftovers and should not be treated as the preferred path for this fork.
+- This repository is a setup and hardening layer for NemoClaw/OpenShell on Thor. It does not itself implement the higher-level orchestrator/coder/tester workflow logic.
+
+## Current Scope
+
+This repository currently covers:
+
+- preparing the Thor host for OpenShell with a reversible backup path
+- installing `NemoClaw` and switching it to a local OpenAI-compatible provider
+- launching supported local Qwen models with conservative Thor-oriented defaults
+- applying a stricter sandbox network policy baseline for local repo work
+- checking prerequisites and basic install/runtime status
+
+This repository does not currently try to be:
+
+- a finished autonomous coding agent product
+- a replacement for the upstream `NemoClaw` onboarding wizard
+- a benchmark suite for final model throughput claims
 
 ## Goal
 
@@ -114,6 +143,10 @@ Limits still apply:
 
 - exact firewall restore is most reliable on a quiet host
 - if Docker workloads changed substantially after the backup, restoring the old firewall snapshot may no longer be an exact fit
+- `./apply-host-fixes.sh` is not guaranteed safe over a single SSH session
+  - the upstream Thor helper switches `iptables` backend, flushes current firewall rules, and restarts Docker
+  - if the host currently depends on custom firewall rules to keep SSH reachable, you can lose the session
+  - `./backup-host-state.sh` is the safe remote step; the apply step should be treated as console-preferred unless the current firewall state is known
 
 ## Sandbox Policy Hardening
 
@@ -145,9 +178,9 @@ openshell term
 
 and approve only the blocked requests you actually need.
 
-## What Will Change From The Original JetsonHacks Instructions
+## What This Fork Changes From The Original JetsonHacks Instructions
 
-Compared with the original JetsonHacks flow, this fork is intended to change the setup in the following ways:
+Compared with the original JetsonHacks flow, this fork changes the setup in the following ways:
 
 1. Replace local Nemotron 3 Nano inference with locally served Qwen models.
 2. Reuse the existing `thor_llm` model-serving flow instead of bundling a single fixed Nemotron launcher.
@@ -240,6 +273,8 @@ That flag runs `./apply-host-fixes.sh` first, which:
 2. clones `jetsonhacks/OpenShell-Thor` if needed
 3. builds `iptable_raw`
 4. applies the Thor Docker, iptables, module, and sysctl fixes
+
+Do not assume `--apply-host-fixes` is SSH-safe on a remotely administered Thor. Check the current firewall policy first, or use console access or a rollback timer.
 
 If you prefer to do that step explicitly, use:
 
