@@ -315,20 +315,26 @@ check_hf_token() {
     return 0
 }
 
+check_hf_token_optional() {
+    if [[ -z "${HF_TOKEN:-}" ]]; then
+        warn "HF_TOKEN is not set"
+        info "This is fine if your selected Qwen model is already downloaded or does"
+        info "not require an authenticated Hugging Face pull."
+        fix "Optional: export HF_TOKEN=hf_..."
+        return 2
+    fi
+
+    pass "HF_TOKEN is set"
+    return 0
+}
+
 # ── Disk space ─────────────────────────────────────────────────────────────────
 
 check_disk_space() {
-    # Checks for a baseline minimum of free space needed for the install itself.
-    # Informational notes are printed for configurations that require more.
-    #
-    # Additional space requirements depend on your inference configuration:
-    #   Local vLLM (nemotron3-thor.sh):
-    #     ~35GB  vLLM container image (one-time Docker pull)
-    #     ~19GB  Nemotron 3 Nano NVFP4 model weights (one-time HuggingFace download)
-    #     ~54GB  total for first run — both are cached, no re-download on restart
-    #
-    #   NVIDIA cloud API (default NemoClaw profile):
-    #     No local model storage required
+    # This keeps the install check intentionally conservative.
+    # The exact local-serving footprint depends on which Qwen model you run,
+    # whether the weights are already cached, and whether the Docker image is
+    # already present on disk.
     local required_gb=10
     local docker_root
     docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null \
@@ -348,9 +354,8 @@ check_disk_space() {
         return 0
     else
         fail "Disk space: only ${available_gb}GB available (need at least ${required_gb}GB)"
-        info "Additional space is needed depending on your inference configuration:"
-        info "  Local vLLM: ~54GB for first run (container image + model weights)"
-        info "  Cloud API:  no additional local storage required"
+        info "Local vLLM with Qwen models typically needs tens of GB for the image,"
+        info "model weights, and runtime caches."
         fix "Free up space on the filesystem containing ${check_dir}"
         return 1
     fi
@@ -367,6 +372,18 @@ check_connectivity_huggingface() {
         info "Required to download NVFP4 model weights and the reasoning parser."
         fix "Check network connectivity and any proxy settings."
         return 1
+    fi
+}
+
+check_connectivity_huggingface_optional() {
+    if curl -fsSL --max-time 10 --head https://huggingface.co &>/dev/null; then
+        pass "huggingface.co is reachable"
+        return 0
+    else
+        warn "Cannot reach huggingface.co"
+        info "This is fine if your local model weights are already cached."
+        fix "Required later only if you still need to download model weights."
+        return 2
     fi
 }
 

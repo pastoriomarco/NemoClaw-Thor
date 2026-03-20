@@ -1,190 +1,254 @@
 # NemoClaw-Thor
 
-Scripts and fixes for running [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw) on the Jetson AGX Thor (JetPack 7.1 / L4T 38.4, Ubuntu 24.04 Noble).
+This fork adapts the original [JetsonHacks/NemoClaw-Thor](https://github.com/JetsonHacks/NemoClaw-Thor) flow for a stricter local-first setup on Jetson AGX Thor.
 
-NemoClaw combines [OpenClaw](https://github.com/openclaw/openclaw) with [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) to run AI agents in a secure, policy-enforced sandbox. This repository provides the Thor-specific fixes, launch scripts, and installer needed to get the full stack running with local Nemotron 3 Nano inference.
+The upstream repository assumes local Nemotron 3 Nano inference. This fork is being rewritten to use locally served Qwen models from [`../thor_llm/models`](../thor_llm/models) and to document a tighter sandbox policy for repository development.
 
-## Prerequisites
+## Status
 
-**Hardware:** Jetson AGX Thor with JetPack 7.1 installed.
+This repository is a work in progress.
 
-**Software — must be in place before starting:**
-- OpenShell installed with all five openshell-thor fixes applied
-  See: [JetsonHacks/openshell-thor](https://github.com/JetsonHacks/openshell-thor)
-- Docker installed and running with the NVIDIA container runtime
-- A HuggingFace account with access to the Nemotron 3 Nano NVFP4 model
-  Accept the license at: [nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4)
-- An NVIDIA API key from [build.nvidia.com](https://build.nvidia.com/settings/api-keys)
-  Required during the NemoClaw onboarding wizard
+- `install.sh`, `check-prerequisites.sh`, `status.sh`, and `configure-local-provider.sh` now follow the Qwen-based local-provider flow.
+- The README describes the target setup and the planned changes from upstream.
+- The old `nemotron3-thor*.sh` launchers are still upstream leftovers and should not be treated as the preferred path for this fork.
 
-Run `./check-prerequisites.sh` to verify your system before proceeding.
+## Goal
 
-## First-Run Download Requirements
+Run `NemoClaw` and `OpenClaw` locally on Jetson AGX Thor with:
 
-The first run of `nemotron3-thor-no-thinking.sh` or `nemotron3-thor.sh` will download:
+- local inference only
+- local control only
+- a sandboxed execution environment
+- no WhatsApp, Telegram, or similar external channels
+- disposable repo workspaces inside the sandbox
+- a clear path to multi-agent coding workflows
 
-| Item | Size | Location |
+The initial target is a local coding setup with separate orchestrator, coder, tester, and optional researcher agents running against a repo clone inside the sandbox.
+
+## Requirements For This Fork
+
+These are the intended requirements for the Qwen-based flow.
+
+### Hardware and OS
+
+- Jetson AGX Thor
+- JetPack 7.1
+- L4T 38.4
+- Ubuntu 24.04
+
+### Host software
+
+- [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) installed
+- All fixes from [JetsonHacks/openshell-thor](https://github.com/JetsonHacks/openshell-thor) applied
+- Docker installed and running
+- NVIDIA container runtime enabled in Docker
+- `nvm` with Node.js 22 for `NemoClaw`
+
+### Local model serving
+
+- A working local OpenAI-compatible vLLM endpoint on the Thor host
+- Model-specific caches under the `thor_llm` workflow
+- Hugging Face access only for the model weights you actually choose to run
+- The launcher scripts in this repo assume a local vLLM API key and save it in the NemoClaw-Thor runtime config so the OpenShell provider and the local server agree on the same credential
+
+Relevant model docs in this workspace:
+
+- [`../thor_llm/models/qwen3.5-122b-a10b-nvfp4-resharded/README.md`](../thor_llm/models/qwen3.5-122b-a10b-nvfp4-resharded/README.md)
+- [`../thor_llm/models/qwen3.5-27b-fp8/README.md`](../thor_llm/models/qwen3.5-27b-fp8/README.md)
+- [`../thor_llm/models/qwen3.5-35b-a3b-fp8/README.md`](../thor_llm/models/qwen3.5-35b-a3b-fp8/README.md)
+- [`../thor_llm/models/qwen3.5-35b-a3b-nvfp4/README.md`](../thor_llm/models/qwen3.5-35b-a3b-nvfp4/README.md)
+
+### Current upstream constraint that still applies
+
+The upstream `NemoClaw` onboarding flow is still cloud-first.
+
+- Today, the onboarding wizard still asks for an NVIDIA API key.
+- This fork intends to switch the actual inference route to a local provider after onboarding.
+- Until the installer is rewritten, that upstream onboarding constraint remains in force.
+
+## Safety Requirements
+
+This fork is being shaped around these requirements:
+
+- `OpenClaw` should be controlled only from the local machine.
+- Agent work should happen only inside the sandbox.
+- The sandbox should use disposable repo clones instead of the real working tree.
+- Personal accounts and personal tokens should not be mounted into the sandbox.
+- Outbound network access should default to deny.
+- If internet access is later enabled, it should be limited to an explicit allowlist and ideally to a dedicated researcher agent.
+- The default `NemoClaw` policy presets should not be accepted blindly for this fork.
+
+## Sandbox Policy Hardening
+
+This fork now hardens the sandbox policy before upstream onboarding runs.
+
+The default static policy profile is:
+
+- `strict-local`
+
+That profile removes all pre-allowed external endpoints from the sandbox baseline. It is the closest match to a local-only development setup.
+
+A second static profile is available:
+
+- `local-hardened`
+
+That profile keeps only the small OpenClaw endpoint set that may be needed for compatibility, while still removing cloud inference, messaging, GitHub, npm, and other broader egress.
+
+For temporary, session-only troubleshooting access, this fork also provides:
+
+- `research-lite`
+
+That dynamic additions file allows a narrow set of developer-oriented endpoints such as GitHub, `docs.openclaw.ai`, `docs.nvidia.com`, PyPI, and the npm registry. It must be applied explicitly and resets when the sandbox stops.
+
+If you want one-off approvals instead of a preset, use:
+
+```bash
+openshell term
+```
+
+and approve only the blocked requests you actually need.
+
+## What Will Change From The Original JetsonHacks Instructions
+
+Compared with the original JetsonHacks flow, this fork is intended to change the setup in the following ways:
+
+1. Replace local Nemotron 3 Nano inference with locally served Qwen models.
+2. Reuse the existing `thor_llm` model-serving flow instead of bundling a single fixed Nemotron launcher.
+3. Document three model profiles instead of one.
+4. Standardize the initial tuning target around:
+   - `--max-model-len 65536`
+   - `--kv-cache-dtype fp8`
+   - higher `--max-num-seqs` than the current max-context configs
+5. Rewrite the installation instructions around local-only development rather than generic assistant usage.
+6. Tighten the security posture:
+   - local dashboard only
+   - no chat bridges
+   - no personal browser/account access
+   - stricter sandbox and network policy guidance
+7. Rewrite health checks and verification steps so they no longer assume `nvidia/nemotron-3-nano-30b-a3b`.
+
+## Target Model Profiles
+
+This fork is being prepared to support these three model choices:
+
+| Model | Role | Current source doc |
 |---|---|---|
-| vLLM container image | ~35GB | Docker image cache |
-| Nemotron 3 Nano NVFP4 weights | ~19GB | `~/.cache/huggingface` |
+| `qwen3.5-122b-a10b-nvfp4-resharded` | Most capable | [`../thor_llm/models/qwen3.5-122b-a10b-nvfp4-resharded/README.md`](../thor_llm/models/qwen3.5-122b-a10b-nvfp4-resharded/README.md) |
+| `qwen3.5-27b-fp8` | Capable but slower | [`../thor_llm/models/qwen3.5-27b-fp8/README.md`](../thor_llm/models/qwen3.5-27b-fp8/README.md) |
+| `qwen3.5-35b-a3b-fp8` or `qwen3.5-35b-a3b-nvfp4` | Fastest, lower ceiling | [`../thor_llm/models/qwen3.5-35b-a3b-fp8/README.md`](../thor_llm/models/qwen3.5-35b-a3b-fp8/README.md) and [`../thor_llm/models/qwen3.5-35b-a3b-nvfp4/README.md`](../thor_llm/models/qwen3.5-35b-a3b-nvfp4/README.md) |
 
-Both are cached after the first pull. Ensure you have a stable network connection and sufficient disk space before starting.
+## Initial Serving Targets
 
-## Repository Contents
+These are planning targets for the rewritten instructions, not final benchmarked guarantees.
 
-| Script | Description |
-|---|---|
-| `check-prerequisites.sh` | Verify system prerequisites before installing |
-| `install-node.sh` | Install nvm and Node.js 22 (required by NemoClaw) |
-| `uninstall-node.sh` | Remove nvm and Node.js installed by install-node.sh |
-| `install.sh` | Install NemoClaw and configure local vLLM inference |
-| `uninstall.sh` | Remove NemoClaw, sandbox, and inference providers |
-| `nemotron3-thor-no-thinking.sh` | Start the inference server — Fast mode |
-| `nemotron3-thor.sh` | Start the inference server — Thinking mode |
-| `status.sh` | Check system health and print end-to-end test instructions |
+| Model | Planned context | Planned KV cache | Initial `max-num-seqs` target | Notes |
+|---|---|---|---|---|
+| `qwen3.5-122b-a10b-nvfp4-resharded` | `65536` | `fp8` | `8` | Strongest model, likely the practical upper bound for coding agents on Thor |
+| `qwen3.5-27b-fp8` | `65536` | `fp8` | `8` to `12` | More headroom than the current max-context profile, but throughput still needs validation |
+| `qwen3.5-35b-a3b-fp8` | `65536` | `fp8` | `8` to `12` | Fastest path from the existing Qwen docs |
+| `qwen3.5-35b-a3b-nvfp4` | `65536` | `fp8` | `8` to `12` | Expected to have at least similar memory headroom to the FP8 profile |
 
-## Installation
+### Why these numbers
 
-**1. Check prerequisites:**
+These targets come from the current `thor_llm` docs in this workspace:
+
+- `qwen3.5-122b-a10b-nvfp4-resharded` already uses `--kv-cache-dtype fp8` and `--max-num-seqs 2`. Lowering the working context target to `65536` should make `8` the first concurrency target worth validating.
+- `qwen3.5-27b-fp8` is currently documented with `--max-model-len 262144` and `--max-num-seqs 1`. Moving to `65536` and `fp8` KV cache should permit materially more concurrency, but the exact stable point still needs measurement.
+- `qwen3.5-35b-a3b-fp8` is already documented at `262144` with `fp8` KV cache and `--max-num-seqs 2`. At `65536`, `8` is the first reasonable target, with `12` as a stretch target to test.
+
+These numbers should be treated as startup targets for the rewritten instructions, not as finished performance claims.
+
+## Recommended Concurrency Interpretation
+
+For this repository, "concurrent requests" should mean "simultaneous active vLLM sequences that keep the agent stack responsive enough for development."
+
+That means:
+
+- latency matters more than peak queue depth
+- long context plus long tool-use generations will reduce practical throughput
+- an agentic coding workflow should prefer a stable `max-num-seqs` over an aggressive one
+
+For the first documented version of this fork, the conservative baseline should be:
+
+- `8` for `qwen3.5-122b-a10b-nvfp4-resharded`
+- `8` for `qwen3.5-27b-fp8`
+- `8` for `qwen3.5-35b-a3b-fp8`
+- `8` for `qwen3.5-35b-a3b-nvfp4`
+
+After that baseline is validated, the smaller models can be pushed further.
+
+## Planned Setup Shape
+
+The intended final setup is:
+
+1. Start one selected Qwen model locally through the `thor_llm` flow.
+2. Point `OpenShell` local inference at that host endpoint.
+3. Switch `NemoClaw` from cloud inference to the local provider.
+4. Use a sandboxed repo clone for agent work.
+5. Keep network access off by default.
+6. Enable a separate research-capable agent only if explicit allowlist rules are added later.
+
+## Policy Tooling
+
+Static baseline installation into the cloned NemoClaw repo:
+
 ```bash
-./check-prerequisites.sh
-```
-Address any failures before continuing.
-
-**2. Install Node.js 22 via nvm:**
-```bash
-./install-node.sh
-```
-Open a new terminal after this completes.
-
-**3. Set your HuggingFace token:**
-```bash
-export HF_TOKEN=hf_...
-```
-
-**4. Install NemoClaw:**
-```bash
-./install.sh
-```
-The NemoClaw onboarding wizard runs interactively. You will be prompted for a sandbox name, your NVIDIA API key, and policy presets. Accept the suggested defaults for policy presets.
-
-## Starting the Inference Server
-
-Open a new terminal and start one of the inference servers:
-
-```bash
-./nemotron3-thor-no-thinking.sh   # Fast — recommended for most use
-./nemotron3-thor.sh               # Thinking — better accuracy on complex tasks
-```
-
-Wait until you see `Application startup complete.` before proceeding. The first startup downloads the model weights (~19GB) if not already cached and may take several minutes.
-
-## Verifying the Installation
-
-Check system health:
-```bash
-./status.sh
-```
-
-When all checks pass, connect to the sandbox and send a test message:
-```bash
-nemoclaw <sandbox-name> connect
-```
-Then inside the sandbox:
-```bash
-openclaw agent --agent main --local \
-  -m "Reply with one word: working" --session-id test
-```
-Expected response: a single word reply from Nemotron 3 Nano.
-
-The first response may be slow while the model warms up. If you see `No reply from agent`, wait a moment and try again.
-
-## Web Interface
-
-The OpenClaw Gateway Dashboard provides a browser-based interface for monitoring
-sessions, agents, channels, usage, and logs.
-
-**Starting the dashboard:**
-
-1. Start the port forward (if not already running):
-```bash
-openshell forward start 18789 <sandbox-name> --background
+./apply-policy-profile.sh strict-local
+./apply-policy-profile.sh local-hardened
 ```
 
-2. Get the dashboard URL with authentication token. Connect to the sandbox:
-```bash
-nemoclaw <sandbox-name> connect
-```
-Then inside the sandbox:
-```bash
-openclaw dashboard --no-open
-```
-This prints the full URL including the authentication token. Copy it and open it in a browser.
+Session-scoped dynamic additions for troubleshooting:
 
-3. To stop the port forward:
 ```bash
-openshell forward stop 18789 <sandbox-name>
+./apply-policy-additions.sh research-lite
 ```
 
-To find your sandbox name: `openshell sandbox list`
+Recommended sequence for the most conservative setup:
 
-**Note (as of March 2026):** Due to a known OpenClaw bug, the dashboard does not
-connect when navigating directly to `http://127.0.0.1:18789/` — the tokenized URL
-from `openclaw dashboard --no-open` is required. Additionally, the gateway token
-is currently displayed in plaintext in the dashboard Overview panel — be aware of
-this if sharing your screen. Both issues are expected to be fixed in a future
-OpenClaw release.
+1. Install with `strict-local`.
+2. Try the local-only workflow first.
+3. If the sandboxed agent needs limited outbound access, prefer `openshell term` for one-off approvals.
+4. If repeated troubleshooting access is needed for a session, apply `research-lite`.
 
-## Inference Modes
+## Launcher Scripts
 
-Two launch scripts are provided for the inference server:
+The preferred launcher entrypoint is:
 
-| Script | Mode | Latency | Use when |
-|---|---|---|---|
-| `nemotron3-thor-no-thinking.sh` | Fast | ~5 seconds | Most agentic tasks, chat |
-| `nemotron3-thor.sh` | Thinking | ~60 seconds | Hard reasoning, math, code |
-
-Fast mode disables Nemotron 3 Nano's internal reasoning trace. Thinking mode enables it, producing better results on difficult tasks at the cost of significantly higher latency.
-
-## Memory Tuning
-
-`--gpu-memory-utilization` controls the fraction of Thor's 128GB unified memory allocated to vLLM. Edit the value in the launch script to adjust:
-
-| Utilization | Context | vLLM pool | Weights | KV cache | OS headroom |
-|---|---|---|---|---|---|
-| 0.35 | 8192 | ~44.8 GB | ~19 GB | ~25 GB | ~83 GB |
-| 0.45 | 32768 | ~57.6 GB | ~19 GB | ~38 GB | ~70 GB (default) |
-| 0.55 | 65536 | ~70.4 GB | ~19 GB | ~51 GB | ~57 GB |
-
-## Uninstalling
-
-Remove NemoClaw (sandbox, inference providers, CLI, and NemoClaw directory):
 ```bash
-./uninstall.sh
+./start-model.sh <model-profile>
 ```
 
-Remove nvm and Node.js:
-```bash
-./uninstall-node.sh
-```
+Convenience wrappers are also provided:
 
-## Known Limitations
+- `./start-qwen3.5-122b-a10b-nvfp4-resharded.sh`
+- `./start-qwen3.5-27b-fp8.sh`
+- `./start-qwen3.5-35b-a3b-fp8.sh`
+- `./start-qwen3.5-35b-a3b-nvfp4.sh`
 
-**Plugin banner** — The NemoClaw plugin inside the sandbox always displays `Endpoint: build.nvidia.com`. This is cosmetic. Inference is routed locally through the OpenShell gateway to the vLLM server.
+All launchers target:
 
-**Web dashboard (as of March 2026)** — Direct navigation to `http://127.0.0.1:18789/` does not connect. Use `openclaw dashboard --no-open` inside the sandbox to get the correct tokenized URL. The gateway token is also currently displayed in plaintext in the dashboard Overview panel. Both are known OpenClaw bugs expected to be fixed in a future release.
+- `--max-model-len 65536`
+- `--kv-cache-dtype fp8`
+- `--max-num-seqs 8` by default
 
-**First-call latency** — The first inference request after starting the server may time out while the model loads into memory. This is expected — wait a moment and retry.
+The smaller models can still be pushed further with environment overrides after validation.
 
-**Response latency** — In Fast mode, simple prompts take approximately 7-8 seconds end-to-end (3 seconds OpenClaw startup, 4-5 seconds model inference). Thinking mode adds significant latency due to the reasoning trace.
+## Not Yet Updated
 
-## Related Repositories
+The following pieces still need to be rewritten in this fork:
 
-- [JetsonHacks/openshell-thor](https://github.com/JetsonHacks/openshell-thor) — OpenShell fixes for JetPack 7.1
-- [NVIDIA/NemoClaw](https://github.com/NVIDIA/NemoClaw) — NemoClaw upstream
-- [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) — OpenShell upstream
-- [openclaw/openclaw](https://github.com/openclaw/openclaw) — OpenClaw upstream
+- the Nemotron launch scripts
+
+The main install, provider configuration, status flow, local Qwen launchers, and sandbox policy hardening flow are now in place.
+
+## Upstream References
+
+- [JetsonHacks/NemoClaw-Thor](https://github.com/JetsonHacks/NemoClaw-Thor)
+- [JetsonHacks/openshell-thor](https://github.com/JetsonHacks/openshell-thor)
+- [NVIDIA/NemoClaw](https://github.com/NVIDIA/NemoClaw)
+- [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell)
+- [openclaw/openclaw](https://github.com/openclaw/openclaw)
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+This project remains under the MIT License. See [LICENSE](LICENSE).

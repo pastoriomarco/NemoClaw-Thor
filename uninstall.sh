@@ -8,13 +8,14 @@
 #   - The nemoclaw CLI
 #   - The ~/NemoClaw directory
 #   - Optionally: ~/.nemoclaw (contains NVIDIA API key and sandbox metadata)
+#   - The NemoClaw-Thor runtime config file
 #
 # Does NOT remove:
 #   - OpenShell itself
 #   - The openshell-thor kernel/networking fixes
 #   - Docker or the NVIDIA container runtime
 #   - nvm or Node.js (use ./uninstall-node.sh for that)
-#   - The vLLM container image or Nemotron model weights
+#   - The vLLM container image or local model weights
 #
 # Usage:
 #   ./uninstall.sh
@@ -23,9 +24,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/checks.sh"
+source "${SCRIPT_DIR}/lib/config.sh"
 
 NEMOCLAW_DIR="${HOME}/NemoClaw"
 NEMOCLAW_CONFIG_DIR="${HOME}/.nemoclaw"
+NEMOCLAW_THOR_CONFIG_FILE="$(thor_config_file)"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 
 # ── Header ─────────────────────────────────────────────────────────────────────
@@ -50,6 +53,7 @@ providers=()
 nemoclaw_bin=""
 nemoclaw_dir_exists=false
 nemoclaw_config_exists=false
+nemoclaw_thor_config_exists=false
 
 # Sandboxes
 if command -v openshell &>/dev/null; then
@@ -78,6 +82,7 @@ fi
 # Directories
 [[ -d "${NEMOCLAW_DIR}" ]] && nemoclaw_dir_exists=true
 [[ -d "${NEMOCLAW_CONFIG_DIR}" ]] && nemoclaw_config_exists=true
+[[ -f "${NEMOCLAW_THOR_CONFIG_FILE}" ]] && nemoclaw_thor_config_exists=true
 
 # ── Check there is anything to remove ─────────────────────────────────────────
 
@@ -85,7 +90,8 @@ if [[ ${#sandboxes[@]} -eq 0 ]] && \
    [[ ${#providers[@]} -eq 0 ]] && \
    [[ -z "${nemoclaw_bin}" ]] && \
    [[ "${nemoclaw_dir_exists}" == false ]] && \
-   [[ "${nemoclaw_config_exists}" == false ]]; then
+   [[ "${nemoclaw_config_exists}" == false ]] && \
+   [[ "${nemoclaw_thor_config_exists}" == false ]]; then
     echo "Nothing to remove — NemoClaw does not appear to be installed."
     echo ""
     exit 0
@@ -133,8 +139,13 @@ if [[ "${nemoclaw_dir_exists}" == true ]]; then
     echo ""
 fi
 
+if [[ "${nemoclaw_thor_config_exists}" == true ]]; then
+    echo "  • NemoClaw-Thor config: ${NEMOCLAW_THOR_CONFIG_FILE}"
+    echo ""
+fi
+
 echo "  This does NOT remove OpenShell, nvm, Node.js, Docker,"
-echo "  the vLLM container image, or the Nemotron model weights."
+echo "  the vLLM container image, or any local model weights."
 echo ""
 
 # ── Ask about ~/.nemoclaw ──────────────────────────────────────────────────────
@@ -279,6 +290,20 @@ if [[ "${remove_config}" == true ]]; then
     else
         fail "Could not remove ${NEMOCLAW_CONFIG_DIR}"
         fix "Try: rm -rf ${NEMOCLAW_CONFIG_DIR}"
+    fi
+    echo ""
+fi
+
+if [[ "${nemoclaw_thor_config_exists}" == true ]]; then
+    header "Removing NemoClaw-Thor runtime config"
+    echo ""
+    info "Removing ${NEMOCLAW_THOR_CONFIG_FILE}..."
+    rm -f "${NEMOCLAW_THOR_CONFIG_FILE}"
+    if [[ ! -f "${NEMOCLAW_THOR_CONFIG_FILE}" ]]; then
+        pass "${NEMOCLAW_THOR_CONFIG_FILE} removed"
+    else
+        fail "Could not remove ${NEMOCLAW_THOR_CONFIG_FILE}"
+        fix "Try: rm -f ${NEMOCLAW_THOR_CONFIG_FILE}"
     fi
     echo ""
 fi

@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
 # status.sh — NemoClaw-Thor system health check
 #
-# Checks the health of all components in the NemoClaw stack:
-#   - OpenShell gateway
-#   - vLLM inference server
-#   - OpenShell sandbox
-#   - Inference route configuration
-#
-# After all checks pass, prints the command to run a manual
-# end-to-end inference test from inside the sandbox.
-#
 # Usage:
-#   ./status.sh
+#   ./status.sh [model-profile]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/checks.sh"
+source "${SCRIPT_DIR}/lib/config.sh"
 
-# ── Header ─────────────────────────────────────────────────────────────────────
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    echo "Usage: ./status.sh [model-profile]"
+    echo ""
+    print_supported_model_profiles
+    exit 0
+fi
+
+load_thor_runtime_config "${1:-}"
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor System Status${NC}"
-echo -e "JetsonHacks — https://github.com/JetsonHacks/NemoClaw-Thor"
+echo -e "JetsonHacks fork — /home/tndlux/workspaces/thor_llm/src/NemoClaw-Thor"
 echo ""
-
-# ── Tracking ───────────────────────────────────────────────────────────────────
+print_thor_runtime_config
+echo ""
 
 CHECKS_PASSED=0
 CHECKS_FAILED=0
@@ -35,12 +34,10 @@ record() {
     local ret="$1"
     case "${ret}" in
         0) CHECKS_PASSED=$((CHECKS_PASSED + 1)) ;;
-        2) CHECKS_WARNED=$((CHECKS_WARNED  + 1)) ;;
-        *) CHECKS_FAILED=$((CHECKS_FAILED  + 1)) ;;
+        2) CHECKS_WARNED=$((CHECKS_WARNED + 1)) ;;
+        *) CHECKS_FAILED=$((CHECKS_FAILED + 1)) ;;
     esac
 }
-
-# ── OpenShell gateway ──────────────────────────────────────────────────────────
 
 header "OpenShell Gateway"
 echo ""
@@ -58,31 +55,27 @@ if command -v openshell &>/dev/null; then
     fi
 fi
 
-# ── vLLM inference server ──────────────────────────────────────────────────────
-
 header "vLLM Inference Server"
 echo ""
 
-vllm_response=$(curl -s --max-time 10 http://localhost:8000/v1/models 2>/dev/null || echo "")
+vllm_response=$(curl -s --max-time 10 \
+    -H "Authorization: Bearer ${THOR_LOCAL_VLLM_API_KEY}" \
+    "${THOR_HOST_VLLM_MODELS_URL}" 2>/dev/null || echo "")
 
 if [[ -z "${vllm_response}" ]]; then
-    fail "vLLM server is not reachable at http://localhost:8000"
-    info "The inference server is not running or is still starting up."
-    fix "Start one in a separate terminal:"
-    fix "  ./nemotron3-thor-no-thinking.sh  (Fast — recommended)"
-    fix "  ./nemotron3-thor.sh               (Thinking — slower, more accurate)"
-    fix "Wait for: \"Application startup complete.\""
+    fail "vLLM server is not reachable at ${THOR_HOST_VLLM_MODELS_URL}"
+    info "The local model server is not running or is still starting up."
+    fix "Start the selected model server: ./start-model.sh ${THOR_MODEL_PROFILE}"
     record 1
 else
-    expected_model="nvidia/nemotron-3-nano-30b-a3b"
     if echo "${vllm_response}" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 models = [m['id'] for m in data.get('data', [])]
-sys.exit(0 if '${expected_model}' in models else 1)
+sys.exit(0 if '${THOR_MODEL_ID}' in models else 1)
 " 2>/dev/null; then
         pass "vLLM server is running"
-        pass "Model serving as: ${expected_model}"
+        pass "Model serving as: ${THOR_MODEL_ID}"
         record 0
         record 0
     else
@@ -93,13 +86,11 @@ models = [m['id'] for m in data.get('data', [])]
 print(', '.join(models) if models else 'unknown')
 " 2>/dev/null || echo "unknown")
         warn "vLLM server is running but serving unexpected model: ${actual}"
-        info "NemoClaw expects model: ${expected_model}"
-        fix "Check --served-model-name in nemotron3-thor.sh"
+        info "Expected model id: ${THOR_MODEL_ID}"
+        fix "Adjust --served-model-name in your thor_llm launch command, or override THOR_MODEL_ID."
         record 2
     fi
 fi
-
-# ── OpenShell sandbox ──────────────────────────────────────────────────────────
 
 header "OpenShell Sandbox"
 echo ""
@@ -119,7 +110,7 @@ else
 
     if [[ -z "${sandbox_name}" ]]; then
         fail "No sandbox found"
-        info "Run ./install.sh to create a sandbox."
+        info "Run ./install.sh ${THOR_MODEL_PROFILE} to create a sandbox."
         record 1
     elif [[ "${sandbox_phase}" == "Ready" ]]; then
         pass "Sandbox '${sandbox_name}' is Ready"
@@ -132,8 +123,6 @@ else
     fi
 fi
 
-# ── Inference route ────────────────────────────────────────────────────────────
-
 header "Inference Route"
 echo ""
 
@@ -142,32 +131,32 @@ if ! command -v openshell &>/dev/null; then
     record 1
 else
     inference=$(openshell inference get 2>/dev/null || echo "")
-    provider=$(echo "${inference}" | grep 'Provider:' | awk '{print $2}')
-    model=$(echo "${inference}"    | grep 'Model:'    | awk '{print $2}')
+    provider=$(echo "${inference}" | grep 'Provider:' | awk '{print $2}' || true)
+    model=$(echo "${inference}"    | grep 'Model:'    | awk '{print $2}' || true)
 
     if [[ -z "${provider}" ]]; then
         fail "No inference route configured"
-        fix "Run: openshell provider create --name vllm-local --type openai \\"
-        fix "       --credential OPENAI_API_KEY=dummy \\"
-        fix "       --config OPENAI_BASE_URL=http://host.openshell.internal:8000/v1"
-        fix "Then: openshell inference set --provider vllm-local \\"
-        fix "        --model nvidia/nemotron-3-nano-30b-a3b --no-verify"
+        fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 1
-    elif [[ "${provider}" == "vllm-local" ]]; then
+    elif [[ "${provider}" == "${THOR_LOCAL_PROVIDER_NAME}" ]]; then
         pass "Inference provider: ${provider}"
-        pass "Inference model:    ${model}"
-        record 0
-        record 0
+        if [[ "${model}" == "${THOR_MODEL_ID}" ]]; then
+            pass "Inference model:    ${model}"
+            record 0
+            record 0
+        else
+            warn "Inference model is '${model}' — expected '${THOR_MODEL_ID}'"
+            fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 0
+            record 2
+        fi
     else
-        warn "Inference provider is '${provider}' — expected 'vllm-local'"
-        info "The stack is configured for cloud inference, not local vLLM."
-        fix "Switch to local: openshell inference set --provider vllm-local \\"
-        fix "  --model nvidia/nemotron-3-nano-30b-a3b --no-verify"
+        warn "Inference provider is '${provider}' — expected '${THOR_LOCAL_PROVIDER_NAME}'"
+        info "The stack is not currently pointing at the saved local vLLM provider."
+        fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 2
     fi
 fi
-
-# ── Summary ────────────────────────────────────────────────────────────────────
 
 echo ""
 echo "══════════════════════════════════════════════════════════════"
@@ -191,10 +180,6 @@ else
     exit 1
 fi
 
-# ── Manual end-to-end test ─────────────────────────────────────────────────────
-# OpenClaw runs inside the sandbox and cannot be reached non-interactively.
-# Print the commands the user needs to run to verify end-to-end inference.
-
 if [[ -n "${sandbox_name}" ]]; then
     echo -e "${BOLD}  To verify end-to-end inference:${NC}"
     echo ""
@@ -205,8 +190,13 @@ if [[ -n "${sandbox_name}" ]]; then
     echo "    openclaw agent --agent main --local \\"
     echo '      -m "Reply with one word: working" --session-id test'
     echo ""
-    echo "  Expected: a single word reply from Nemotron 3 Nano."
-    echo '  Note: "No reply from agent" on the first attempt is normal'
+    echo "  Expected: a short reply from ${THOR_MODEL_ID}."
+    echo '  Note: "No reply from agent" on the first attempt can happen'
     echo "  while the model warms up — wait a moment and try again."
+    echo ""
+    echo "  For temporary outbound access during troubleshooting:"
+    echo "    ./apply-policy-additions.sh research-lite"
+    echo "  Or use one-off approvals:"
+    echo "    openshell term"
     echo ""
 fi
