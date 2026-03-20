@@ -56,10 +56,35 @@ done
 
 load_thor_runtime_config "${MODEL_PROFILE_ARG}"
 resolve_policy_profile "${POLICY_PROFILE_ARG:-${THOR_POLICY_PROFILE:-}}"
+THOR_MANAGED_SANDBOX_NAME=""
+THOR_MANAGED_PROVIDER_NAMES=""
 
 NEMOCLAW_DIR="${HOME}/NemoClaw"
 NEMOCLAW_REPO="https://github.com/NVIDIA/NemoClaw.git"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+list_openshell_provider_names() {
+    if ! command -v openshell &>/dev/null; then
+        return 0
+    fi
+
+    openshell provider list 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | awk 'NR>1 && $1 != "" {print $1}' || true
+}
+
+csv_from_added_names() {
+    local before_csv="${1:-}"
+    local after_csv="${2:-}"
+
+    python3 - "${before_csv}" "${after_csv}" <<'PYEOF'
+import sys
+
+before = {item for item in sys.argv[1].split(",") if item}
+after = [item for item in sys.argv[2].split(",") if item]
+print(",".join([item for item in after if item not in before]))
+PYEOF
+}
 
 activate_preferred_node_runtime() {
     if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
@@ -265,12 +290,20 @@ echo ""
 echo "  Press Enter to continue..."
 read -r
 
+before_provider_names_csv=$(list_openshell_provider_names | paste -sd, -)
+
 cd "${NEMOCLAW_DIR}"
 ./install.sh
 
-SANDBOX_NAME=$(openshell sandbox list 2>/dev/null \
-    | sed 's/\x1b\[[0-9;]*m//g' \
-    | awk 'NR>1 && $1 != "" {print $1; exit}' || echo "")
+SANDBOX_NAME=$(recent_nemoclaw_registry_sandbox_name 2>/dev/null || echo "")
+if [[ -n "${SANDBOX_NAME}" ]]; then
+    THOR_MANAGED_SANDBOX_NAME="${SANDBOX_NAME}"
+    save_thor_runtime_config
+    pass "Tracked sandbox recorded as ${THOR_MANAGED_SANDBOX_NAME}"
+else
+    warn "Could not determine the NemoClaw sandbox name from ~/.nemoclaw/sandboxes.json"
+    info "Status and uninstall will need an explicit sandbox name until this is recorded."
+fi
 
 if [[ -n "${SANDBOX_NAME}" ]]; then
     openshell forward stop 18789 "${SANDBOX_NAME}" 2>/dev/null || true
@@ -297,6 +330,14 @@ pass "nemoclaw found at $(command -v nemoclaw)"
 header "Step 9: Configuring local inference"
 echo ""
 "${SCRIPT_DIR}/configure-local-provider.sh" "${THOR_MODEL_PROFILE}"
+
+after_provider_names_csv=$(list_openshell_provider_names | paste -sd, -)
+created_provider_names_csv=$(csv_from_added_names "${before_provider_names_csv}" "${after_provider_names_csv}")
+while IFS= read -r provider_name; do
+    [[ -n "${provider_name}" ]] || continue
+    THOR_MANAGED_PROVIDER_NAMES=$(csv_append_unique "${THOR_MANAGED_PROVIDER_NAMES:-}" "${provider_name}")
+done < <(csv_lines "${created_provider_names_csv}")
+save_thor_runtime_config
 
 SANDBOX_NAME="${SANDBOX_NAME:-<sandbox-name>}"
 

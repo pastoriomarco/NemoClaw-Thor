@@ -14,6 +14,121 @@ thor_config_file() {
     echo "${NEMOCLAW_THOR_CONFIG_FILE:-${config_home}/nemoclaw-thor/config.env}"
 }
 
+thor_nemoclaw_registry_file() {
+    echo "${HOME}/.nemoclaw/sandboxes.json"
+}
+
+csv_append_unique() {
+    local csv="${1:-}"
+    local value="${2:-}"
+
+    python3 - "${csv}" "${value}" <<'PYEOF'
+import sys
+
+csv = sys.argv[1]
+value = sys.argv[2].strip()
+
+items = [item for item in csv.split(",") if item]
+if value and value not in items:
+    items.append(value)
+
+print(",".join(items))
+PYEOF
+}
+
+csv_lines() {
+    local csv="${1:-}"
+    if [[ -n "${csv}" ]]; then
+        printf '%s\n' "${csv}" | tr ',' '\n' | sed '/^$/d'
+    fi
+}
+
+recent_nemoclaw_registry_sandbox_name() {
+    local registry_file
+    registry_file="$(thor_nemoclaw_registry_file)"
+    [[ -f "${registry_file}" ]] || return 1
+
+    python3 - "${registry_file}" <<'PYEOF'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+
+sandboxes = data.get("sandboxes", {})
+if not sandboxes:
+    raise SystemExit(1)
+
+def sort_key(item):
+    name, meta = item
+    created_at = ""
+    if isinstance(meta, dict):
+        created_at = meta.get("createdAt") or ""
+    return (created_at, name)
+
+name, _ = max(sandboxes.items(), key=sort_key)
+print(name)
+PYEOF
+}
+
+single_nemoclaw_registry_sandbox_name() {
+    local registry_file
+    registry_file="$(thor_nemoclaw_registry_file)"
+    [[ -f "${registry_file}" ]] || return 1
+
+    python3 - "${registry_file}" <<'PYEOF'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+
+sandboxes = data.get("sandboxes", {})
+names = list(sandboxes.keys())
+if len(names) != 1:
+    raise SystemExit(1)
+print(names[0])
+PYEOF
+}
+
+single_openshell_sandbox_name() {
+    command -v openshell &>/dev/null || return 1
+
+    local sandbox_names
+    sandbox_names=$(openshell sandbox list 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | awk 'NR>1 && $1 != "" {print $1}' || true)
+
+    local count
+    count=$(printf '%s\n' "${sandbox_names}" | sed '/^$/d' | wc -l | tr -d ' ')
+    [[ "${count}" == "1" ]] || return 1
+    printf '%s\n' "${sandbox_names}" | sed '/^$/d'
+}
+
+resolve_thor_sandbox_name() {
+    if [[ -n "${THOR_MANAGED_SANDBOX_NAME:-}" ]]; then
+        printf '%s\n' "${THOR_MANAGED_SANDBOX_NAME}"
+        return 0
+    fi
+
+    local fallback=""
+    fallback=$(single_nemoclaw_registry_sandbox_name 2>/dev/null || true)
+    if [[ -n "${fallback}" ]]; then
+        printf '%s\n' "${fallback}"
+        return 0
+    fi
+
+    fallback=$(single_openshell_sandbox_name 2>/dev/null || true)
+    if [[ -n "${fallback}" ]]; then
+        printf '%s\n' "${fallback}"
+        return 0
+    fi
+
+    return 1
+}
+
 print_supported_model_profiles() {
     cat <<'EOF'
 Supported model profiles:
@@ -74,6 +189,8 @@ resolve_model_profile() {
     THOR_LOCAL_VLLM_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL:-http://host.openshell.internal:8000/v1}"
     THOR_HOST_VLLM_MODELS_URL="${THOR_HOST_VLLM_MODELS_URL:-http://127.0.0.1:8000/v1/models}"
     THOR_LOCAL_VLLM_API_KEY="${THOR_LOCAL_VLLM_API_KEY:-dummy}"
+    THOR_MANAGED_SANDBOX_NAME="${THOR_MANAGED_SANDBOX_NAME:-}"
+    THOR_MANAGED_PROVIDER_NAMES="${THOR_MANAGED_PROVIDER_NAMES:-}"
 }
 
 load_thor_runtime_config() {
@@ -85,6 +202,8 @@ load_thor_runtime_config() {
     local env_host_models_url="${THOR_HOST_VLLM_MODELS_URL:-}"
     local env_api_key="${THOR_LOCAL_VLLM_API_KEY:-}"
     local env_policy_profile="${THOR_POLICY_PROFILE:-}"
+    local env_managed_sandbox_name="${THOR_MANAGED_SANDBOX_NAME:-}"
+    local env_managed_provider_names="${THOR_MANAGED_PROVIDER_NAMES:-}"
     THOR_CONFIG_FILE="$(thor_config_file)"
 
     if [[ -f "${THOR_CONFIG_FILE}" ]]; then
@@ -111,6 +230,8 @@ load_thor_runtime_config() {
     [[ -n "${env_base_url}" ]] && THOR_LOCAL_VLLM_BASE_URL="${env_base_url}"
     [[ -n "${env_host_models_url}" ]] && THOR_HOST_VLLM_MODELS_URL="${env_host_models_url}"
     [[ -n "${env_api_key}" ]] && THOR_LOCAL_VLLM_API_KEY="${env_api_key}"
+    [[ -n "${env_managed_sandbox_name}" ]] && THOR_MANAGED_SANDBOX_NAME="${env_managed_sandbox_name}"
+    [[ -n "${env_managed_provider_names}" ]] && THOR_MANAGED_PROVIDER_NAMES="${env_managed_provider_names}"
 
     resolve_model_profile "${THOR_MODEL_PROFILE:-}"
 }
@@ -128,6 +249,8 @@ save_thor_runtime_config() {
         printf "THOR_LOCAL_VLLM_BASE_URL=%q\n" "${THOR_LOCAL_VLLM_BASE_URL}"
         printf "THOR_HOST_VLLM_MODELS_URL=%q\n" "${THOR_HOST_VLLM_MODELS_URL}"
         printf "THOR_LOCAL_VLLM_API_KEY=%q\n" "${THOR_LOCAL_VLLM_API_KEY}"
+        printf "THOR_MANAGED_SANDBOX_NAME=%q\n" "${THOR_MANAGED_SANDBOX_NAME:-}"
+        printf "THOR_MANAGED_PROVIDER_NAMES=%q\n" "${THOR_MANAGED_PROVIDER_NAMES:-}"
         printf "THOR_TARGET_MAX_MODEL_LEN=%q\n" "${THOR_TARGET_MAX_MODEL_LEN}"
         printf "THOR_TARGET_KV_CACHE_DTYPE=%q\n" "${THOR_TARGET_KV_CACHE_DTYPE}"
         printf "THOR_TARGET_MAX_NUM_SEQS=%q\n" "${THOR_TARGET_MAX_NUM_SEQS}"
@@ -141,6 +264,12 @@ print_thor_runtime_config() {
     echo "  Provider name:     ${THOR_LOCAL_PROVIDER_NAME}"
     echo "  OpenShell URL:     ${THOR_LOCAL_VLLM_BASE_URL}"
     echo "  Host models URL:   ${THOR_HOST_VLLM_MODELS_URL}"
+    if [[ -n "${THOR_MANAGED_SANDBOX_NAME:-}" ]]; then
+        echo "  Tracked sandbox:   ${THOR_MANAGED_SANDBOX_NAME}"
+    fi
+    if [[ -n "${THOR_MANAGED_PROVIDER_NAMES:-}" ]]; then
+        echo "  Tracked providers: ${THOR_MANAGED_PROVIDER_NAMES}"
+    fi
     echo "  Planned context:   ${THOR_TARGET_MAX_MODEL_LEN}"
     echo "  Planned KV cache:  ${THOR_TARGET_KV_CACHE_DTYPE}"
     echo "  Planned max seqs:  ${THOR_TARGET_MAX_NUM_SEQS}"

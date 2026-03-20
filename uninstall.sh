@@ -2,9 +2,8 @@
 # uninstall.sh — Remove NemoClaw from Jetson AGX Thor
 #
 # Removes:
-#   - The OpenShell sandbox created by NemoClaw
-#   - The vllm-local inference provider
-#   - The nvidia-nim inference provider
+#   - The tracked OpenShell sandbox recorded by this repo
+#   - The tracked inference providers recorded by this repo
 #   - The nemoclaw CLI
 #   - The ~/NemoClaw directory
 #   - Optionally: ~/.nemoclaw (contains NVIDIA API key and sandbox metadata)
@@ -32,11 +31,13 @@ NEMOCLAW_CONFIG_DIR="${HOME}/.nemoclaw"
 NEMOCLAW_THOR_CONFIG_FILE="$(thor_config_file)"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 
+load_thor_runtime_config
+
 # ── Header ─────────────────────────────────────────────────────────────────────
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Uninstaller${NC}"
-echo -e "JetsonHacks — https://github.com/JetsonHacks/NemoClaw-Thor"
+echo "Repo: ${SCRIPT_DIR}"
 echo ""
 
 # ── Ensure nvm/node are active ─────────────────────────────────────────────────
@@ -51,26 +52,46 @@ fi
 
 sandboxes=()
 providers=()
+all_sandboxes=()
+all_providers=()
 nemoclaw_bin=""
 nemoclaw_dir_exists=false
 nemoclaw_config_exists=false
 nemoclaw_thor_config_exists=false
 
-# Sandboxes
+# Current OpenShell resources
 if command -v openshell &>/dev/null; then
     while IFS= read -r name; do
-        [[ -n "${name}" ]] && sandboxes+=("${name}")
+        [[ -n "${name}" ]] && all_sandboxes+=("${name}")
     done < <(openshell sandbox list 2>/dev/null \
         | sed 's/\x1b\[[0-9;]*m//g' \
         | awk 'NR>1 && $1 != "" {print $1}' || true)
 
-    # Providers
     while IFS= read -r name; do
-        [[ -n "${name}" ]] && providers+=("${name}")
+        [[ -n "${name}" ]] && all_providers+=("${name}")
     done < <(openshell provider list 2>/dev/null \
         | sed 's/\x1b\[[0-9;]*m//g' \
         | awk 'NR>1 && $1 != "" {print $1}' || true)
 fi
+
+if [[ -n "${THOR_MANAGED_SANDBOX_NAME:-}" ]]; then
+    for name in "${all_sandboxes[@]}"; do
+        if [[ "${name}" == "${THOR_MANAGED_SANDBOX_NAME}" ]]; then
+            sandboxes+=("${name}")
+            break
+        fi
+    done
+fi
+
+while IFS= read -r provider_name; do
+    [[ -n "${provider_name}" ]] || continue
+    for name in "${all_providers[@]}"; do
+        if [[ "${name}" == "${provider_name}" ]]; then
+            providers+=("${name}")
+            break
+        fi
+    done
+done < <(csv_lines "${THOR_MANAGED_PROVIDER_NAMES:-}")
 
 # nemoclaw binary — check PATH first, then search nvm prefix directly
 if command -v nemoclaw &>/dev/null; then
@@ -114,8 +135,25 @@ echo ""
 echo -e "${BOLD}The following will be removed:${NC}"
 echo ""
 
+if [[ -n "${THOR_MANAGED_SANDBOX_NAME:-}" && ${#sandboxes[@]} -eq 0 ]]; then
+    warn "Tracked sandbox '${THOR_MANAGED_SANDBOX_NAME}' is not present in openshell sandbox list"
+    echo ""
+fi
+
+if [[ -n "${THOR_MANAGED_PROVIDER_NAMES:-}" && ${#providers[@]} -eq 0 ]]; then
+    warn "No tracked providers from THOR_MANAGED_PROVIDER_NAMES are present in openshell provider list"
+    echo ""
+fi
+
+if [[ -z "${THOR_MANAGED_SANDBOX_NAME:-}" ]] && [[ -z "${THOR_MANAGED_PROVIDER_NAMES:-}" ]]; then
+    warn "No tracked OpenShell resources are recorded in ${THOR_CONFIG_FILE}"
+    info "This uninstaller will not remove untracked sandboxes or providers automatically."
+    info "Use explicit openshell sandbox/provider delete commands if you need to clean up an older install."
+    echo ""
+fi
+
 if [[ ${#sandboxes[@]} -gt 0 ]]; then
-    echo "  • OpenShell sandboxes:"
+    echo "  • Tracked OpenShell sandboxes:"
     for s in "${sandboxes[@]}"; do
         echo "      ${s}"
     done
@@ -123,7 +161,7 @@ if [[ ${#sandboxes[@]} -gt 0 ]]; then
 fi
 
 if [[ ${#providers[@]} -gt 0 ]]; then
-    echo "  • OpenShell inference providers:"
+    echo "  • Tracked OpenShell inference providers:"
     for p in "${providers[@]}"; do
         echo "      ${p}"
     done
@@ -212,8 +250,11 @@ current_provider=$(openshell inference get 2>/dev/null \
 
 if [[ -n "${current_provider}" ]]; then
     info "Current inference provider: ${current_provider}"
-    # No direct 'unset' command — we note it will be cleared when provider is deleted
-    info "Inference route will be cleared when providers are removed"
+    if printf '%s\n' "${providers[@]}" | grep -Fxq "${current_provider}"; then
+        info "Inference route will be cleared when tracked providers are removed"
+    else
+        info "Active inference provider is not tracked by this install and will be left untouched"
+    fi
 else
     info "No active inference route"
 fi

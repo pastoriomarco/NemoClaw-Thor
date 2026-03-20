@@ -101,16 +101,27 @@ if ! command -v openshell &>/dev/null; then
     record 1
 else
     sandbox_list=$(openshell sandbox list 2>/dev/null || echo "")
-    sandbox_name=$(echo "${sandbox_list}" \
-        | sed 's/\x1b\[[0-9;]*m//g' \
-        | awk 'NR>1 && $1 != "" {print $1; exit}')
-    sandbox_phase=$(echo "${sandbox_list}" \
-        | sed 's/\x1b\[[0-9;]*m//g' \
-        | awk 'NR>1 && $1 != "" {print $NF; exit}')
+    sandbox_name=$(resolve_thor_sandbox_name 2>/dev/null || echo "")
+    sandbox_phase=""
+    if [[ -n "${sandbox_name}" ]]; then
+        sandbox_phase=$(echo "${sandbox_list}" \
+            | sed 's/\x1b\[[0-9;]*m//g' \
+            | awk -v name="${sandbox_name}" 'NR>1 && $1 == name {print $NF; exit}')
+    fi
 
     if [[ -z "${sandbox_name}" ]]; then
-        fail "No sandbox found"
-        info "Run ./install.sh ${THOR_MODEL_PROFILE} to create a sandbox."
+        sandbox_count=$(echo "${sandbox_list}" | sed 's/\x1b\[[0-9;]*m//g' | awk 'NR>1 && $1 != "" {count++} END {print count+0}')
+        if [[ "${sandbox_count}" -gt 0 ]]; then
+            fail "Could not determine which sandbox belongs to this NemoClaw-Thor install"
+            fix "Set THOR_MANAGED_SANDBOX_NAME in ${THOR_CONFIG_FILE}, or keep only one sandbox present."
+        else
+            fail "No sandbox found"
+            info "Run ./install.sh ${THOR_MODEL_PROFILE} to create a sandbox."
+        fi
+        record 1
+    elif [[ -z "${sandbox_phase}" ]]; then
+        fail "Tracked sandbox '${sandbox_name}' was not found in openshell sandbox list"
+        fix "Update THOR_MANAGED_SANDBOX_NAME in ${THOR_CONFIG_FILE}, or re-run install.sh."
         record 1
     elif [[ "${sandbox_phase}" == "Ready" ]]; then
         pass "Sandbox '${sandbox_name}' is Ready"

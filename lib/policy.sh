@@ -120,14 +120,12 @@ apply_dynamic_policy_additions() {
     fi
 
     if [[ -z "${sandbox_name}" ]]; then
-        sandbox_name=$(openshell sandbox list 2>/dev/null \
-            | sed 's/\x1b\[[0-9;]*m//g' \
-            | awk 'NR>1 && $1 != "" {print $1; exit}' || echo "")
+        sandbox_name=$(resolve_thor_sandbox_name 2>/dev/null || echo "")
     fi
 
     if [[ -z "${sandbox_name}" ]]; then
         fail "Could not determine a target sandbox for dynamic policy additions"
-        fix "Pass a sandbox name explicitly, or create/start a NemoClaw sandbox first."
+        fix "Pass a sandbox name explicitly, or set THOR_MANAGED_SANDBOX_NAME in ${THOR_CONFIG_FILE}."
         return 1
     fi
 

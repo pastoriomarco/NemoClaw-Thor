@@ -48,6 +48,7 @@ else
         --credential OPENAI_API_KEY="${THOR_LOCAL_VLLM_API_KEY}" \
         --config OPENAI_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL}"
     pass "Provider ${THOR_LOCAL_PROVIDER_NAME} created"
+    THOR_MANAGED_PROVIDER_NAMES=$(csv_append_unique "${THOR_MANAGED_PROVIDER_NAMES:-}" "${THOR_LOCAL_PROVIDER_NAME}")
 fi
 
 info "Setting inference route to ${THOR_MODEL_ID}..."
