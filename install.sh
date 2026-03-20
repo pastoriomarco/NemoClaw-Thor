@@ -61,9 +61,51 @@ NEMOCLAW_DIR="${HOME}/NemoClaw"
 NEMOCLAW_REPO="https://github.com/NVIDIA/NemoClaw.git"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 
+activate_preferred_node_runtime() {
+    if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
+        # shellcheck source=/dev/null
+        source "${NVM_DIR}/nvm.sh"
+        if nvm use 22 &>/dev/null; then
+            pass "Node.js $(node --version) active via nvm"
+            return 0
+        fi
+        warn "nvm is installed, but Node.js 22 is not active in this shell"
+        info "The upstream NemoClaw installer can install Node.js 22 if needed."
+        return 0
+    fi
+
+    if command -v node &>/dev/null; then
+        pass "Node.js $(node --version) already available"
+    else
+        warn "Node.js is not yet available in this shell"
+        info "The upstream NemoClaw installer can bootstrap nvm and Node.js 22."
+    fi
+}
+
+refresh_nemoclaw_path() {
+    local npm_prefix=""
+    local npm_bin=""
+
+    export PATH="${HOME}/.local/bin:${PATH}"
+
+    if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
+        # shellcheck source=/dev/null
+        source "${NVM_DIR}/nvm.sh"
+        nvm use 22 &>/dev/null || true
+    fi
+
+    if command -v npm &>/dev/null; then
+        npm_prefix=$(npm config get prefix 2>/dev/null || echo "")
+        npm_bin="${npm_prefix}/bin"
+        if [[ -n "${npm_prefix}" && -d "${npm_bin}" ]]; then
+            export PATH="${npm_bin}:${PATH}"
+        fi
+    fi
+}
+
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Installer${NC}"
-echo -e "JetsonHacks fork — /home/tndlux/workspaces/thor_llm/src/NemoClaw-Thor"
+echo "Repo: ${SCRIPT_DIR}"
 echo ""
 echo "This script installs NemoClaw on Jetson AGX Thor, applies a hardened"
 echo "sandbox policy baseline, and configures NemoClaw to use your local"
@@ -120,7 +162,7 @@ if [[ "${CHECKS_FAILED}" -gt 0 ]]; then
 fi
 
 echo ""
-echo -e "${GREEN}${BOLD}  All prerequisite checks passed.${NC}"
+echo -e "${GREEN}${BOLD}  All blocking prerequisite checks passed.${NC}"
 
 header "Step 2: Docker cgroupns configuration"
 echo ""
@@ -189,19 +231,9 @@ fi
 
 pass "${NEMOCLAW_DIR} does not exist — ready to install"
 
-header "Step 4: Activating Node.js 22"
+header "Step 4: Preparing Node.js runtime"
 echo ""
-
-if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${NVM_DIR}/nvm.sh"
-    nvm use 22 &>/dev/null
-    pass "Node.js $(node --version) active via nvm"
-else
-    fail "nvm not found at ${NVM_DIR}"
-    fix "Run ./install-node.sh then open a new terminal before retrying"
-    exit 1
-fi
+activate_preferred_node_runtime
 
 header "Step 5: Cloning NemoClaw"
 echo ""
@@ -219,8 +251,8 @@ echo ""
 
 header "Step 7: Running NemoClaw installer"
 echo ""
-echo "  The upstream NemoClaw onboarding wizard will now run."
-echo "  You will still be prompted for:"
+echo "  The upstream NemoClaw installer and onboarding wizard will now run."
+echo "  Depending on the upstream version and your environment, you may be prompted for:"
 echo "    • Inference endpoint"
 echo "    • NVIDIA API key"
 echo "    • Primary model"
@@ -228,7 +260,7 @@ echo ""
 echo "  For this fork, do not enable external chat channels."
 echo "  The sandbox policy baseline has already been replaced with:"
 echo "    ${THOR_POLICY_PROFILE}"
-echo "  This script will switch inference to the local provider after onboarding."
+echo "  This script will reapply the Thor local-provider configuration afterward."
 echo ""
 echo "  Press Enter to continue..."
 read -r
@@ -249,17 +281,14 @@ disown -a 2>/dev/null || true
 
 header "Step 8: Verifying nemoclaw installation"
 echo ""
-
-if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${NVM_DIR}/nvm.sh"
-    nvm use 22 &>/dev/null
-fi
+refresh_nemoclaw_path
 
 if ! command -v nemoclaw &>/dev/null; then
     fail "nemoclaw command not found after installation"
-    info "This may be the known Node version collision bug."
-    fix "Open a new shell, source ~/.bashrc, and re-run this script if needed."
+    info "Upstream NemoClaw may have installed the command under ~/.local/bin or"
+    info "the active npm prefix without those paths being visible in this shell."
+    fix "Open a new shell or source ~/.bashrc, then run: command -v nemoclaw"
+    fix "If needed, inspect: ${HOME}/.local/bin and \$(npm config get prefix 2>/dev/null)/bin"
     exit 1
 fi
 

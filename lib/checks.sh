@@ -231,57 +231,50 @@ check_nvm_installed() {
         pass "nvm is installed (${nvm_dir})"
         return 0
     else
-        fail "nvm is not installed"
-        info "nvm is required to avoid a known Node version collision in the NemoClaw"
-        info "installer where nemoclaw ends up linked under Node 24 but the shell"
-        info "defaults to Node 22, making 'nemoclaw' command not found."
-        fix "Run ./install-node.sh to install nvm and Node.js 22 automatically, or"
-        fix "install nvm manually:"
-        fix "  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash"
-        fix "Then open a new shell or: source ~/.bashrc"
-        return 1
+        warn "nvm is not installed"
+        info "Current upstream NemoClaw can install nvm and Node.js automatically"
+        info "during its own installer flow when Node.js is missing."
+        fix "Optional: run ./install-node.sh to preinstall nvm and Node.js 22"
+        fix "Or continue and let the upstream installer bootstrap them"
+        return 2
     fi
 }
 
 check_node_version() {
     if ! command -v node &>/dev/null; then
-        fail "node command not found"
-        fix "Run ./install-node.sh to install nvm and Node.js 22 automatically, or"
-        fix "install manually: nvm install 22 && nvm alias default 22 && nvm use 22"
-        return 1
+        warn "node command not found"
+        info "Current upstream NemoClaw can install Node.js 22 automatically"
+        info "when no Node.js runtime is present."
+        fix "Optional: run ./install-node.sh first for a prevalidated Node 22 setup"
+        return 2
     fi
 
     local version major
     version=$(node --version)           # e.g. v22.4.0
     major=$(echo "${version}" | cut -d. -f1 | tr -d 'v')
 
-    case "${major}" in
-        22)
-            pass "Node.js ${version} (major version 22 ✓)"
-            return 0
-            ;;
-        18)
-            fail "Node.js ${version} — version 18 is the Ubuntu apt default and too old"
-            info "Do not use 'sudo apt install nodejs' for NemoClaw."
-            fix "Install Node 22 via nvm:"
-            fix "  nvm install 22 && nvm alias default 22 && nvm use 22"
-            return 1
-            ;;
-        24)
-            fail "Node.js ${version} — version 24 causes a known command-not-found"
-            info "NemoClaw's install.sh installs Node 24 but the OpenShell sub-installer"
-            info "resets the nvm default to Node 22. The nemoclaw binary ends up under"
-            info "Node 24's npm prefix and is not found in new shells."
-            fix "Switch to Node 22:"
-            fix "  nvm install 22 && nvm alias default 22 && nvm use 22"
-            return 1
-            ;;
-        *)
-            warn "Node.js ${version} — untested version (NemoClaw targets 22.x)"
-            fix "Switch to Node 22: nvm install 22 && nvm alias default 22 && nvm use 22"
-            return 2
-            ;;
-    esac
+    if ! [[ "${major}" =~ ^[0-9]+$ ]]; then
+        fail "Could not determine the Node.js major version from ${version}"
+        fix "Run ./install-node.sh to install a known-good Node.js 22 runtime"
+        return 1
+    fi
+
+    if [[ "${major}" == "22" ]]; then
+        pass "Node.js ${version} (preferred major version 22)"
+        return 0
+    fi
+
+    if (( major < 20 )); then
+        fail "Node.js ${version} is too old for current upstream NemoClaw"
+        info "Do not use the Ubuntu apt default Node.js 18 for this workflow."
+        fix "Install Node 22 via nvm:"
+        fix "  nvm install 22 && nvm alias default 22 && nvm use 22"
+        return 1
+    fi
+
+    warn "Node.js ${version} is supported upstream, but 22.x is the preferred target for this fork"
+    fix "Optional: switch to Node 22 with nvm install 22 && nvm alias default 22 && nvm use 22"
+    return 2
 }
 
 # ── Build tooling (needed for OpenClaw's npm install inside the sandbox) ───────

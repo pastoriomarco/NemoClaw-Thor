@@ -46,7 +46,7 @@ resolve_policy_profile "${POLICY_PROFILE_ARG:-${THOR_POLICY_PROFILE:-}}"
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Static Policy Installer${NC}"
-echo -e "JetsonHacks fork — /home/tndlux/workspaces/thor_llm/src/NemoClaw-Thor"
+echo "Repo: ${SCRIPT_DIR}"
 echo ""
 echo "  Repo dir:           ${TARGET_REPO_DIR}"
 echo "  Policy profile:     ${THOR_POLICY_PROFILE}"

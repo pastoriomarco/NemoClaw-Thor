@@ -34,7 +34,7 @@ prepare_thor_launch_profile "${THOR_MODEL_PROFILE}"
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Local Model Launcher${NC}"
-echo -e "JetsonHacks fork — /home/tndlux/workspaces/thor_llm/src/NemoClaw-Thor"
+echo "Repo: ${SCRIPT_DIR}"
 echo ""
 print_thor_launch_summary
 echo ""

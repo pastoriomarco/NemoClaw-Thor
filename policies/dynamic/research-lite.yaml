@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Session-only additions for controlled troubleshooting and package resolution.
-# Apply with:
-#   openshell policy set policies/dynamic/research-lite.yaml
+# Apply with the helper so the additions are merged into the active sandbox
+# policy instead of replacing it:
+#   ./apply-policy-additions.sh research-lite [--sandbox-name <name>]
 #
 # This is intentionally narrower than "full internet".
 

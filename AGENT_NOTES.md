@@ -139,19 +139,21 @@ These are not the preferred path for this fork.
 
 ## External Path Assumptions
 
-The fork assumes a sibling model-serving repo:
+The fork assumes a sibling model-serving repo relative to this checkout:
 
-- `/home/tndlux/workspaces/thor_llm/src/thor_llm`
+- `../thor_llm`
 
-The NemoClaw-Thor repo itself is expected here:
+In this workspace, that currently resolves to:
 
-- `/home/tndlux/workspaces/thor_llm/src/NemoClaw-Thor`
+- `/home/tndlux/workspaces/nemoclaw/src/thor_llm`
+- `/home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor`
 
 The 122B profile also assumes a pre-resharded local model path under:
 
 - `$HOME/thor-hf-cache/hub/qwen-3.5-122b-a10b-nvfp4-resharded/resharded`
 
-If these assumptions change, update both the docs and `lib/launch.sh`.
+If these assumptions change, update the docs and any helper messages that point
+at the sibling `thor_llm` model READMEs.
 
 ## Current Runtime Defaults
 
@@ -294,6 +296,43 @@ If firewall state is unknown or restrictive, prefer one of:
 
 Do not casually run `./install.sh ... --apply-host-fixes` over a single remote
 session without first checking the firewall state.
+
+## Temporary Passwordless sudo For Agent-Driven Install
+
+If a remote coding agent is expected to execute the privileged steps itself,
+interactive `sudo` is often not sufficient because the prompt can land in a
+background PTY that the user cannot reach.
+
+The clean workaround is a temporary sudoers entry for the local user running
+the session.
+
+Create it:
+
+```bash
+sudo visudo -f /etc/sudoers.d/nemoclaw-codex
+```
+
+Add:
+
+```text
+tndlux ALL=(ALL) NOPASSWD:ALL
+```
+
+Verify from the agent session:
+
+```bash
+sudo -n true
+```
+
+Revert it immediately after the install/debug window:
+
+```bash
+sudo rm /etc/sudoers.d/nemoclaw-codex
+sudo -k
+```
+
+This should be treated as temporary privileged access, not a permanent host
+configuration.
 
 ## What To Monitor During A Real Thor Install
 

@@ -59,7 +59,7 @@ run_check() {
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Prerequisite Check${NC}"
-echo -e "JetsonHacks fork — /home/tndlux/workspaces/thor_llm/src/NemoClaw-Thor"
+echo "Repo: ${SCRIPT_DIR}"
 echo ""
 echo "This script checks whether your system is ready to run install.sh."
 echo "All checks are read-only — nothing will be changed."
@@ -90,9 +90,10 @@ run_check "Docker daemon running"     check_docker_running
 run_check "NVIDIA container runtime"  check_docker_nvidia_runtime
 
 header "Node.js and nvm"
-echo "  NemoClaw requires Node.js 22 installed via nvm."
-echo "  Do not use the system Node.js from apt."
-echo "  Run ./install-node.sh to install both automatically."
+echo "  This fork prefers Node.js 22 via nvm."
+echo "  Missing nvm or Node.js are warnings because current upstream NemoClaw"
+echo "  can bootstrap them automatically when no runtime is present."
+echo "  A preinstalled Node.js older than 20 is still a blocker."
 echo ""
 run_check "nvm installed"   check_nvm_installed
 run_check "Node.js version" check_node_version

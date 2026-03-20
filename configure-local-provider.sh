@@ -21,7 +21,7 @@ load_thor_runtime_config "${1:-}"
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Local Provider Configuration${NC}"
-echo -e "JetsonHacks fork — /home/tndlux/workspaces/thor_llm/src/NemoClaw-Thor"
+echo "Repo: ${SCRIPT_DIR}"
 echo ""
 print_thor_runtime_config
 echo ""

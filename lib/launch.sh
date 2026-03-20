@@ -122,7 +122,7 @@ check_thor_launch_prereqs() {
         fail "Required model path not found: ${THOR_LAUNCH_HOST_MODEL_PATH}"
         info "This profile uses a pre-resharded local model path."
         fix "Follow the download instructions in:"
-        fix "  /home/tndlux/workspaces/thor_llm/src/thor_llm/models/${THOR_MODEL_PROFILE}/README.md"
+        fix "  $(cd "$(dirname "${BASH_SOURCE[0]}")/../../thor_llm/models/${THOR_MODEL_PROFILE}" 2>/dev/null && pwd)/README.md"
         return 1
     fi
 

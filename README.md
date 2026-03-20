@@ -148,6 +148,42 @@ Limits still apply:
   - if the host currently depends on custom firewall rules to keep SSH reachable, you can lose the session
   - `./backup-host-state.sh` is the safe remote step; the apply step should be treated as console-preferred unless the current firewall state is known
 
+## Temporary Passwordless sudo For LLM-Assisted Install
+
+If you want a coding agent or remote LLM session to run the privileged install
+steps directly, interactive `sudo` prompts are usually not enough because the
+prompt may appear in a background PTY the user cannot access.
+
+The practical workaround is a temporary `NOPASSWD` sudoers entry for the local
+user running the session.
+
+Create it with:
+
+```bash
+sudo visudo -f /etc/sudoers.d/nemoclaw-codex
+```
+
+Add:
+
+```text
+tndlux ALL=(ALL) NOPASSWD:ALL
+```
+
+Verify from the agent session:
+
+```bash
+sudo -n true
+```
+
+After the install/debug session is finished, remove it:
+
+```bash
+sudo rm /etc/sudoers.d/nemoclaw-codex
+sudo -k
+```
+
+This should be treated as temporary access for the install/debug window only.
+
 ## Sandbox Policy Hardening
 
 This fork now hardens the sandbox policy before upstream onboarding runs.
