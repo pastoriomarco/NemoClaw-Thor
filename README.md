@@ -40,6 +40,8 @@ These are the intended requirements for the Qwen-based flow.
 
 - [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) installed
 - All fixes from [JetsonHacks/openshell-thor](https://github.com/JetsonHacks/openshell-thor) applied
+  - either manually
+  - or through `./apply-host-fixes.sh`, which also snapshots the current host state first
 - Docker installed and running
 - NVIDIA container runtime enabled in Docker
 - `nvm` with Node.js 22 for `NemoClaw`
@@ -77,6 +79,41 @@ This fork is being shaped around these requirements:
 - Outbound network access should default to deny.
 - If internet access is later enabled, it should be limited to an explicit allowlist and ideally to a dedicated researcher agent.
 - The default `NemoClaw` policy presets should not be accepted blindly for this fork.
+
+## Host Backup And Restore
+
+The Thor-specific OpenShell fixes are host-wide. This fork now includes a
+backup and restore layer for those changes.
+
+Available scripts:
+
+- `./backup-host-state.sh`
+- `./apply-host-fixes.sh`
+- `./restore-host-state.sh`
+
+What gets backed up before the Thor fixes are applied:
+
+- `/etc/docker/daemon.json`
+- `/etc/modules-load.d/openshell-k3s.conf`
+- `/etc/sysctl.d/99-openshell-k3s.conf`
+- the active `iptables` and `ip6tables` alternatives
+- `iptables-save` and `ip6tables-save` output
+- a small Docker inventory snapshot for reference
+
+What `./restore-host-state.sh` does:
+
+- stops the OpenShell gateway if present
+- restores the saved Docker config and persistence files
+- restores the saved `iptables` backend choice
+- optionally restores the saved firewall snapshots
+- removes the out-of-tree `iptable_raw` module and downloaded kernel source if they were not present before the fix was applied
+
+This is intended to restore the real pre-change host state, not just JetPack defaults.
+
+Limits still apply:
+
+- exact firewall restore is most reliable on a quiet host
+- if Docker workloads changed substantially after the backup, restoring the old firewall snapshot may no longer be an exact fit
 
 ## Sandbox Policy Hardening
 
@@ -181,12 +218,41 @@ After that baseline is validated, the smaller models can be pushed further.
 
 The intended final setup is:
 
-1. Start one selected Qwen model locally through the `thor_llm` flow.
-2. Point `OpenShell` local inference at that host endpoint.
-3. Switch `NemoClaw` from cloud inference to the local provider.
-4. Use a sandboxed repo clone for agent work.
-5. Keep network access off by default.
-6. Enable a separate research-capable agent only if explicit allowlist rules are added later.
+1. Back up the Thor host state and apply the Thor-specific OpenShell fixes.
+2. Start one selected Qwen model locally through the `thor_llm` flow.
+3. Point `OpenShell` local inference at that host endpoint.
+4. Switch `NemoClaw` from cloud inference to the local provider.
+5. Use a sandboxed repo clone for agent work.
+6. Keep network access off by default.
+7. Enable a separate research-capable agent only if explicit allowlist rules are added later.
+
+## Install Sequence
+
+If the Thor host fixes are not already in place, the most direct path is:
+
+```bash
+./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local --apply-host-fixes
+```
+
+That flag runs `./apply-host-fixes.sh` first, which:
+
+1. saves a restore snapshot of the current host state
+2. clones `jetsonhacks/OpenShell-Thor` if needed
+3. builds `iptable_raw`
+4. applies the Thor Docker, iptables, module, and sysctl fixes
+
+If you prefer to do that step explicitly, use:
+
+```bash
+./apply-host-fixes.sh
+./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+```
+
+To revert the host-level changes back to the saved pre-change state:
+
+```bash
+./restore-host-state.sh
+```
 
 ## Policy Tooling
 

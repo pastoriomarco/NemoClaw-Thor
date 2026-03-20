@@ -46,8 +46,8 @@ check_openshell_installed() {
         return 0
     else
         fail "openshell command not found"
-        fix "Install OpenShell and apply the openshell-thor fixes before continuing."
-        fix "See: https://github.com/JetsonHacks/openshell-thor"
+        fix "Install OpenShell before continuing."
+        fix "Then run ./apply-host-fixes.sh or see https://github.com/JetsonHacks/openshell-thor"
         return 1
     fi
 }
@@ -75,8 +75,8 @@ check_fix_iptable_raw() {
         fail "iptable_raw kernel module is not loaded"
         info "Required for OpenShell network isolation policy."
         info "CONFIG_IP_NF_RAW=n in the stock Thor kernel; must be built out-of-tree."
-        fix "Apply the iptable_raw fix from openshell-thor:"
-        fix "https://github.com/JetsonHacks/openshell-thor"
+        fix "Run ./apply-host-fixes.sh to build and install it with a host backup."
+        fix "Or apply the upstream fix manually: https://github.com/JetsonHacks/openshell-thor"
         return 1
     fi
 }
@@ -92,6 +92,7 @@ check_fix_iptables_legacy() {
         fail "iptables is not using the legacy backend (found: ${current:-unknown})"
         info "JetPack 7.1 defaults to iptables-nft, which breaks K3s service routing"
         info "and pod DNS resolution inside OpenShell sandboxes."
+        fix "Run ./apply-host-fixes.sh to switch the Thor host with a backup first."
         fix "Run: sudo update-alternatives --set iptables /usr/sbin/iptables-legacy"
         fix "     sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy"
         return 1
@@ -105,6 +106,7 @@ check_fix_br_netfilter() {
     else
         fail "br_netfilter kernel module is not loaded"
         info "Required for K3s flannel CNI pod networking inside OpenShell."
+        fix "Run ./apply-host-fixes.sh to apply the complete Thor network setup."
         fix "Run: sudo modprobe br_netfilter"
         fix "To persist across reboots:"
         fix "  echo 'br_netfilter' | sudo tee /etc/modules-load.d/br_netfilter.conf"
@@ -118,6 +120,7 @@ check_fix_docker_ipv6() {
     if [[ ! -f "${daemon_json}" ]]; then
         fail "Docker daemon.json not found (${daemon_json})"
         info "Without this file, Docker may prefer IPv6 for registry pulls and time out."
+        fix "Run ./apply-host-fixes.sh to set the Thor Docker defaults with a backup."
         fix "Create ${daemon_json} with content: {\"ipv6\": false}"
         fix "Then restart Docker: sudo systemctl restart docker"
         return 1
@@ -136,6 +139,7 @@ sys.exit(0 if d.get('ipv6') == False else 1)
         info "The OpenShell gateway container has no IPv6 routing. When Docker prefers"
         info "IPv6 on dual-stack DNS results, registry pulls from docker.io and"
         info "registry.k8s.io will time out."
+        fix "Run ./apply-host-fixes.sh to update Docker with a host backup."
         fix "Add or set \"ipv6\": false in ${daemon_json}"
         fix "Then restart Docker: sudo systemctl restart docker"
         return 1
@@ -148,6 +152,7 @@ check_fix_cgroupns() {
     if [[ ! -f "${daemon_json}" ]]; then
         fail "Docker daemon.json not found (${daemon_json})"
         info "Required to set default-cgroupns-mode=host for K3s inside Docker."
+        fix "Run ./apply-host-fixes.sh to set the Thor Docker defaults with a backup."
         fix "Create ${daemon_json} with content: {\"default-cgroupns-mode\": \"host\"}"
         fix "Then restart Docker: sudo systemctl restart docker"
         return 1
@@ -166,6 +171,7 @@ sys.exit(0 if d.get('default-cgroupns-mode') == 'host' else 1)
         info "JetPack 7.1 uses cgroup v2. Without this setting, K3s inside the"
         info "OpenShell gateway container will fail with:"
         info "  openat2 /sys/fs/cgroup/kubepods/pids.max: no such file or directory"
+        fix "Run ./apply-host-fixes.sh to update Docker with a host backup."
         fix "Run the following to add the setting and restart Docker:"
         fix "  sudo python3 -c \""
         fix "import json"

@@ -13,6 +13,7 @@
 # Does NOT remove:
 #   - OpenShell itself
 #   - The openshell-thor kernel/networking fixes
+#     (use ./restore-host-state.sh if you want to revert the saved host snapshot)
 #   - Docker or the NVIDIA container runtime
 #   - nvm or Node.js (use ./uninstall-node.sh for that)
 #   - The vLLM container image or local model weights
@@ -146,6 +147,8 @@ fi
 
 echo "  This does NOT remove OpenShell, nvm, Node.js, Docker,"
 echo "  the vLLM container image, or any local model weights."
+echo "  Use ./restore-host-state.sh separately if you want to revert"
+echo "  the saved pre-OpenShell host snapshot."
 echo ""
 
 # ── Ask about ~/.nemoclaw ──────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 # install.sh — Install NemoClaw on Jetson AGX Thor and point it at a local Qwen server
 #
 # Usage:
-#   ./install.sh [model-profile] [--policy-profile <profile>]
+#   ./install.sh [model-profile] [--policy-profile <profile>] [--apply-host-fixes]
 #
 # Supported model profiles:
 #   qwen3.5-122b-a10b-nvfp4-resharded
@@ -19,11 +19,12 @@ source "${SCRIPT_DIR}/lib/policy.sh"
 
 MODEL_PROFILE_ARG=""
 POLICY_PROFILE_ARG=""
+APPLY_HOST_FIXES="0"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
-            echo "Usage: ./install.sh [model-profile] [--policy-profile <profile>]"
+            echo "Usage: ./install.sh [model-profile] [--policy-profile <profile>] [--apply-host-fixes]"
             echo ""
             print_supported_model_profiles
             echo ""
@@ -37,6 +38,10 @@ while [[ $# -gt 0 ]]; do
             fi
             POLICY_PROFILE_ARG="$2"
             shift 2
+            ;;
+        --apply-host-fixes)
+            APPLY_HOST_FIXES="1"
+            shift
             ;;
         *)
             if [[ -n "${MODEL_PROFILE_ARG}" ]]; then
@@ -68,6 +73,12 @@ print_thor_runtime_config
 echo ""
 echo "Estimated time: 10-20 minutes depending on network speed."
 echo ""
+
+if [[ "${APPLY_HOST_FIXES}" == "1" ]]; then
+    header "Step 0: Backing up host state and applying Thor fixes"
+    echo ""
+    "${SCRIPT_DIR}/apply-host-fixes.sh"
+fi
 
 header "Step 1: Prerequisite checks"
 echo ""
