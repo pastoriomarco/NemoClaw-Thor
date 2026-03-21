@@ -126,6 +126,59 @@ cat /sandbox/smoke.txt
 If the first plain run says `No reply from agent`, retry once. After model
 switches, `./reset-sandbox-session-state.sh <profile>` can also help.
 
+### Use the browser dashboard on the Thor host
+
+`openclaw dashboard` only prints the Control UI URL. It does not start the
+OpenClaw gateway by itself.
+
+To use the dashboard in a browser on the Thor host, you need both:
+
+- an OpenClaw gateway running inside the sandbox
+- a host-side dashboard access helper from this repo
+
+Terminal 1, on the host, connect to the sandbox:
+
+```bash
+nemoclaw thor-assistant connect
+```
+
+Then inside the sandbox:
+
+- if no OpenClaw gateway is running yet, start it and leave it running:
+
+```bash
+HOME=/sandbox openclaw gateway run
+```
+
+- if you see `gateway already running`, do not start a second one; reuse the
+  existing gateway
+
+Terminal 2, on the host, start the dashboard access helper:
+
+```bash
+./start-dashboard-access.sh
+```
+
+Then open this in Firefox on the Thor host:
+
+```text
+http://127.0.0.1:18789/
+```
+
+or:
+
+```text
+http://localhost:18789/
+```
+
+If the page asks for a token, run this inside the sandbox:
+
+```bash
+HOME=/sandbox openclaw dashboard --no-open
+```
+
+and use the printed tokenized URL.
+
 ## 3. How To Use It
 
 What you are connecting to:
@@ -232,6 +285,18 @@ sudo sysctl -w vm.drop_caches=3
 ```bash
 openshell gateway stop
 ```
+
+### Stop the browser dashboard path
+
+If you started the OpenClaw gateway inside the sandbox for the browser UI,
+stop the host-side dashboard helper from a host shell:
+
+```bash
+./stop-dashboard-access.sh
+```
+
+Then stop the sandbox-side OpenClaw gateway from the sandbox shell with
+`Ctrl-C`.
 
 ### Delete the sandbox
 

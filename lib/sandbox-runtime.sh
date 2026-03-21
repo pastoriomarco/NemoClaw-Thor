@@ -295,6 +295,18 @@ providers_cfg["inference"] = {
     ],
 }
 
+gateway_cfg = openclaw_cfg.setdefault("gateway", {})
+gateway_cfg["mode"] = "local"
+control_ui_cfg = gateway_cfg.setdefault("controlUi", {})
+control_ui_cfg["allowInsecureAuth"] = True
+control_ui_cfg["dangerouslyDisableDeviceAuth"] = True
+control_ui_cfg["allowedOrigins"] = [
+    "http://127.0.0.1:18789",
+    "http://localhost:18789",
+    "http://[::1]:18789",
+]
+gateway_cfg["trustedProxies"] = ["127.0.0.1", "::1"]
+
 tools_cfg = openclaw_cfg.setdefault("tools", {})
 tools_cfg["profile"] = "coding"
 tools_cfg["deny"] = tools_deny
