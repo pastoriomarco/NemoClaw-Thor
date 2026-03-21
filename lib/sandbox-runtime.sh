@@ -14,15 +14,6 @@ import json
 
 print(json.dumps([
     "cron",
-    "image",
-    "memory_get",
-    "memory_search",
-    "session_status",
-    "sessions_history",
-    "sessions_list",
-    "sessions_send",
-    "sessions_spawn",
-    "subagents",
     "web_fetch",
     "web_search",
 ]))
@@ -222,6 +213,9 @@ openclaw_path = Path("/sandbox/.openclaw/openclaw.json")
 openclaw_identity_dir = openclaw_path.parent / "identity"
 openclaw_device_json = openclaw_identity_dir / "device.json"
 openclaw_device_auth_json = openclaw_identity_dir / "device-auth.json"
+openclaw_devices_dir = openclaw_path.parent / "devices"
+openclaw_devices_pending_json = openclaw_devices_dir / "pending.json"
+openclaw_devices_paired_json = openclaw_devices_dir / "paired.json"
 
 try:
     sandbox_user = pwd.getpwnam("sandbox")
@@ -318,9 +312,17 @@ tools_cfg["sandbox"]["tools"]["deny"] = []
 
 openclaw_path.parent.mkdir(parents=True, exist_ok=True)
 openclaw_identity_dir.mkdir(parents=True, exist_ok=True)
+openclaw_devices_dir.mkdir(parents=True, exist_ok=True)
 chown_path(openclaw_identity_dir)
+chown_path(openclaw_devices_dir)
 os.chmod(openclaw_identity_dir, 0o700)
-for writable_path in (openclaw_device_json, openclaw_device_auth_json):
+os.chmod(openclaw_devices_dir, 0o700)
+for writable_path in (
+    openclaw_device_json,
+    openclaw_device_auth_json,
+    openclaw_devices_pending_json,
+    openclaw_devices_paired_json,
+):
     if writable_path.exists():
         chown_path(writable_path)
         os.chmod(writable_path, 0o600)

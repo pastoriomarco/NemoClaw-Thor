@@ -56,6 +56,16 @@ What is not currently proven:
 - every other model profile from this repo on this host
 - stable tool-use behavior on the `qwen3.5-35b-a3b-fp8` path
 
+Known operator limitation as of this session:
+
+- `openclaw tui` is the reliable prompt surface.
+- The browser dashboard can connect and is useful for visibility, but
+  browser-originated prompts can still fail with `LLM request timed out.` even
+  when the same prompt works in TUI.
+- The current evidence points to a Control UI / gateway session-state issue,
+  not a raw vLLM throughput problem.
+- Avoid driving the same session from both TUI and dashboard concurrently.
+
 This does not mean every model profile is now validated. It means the
 `qwen3.5-27b-fp8` flow is working on this Thor with the Thor-side fixes in this
 repo.

@@ -188,6 +188,21 @@ HOME=/sandbox openclaw dashboard --no-open
 After the first successful tokenized connect, the same browser profile will
 usually remember the gateway settings.
 
+Current limitation:
+
+- The dashboard is usable for connection and visibility, but browser-originated
+  prompts are not yet reliable on this Thor setup.
+- The same prompt can work in `openclaw tui` while the dashboard shows
+  `LLM request timed out.`
+- This currently looks like a Control UI / gateway session-state bug, not a
+  vLLM throughput problem.
+- For now, use the dashboard for observation and use `openclaw tui` for real
+  prompting.
+- Avoid driving the same session from both TUI and the dashboard at the same
+  time.
+- If the dashboard path gets wedged, close the browser tab and run
+  `./reset-sandbox-session-state.sh <profile>` from the host.
+
 ## 3. How To Use It
 
 What you are connecting to:
