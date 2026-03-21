@@ -54,6 +54,49 @@ Start the model server in one terminal:
 ./start-model.sh qwen3.5-27b-fp8
 ```
 
+Common launch knobs:
+
+- `THOR_MAX_MODEL_LEN`: override the context window
+- `THOR_KV_CACHE_DTYPE`: usually `fp8`
+- `THOR_MAX_NUM_SEQS`: cap concurrent sequences
+- `THOR_GPU_MEMORY_UTILIZATION`: target GPU memory fraction for vLLM
+- `THOR_MAX_NUM_BATCHED_TOKENS`: prefill batching limit
+
+Example with overrides:
+
+```bash
+THOR_MAX_MODEL_LEN=65536 \
+THOR_KV_CACHE_DTYPE=fp8 \
+THOR_MAX_NUM_SEQS=20 \
+THOR_GPU_MEMORY_UTILIZATION=0.80 \
+THOR_MAX_NUM_BATCHED_TOKENS=8192 \
+./start-model.sh qwen3.5-35b-a3b-fp8
+```
+
+Another example:
+
+```bash
+THOR_MAX_MODEL_LEN=65536 \
+THOR_KV_CACHE_DTYPE=fp8 \
+THOR_MAX_NUM_SEQS=6 \
+THOR_GPU_MEMORY_UTILIZATION=0.80 \
+THOR_MAX_NUM_BATCHED_TOKENS=8192 \
+./start-model.sh qwen3.5-122b-a10b-nvfp4-resharded
+```
+
+Notes:
+
+- These `THOR_MAX_*` variables are one-run launch overrides.
+- If you stop a model and switch to another, reclaim memory first:
+
+```bash
+sudo sync
+sudo sysctl -w vm.drop_caches=3
+```
+
+- If you switch model profiles, re-run `./configure-local-provider.sh <profile>`
+  after the new server is up.
+
 Start the OpenShell gateway in another:
 
 ```bash
