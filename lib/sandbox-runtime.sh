@@ -206,6 +206,7 @@ kubectl -n openshell exec "${THOR_SANDBOX_NAME}" -- env \
 python3 - <<'"'"'PY'"'"'
 import json
 import os
+import pwd
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -218,6 +219,23 @@ tools_deny = json.loads(os.environ["THOR_OPENCLAW_TOOLS_DENY_JSON"])
 
 onboard_path = Path("/sandbox/.nemoclaw/config.json")
 openclaw_path = Path("/sandbox/.openclaw/openclaw.json")
+openclaw_identity_dir = openclaw_path.parent / "identity"
+openclaw_device_json = openclaw_identity_dir / "device.json"
+openclaw_device_auth_json = openclaw_identity_dir / "device-auth.json"
+
+try:
+    sandbox_user = pwd.getpwnam("sandbox")
+    sandbox_uid = sandbox_user.pw_uid
+    sandbox_gid = sandbox_user.pw_gid
+except KeyError:
+    sandbox_uid = os.getuid()
+    sandbox_gid = os.getgid()
+
+def chown_path(path: Path) -> None:
+    try:
+        os.chown(path, sandbox_uid, sandbox_gid)
+    except FileNotFoundError:
+        pass
 
 if onboard_path.exists():
     with onboard_path.open(encoding="utf-8") as f:
@@ -241,6 +259,8 @@ onboard_path.parent.mkdir(parents=True, exist_ok=True)
 with onboard_path.open("w", encoding="utf-8") as f:
     json.dump(onboard_cfg, f, indent=2)
     f.write("\n")
+chown_path(onboard_path.parent)
+chown_path(onboard_path)
 os.chmod(onboard_path, 0o600)
 
 with openclaw_path.open(encoding="utf-8") as f:
@@ -283,6 +303,15 @@ tools_cfg.setdefault("sandbox", {}).setdefault("tools", {})["allow"] = [
     "group:runtime",
 ]
 tools_cfg["sandbox"]["tools"]["deny"] = []
+
+openclaw_path.parent.mkdir(parents=True, exist_ok=True)
+openclaw_identity_dir.mkdir(parents=True, exist_ok=True)
+chown_path(openclaw_identity_dir)
+os.chmod(openclaw_identity_dir, 0o700)
+for writable_path in (openclaw_device_json, openclaw_device_auth_json):
+    if writable_path.exists():
+        chown_path(writable_path)
+        os.chmod(writable_path, 0o600)
 
 with openclaw_path.open("w", encoding="utf-8") as f:
     json.dump(openclaw_cfg, f, indent=2)
