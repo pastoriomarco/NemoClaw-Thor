@@ -58,6 +58,21 @@ If you are not sure what model the host is serving:
 curl -sf http://127.0.0.1:8000/v1/models
 ```
 
+### Use the terminal UI
+
+After `nemoclaw thor-assistant connect`, the simplest interactive interface is:
+
+```bash
+openclaw tui
+```
+
+Notes:
+
+- This is the preferred manual chat interface.
+- It runs inside the sandbox shell.
+- If you ever see a stale-session issue after a model switch, run
+  `./reset-sandbox-session-state.sh <profile>` from the host first.
+
 ### Start the stack after reboot or after services were stopped
 
 In terminal 1, start the model server:
@@ -159,31 +174,26 @@ Terminal 2, on the host, start the dashboard access helper:
 ./start-dashboard-access.sh
 ```
 
-Then open this in Firefox on the Thor host:
+On first connect, open the tokenized URL printed by
+`./start-dashboard-access.sh` in a fresh Firefox tab. The plain
+`http://127.0.0.1:18789/` URL can show `device identity required` until the
+token is supplied.
 
-```text
-http://127.0.0.1:18789/
-```
-
-or:
-
-```text
-http://localhost:18789/
-```
-
-If the page asks for a token, run this inside the sandbox:
+If you need to print the token URL again, run this inside the sandbox:
 
 ```bash
 HOME=/sandbox openclaw dashboard --no-open
 ```
 
-and use the printed tokenized URL.
+After the first successful tokenized connect, the same browser profile will
+usually remember the gateway settings.
 
 ## 3. How To Use It
 
 What you are connecting to:
 
 - `nemoclaw thor-assistant connect` opens a shell inside the sandbox.
+- `openclaw tui` is the main terminal UI for normal prompting.
 - The main writable workspace is `/sandbox`.
 - Local inference is routed through OpenShell to the host vLLM server.
 - `strict-local` blocks broad outbound internet by default.
