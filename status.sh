@@ -210,6 +210,30 @@ data = json.load(sys.stdin)
 value = data.get("openclaw_parallel_tool_calls")
 print("" if value is None else str(value).lower())
 ' 2>/dev/null || echo "")
+        openclaw_main_max_concurrent=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data.get("openclaw_main_max_concurrent")
+print("" if value is None else value)
+' 2>/dev/null || echo "")
+        openclaw_subagents_max_concurrent=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data.get("openclaw_subagents_max_concurrent")
+print("" if value is None else value)
+' 2>/dev/null || echo "")
+        openclaw_subagents_max_children=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data.get("openclaw_subagents_max_children")
+print("" if value is None else value)
+' 2>/dev/null || echo "")
+        openclaw_subagents_max_spawn_depth=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data.get("openclaw_subagents_max_spawn_depth")
+print("" if value is None else value)
+' 2>/dev/null || echo "")
         openclaw_temperature=$(printf '%s' "${runtime_summary}" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
@@ -267,6 +291,42 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox temperature is '${openclaw_temperature:-unknown}' — expected '0'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${openclaw_main_max_concurrent}" == "${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}" ]]; then
+            pass "Sandbox main max concurrent: ${openclaw_main_max_concurrent}"
+            record 0
+        else
+            warn "Sandbox main max concurrent is '${openclaw_main_max_concurrent:-unknown}' — expected '${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${openclaw_subagents_max_concurrent}" == "${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}" ]]; then
+            pass "Sandbox subagent max concurrent: ${openclaw_subagents_max_concurrent}"
+            record 0
+        else
+            warn "Sandbox subagent max concurrent is '${openclaw_subagents_max_concurrent:-unknown}' — expected '${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${openclaw_subagents_max_children}" == "${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}" ]]; then
+            pass "Sandbox max children per agent: ${openclaw_subagents_max_children}"
+            record 0
+        else
+            warn "Sandbox max children per agent is '${openclaw_subagents_max_children:-unknown}' — expected '${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${openclaw_subagents_max_spawn_depth}" == "${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH}" ]]; then
+            pass "Sandbox max spawn depth: ${openclaw_subagents_max_spawn_depth}"
+            record 0
+        else
+            warn "Sandbox max spawn depth is '${openclaw_subagents_max_spawn_depth:-unknown}' — expected '${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH}'"
             fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi

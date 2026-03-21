@@ -579,11 +579,21 @@ Recommended commands:
 export THOR_TARGET_MAX_MODEL_LEN=65536
 export THOR_TARGET_KV_CACHE_DTYPE=fp8
 export THOR_TARGET_MAX_NUM_SEQS=16
+export THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1
 
 ./apply-host-fixes.sh
 ./start-model.sh qwen3.5-35b-a3b-fp8
 ./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
 ```
+
+OpenClaw concurrency is now written explicitly into the sandbox config during
+`configure-local-provider.sh` / `install.sh` sync:
+
+- main lane concurrency defaults to `THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1`
+- subagent concurrency is derived as `THOR_TARGET_MAX_NUM_SEQS - effective_main`
+- `maxChildrenPerAgent` follows the same derived value
+- `maxSpawnDepth` is pinned to `1`
+- `./status.sh` now verifies those values inside `/sandbox/.openclaw/openclaw.json`
 
 Why not the single-command `--apply-host-fixes` path for this case:
 

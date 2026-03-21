@@ -20,6 +20,7 @@ for arg in "$@"; do
         echo "Environment overrides:"
         echo "  THOR_MAX_MODEL_LEN"
         echo "  THOR_MAX_NUM_SEQS"
+        echo "  THOR_OPENCLAW_MAIN_MAX_CONCURRENT"
         echo "  THOR_KV_CACHE_DTYPE"
         echo "  THOR_GPU_MEMORY_UTILIZATION"
         echo "  THOR_MAX_NUM_BATCHED_TOKENS"

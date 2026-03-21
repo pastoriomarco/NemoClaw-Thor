@@ -208,6 +208,51 @@ resolve_model_profile() {
     THOR_LOCAL_VLLM_API_KEY="${THOR_LOCAL_VLLM_API_KEY:-dummy}"
     THOR_MANAGED_SANDBOX_NAME="${THOR_MANAGED_SANDBOX_NAME:-}"
     THOR_MANAGED_PROVIDER_NAMES="${THOR_MANAGED_PROVIDER_NAMES:-}"
+    THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT:-1}"
+}
+
+resolve_thor_openclaw_concurrency_targets() {
+    local resolved=""
+
+    resolved=$(python3 - "${THOR_TARGET_MAX_NUM_SEQS:-}" "${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT:-1}" <<'PYEOF'
+import sys
+
+def parse_positive_int(value, default):
+    try:
+        parsed = int(str(value).strip() or "")
+    except Exception:
+        return default
+    return parsed if parsed >= 1 else default
+
+max_num_seqs = parse_positive_int(sys.argv[1], 1)
+requested_main = parse_positive_int(sys.argv[2], 1)
+
+if max_num_seqs > 1:
+    effective_main = min(requested_main, max_num_seqs - 1)
+    subagents = max_num_seqs - effective_main
+else:
+    effective_main = 1
+    subagents = 1
+
+print("\t".join(
+    str(value)
+    for value in (
+        requested_main,
+        effective_main,
+        subagents,
+        subagents,
+        1,
+    )
+))
+PYEOF
+)
+
+    IFS=$'\t' read -r \
+        THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT \
+        THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT \
+        THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT \
+        THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN \
+        THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH <<<"${resolved}"
 }
 
 load_thor_runtime_config() {
@@ -224,9 +269,12 @@ load_thor_runtime_config() {
     local env_target_max_model_len="${THOR_TARGET_MAX_MODEL_LEN:-}"
     local env_target_kv_cache_dtype="${THOR_TARGET_KV_CACHE_DTYPE:-}"
     local env_target_max_num_seqs="${THOR_TARGET_MAX_NUM_SEQS:-}"
+    local env_openclaw_main_max_concurrent="${THOR_OPENCLAW_MAIN_MAX_CONCURRENT:-}"
+    local env_target_openclaw_main_max_concurrent="${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT:-}"
     local file_target_max_model_len=""
     local file_target_kv_cache_dtype=""
     local file_target_max_num_seqs=""
+    local file_target_openclaw_main_max_concurrent=""
     THOR_CONFIG_FILE="$(thor_config_file)"
 
     if [[ -f "${THOR_CONFIG_FILE}" ]]; then
@@ -235,6 +283,7 @@ load_thor_runtime_config() {
         file_target_max_model_len="${THOR_TARGET_MAX_MODEL_LEN:-}"
         file_target_kv_cache_dtype="${THOR_TARGET_KV_CACHE_DTYPE:-}"
         file_target_max_num_seqs="${THOR_TARGET_MAX_NUM_SEQS:-}"
+        file_target_openclaw_main_max_concurrent="${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT:-}"
     fi
 
     if [[ -n "${env_profile}" ]]; then
@@ -264,9 +313,14 @@ load_thor_runtime_config() {
     [[ -n "${file_target_max_model_len}" ]] && THOR_TARGET_MAX_MODEL_LEN="${file_target_max_model_len}"
     [[ -n "${file_target_kv_cache_dtype}" ]] && THOR_TARGET_KV_CACHE_DTYPE="${file_target_kv_cache_dtype}"
     [[ -n "${file_target_max_num_seqs}" ]] && THOR_TARGET_MAX_NUM_SEQS="${file_target_max_num_seqs}"
+    [[ -n "${file_target_openclaw_main_max_concurrent}" ]] && THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="${file_target_openclaw_main_max_concurrent}"
     [[ -n "${env_target_max_model_len}" ]] && THOR_TARGET_MAX_MODEL_LEN="${env_target_max_model_len}"
     [[ -n "${env_target_kv_cache_dtype}" ]] && THOR_TARGET_KV_CACHE_DTYPE="${env_target_kv_cache_dtype}"
     [[ -n "${env_target_max_num_seqs}" ]] && THOR_TARGET_MAX_NUM_SEQS="${env_target_max_num_seqs}"
+    [[ -n "${env_target_openclaw_main_max_concurrent}" ]] && THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="${env_target_openclaw_main_max_concurrent}"
+    [[ -n "${env_openclaw_main_max_concurrent}" ]] && THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="${env_openclaw_main_max_concurrent}"
+
+    resolve_thor_openclaw_concurrency_targets
 
     return 0
 }
@@ -289,6 +343,7 @@ save_thor_runtime_config() {
         printf "THOR_TARGET_MAX_MODEL_LEN=%q\n" "${THOR_TARGET_MAX_MODEL_LEN}"
         printf "THOR_TARGET_KV_CACHE_DTYPE=%q\n" "${THOR_TARGET_KV_CACHE_DTYPE}"
         printf "THOR_TARGET_MAX_NUM_SEQS=%q\n" "${THOR_TARGET_MAX_NUM_SEQS}"
+        printf "THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT=%q\n" "${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT}"
     } > "${THOR_CONFIG_FILE}"
 }
 
@@ -308,4 +363,6 @@ print_thor_runtime_config() {
     echo "  Planned context:   ${THOR_TARGET_MAX_MODEL_LEN}"
     echo "  Planned KV cache:  ${THOR_TARGET_KV_CACHE_DTYPE}"
     echo "  Planned max seqs:  ${THOR_TARGET_MAX_NUM_SEQS}"
+    echo "  OpenClaw main:     ${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT} (requested ${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT})"
+    echo "  OpenClaw subagent: ${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}"
 }

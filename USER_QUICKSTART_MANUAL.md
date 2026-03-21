@@ -285,6 +285,8 @@ These are one-run overrides for `./start-model.sh`:
 - `THOR_MAX_MODEL_LEN`: context window
 - `THOR_KV_CACHE_DTYPE`: usually `fp8`
 - `THOR_MAX_NUM_SEQS`: concurrent sequences
+- `THOR_OPENCLAW_MAIN_MAX_CONCURRENT`: reserve this many OpenClaw main-session
+  slots; subagent concurrency is derived from the remaining sequence budget
 - `THOR_GPU_MEMORY_UTILIZATION`: vLLM GPU memory target
 - `THOR_MAX_NUM_BATCHED_TOKENS`: prefill batching limit
 
@@ -294,6 +296,7 @@ Example for `35B`:
 THOR_MAX_MODEL_LEN=65536 \
 THOR_KV_CACHE_DTYPE=fp8 \
 THOR_MAX_NUM_SEQS=20 \
+THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1 \
 THOR_GPU_MEMORY_UTILIZATION=0.80 \
 THOR_MAX_NUM_BATCHED_TOKENS=8192 \
 ./start-model.sh qwen3.5-35b-a3b-fp8
@@ -305,10 +308,19 @@ Example for `122B`:
 THOR_MAX_MODEL_LEN=65536 \
 THOR_KV_CACHE_DTYPE=fp8 \
 THOR_MAX_NUM_SEQS=6 \
+THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1 \
 THOR_GPU_MEMORY_UTILIZATION=0.80 \
 THOR_MAX_NUM_BATCHED_TOKENS=8192 \
 ./start-model.sh qwen3.5-122b-a10b-nvfp4-resharded
 ```
+
+How the derived OpenClaw limits work:
+
+- main agent concurrency = `THOR_OPENCLAW_MAIN_MAX_CONCURRENT` if it fits
+- subagent concurrency = `THOR_MAX_NUM_SEQS - effective_main_concurrency`
+- Thor keeps at least one subagent slot available, so if you request too large a
+  main concurrency, the effective main value is clamped to `THOR_MAX_NUM_SEQS - 1`
+- `./status.sh <profile>` shows the effective OpenClaw main and subagent values
 
 Persistent defaults live in:
 
@@ -321,6 +333,7 @@ The persistent keys are:
 - `THOR_TARGET_MAX_MODEL_LEN`
 - `THOR_TARGET_KV_CACHE_DTYPE`
 - `THOR_TARGET_MAX_NUM_SEQS`
+- `THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT`
 
 ## 5. Stop Or Shutdown
 

@@ -132,6 +132,29 @@ if openclaw_path.exists():
         .get("params", {})
         .get("parallel_tool_calls")
     )
+    out["openclaw_main_max_concurrent"] = (
+        openclaw_cfg.get("agents", {})
+        .get("defaults", {})
+        .get("maxConcurrent")
+    )
+    out["openclaw_subagents_max_concurrent"] = (
+        openclaw_cfg.get("agents", {})
+        .get("defaults", {})
+        .get("subagents", {})
+        .get("maxConcurrent")
+    )
+    out["openclaw_subagents_max_children"] = (
+        openclaw_cfg.get("agents", {})
+        .get("defaults", {})
+        .get("subagents", {})
+        .get("maxChildrenPerAgent")
+    )
+    out["openclaw_subagents_max_spawn_depth"] = (
+        openclaw_cfg.get("agents", {})
+        .get("defaults", {})
+        .get("subagents", {})
+        .get("maxSpawnDepth")
+    )
     out["openclaw_temperature"] = (
         openclaw_cfg.get("agents", {})
         .get("defaults", {})
@@ -148,6 +171,10 @@ else:
     out["openclaw_tools_profile"] = None
     out["openclaw_tools_deny"] = []
     out["openclaw_parallel_tool_calls"] = None
+    out["openclaw_main_max_concurrent"] = None
+    out["openclaw_subagents_max_concurrent"] = None
+    out["openclaw_subagents_max_children"] = None
+    out["openclaw_subagents_max_spawn_depth"] = None
     out["openclaw_temperature"] = None
 
 print(json.dumps(out))
@@ -183,6 +210,10 @@ sync_sandbox_runtime_config() {
         -e THOR_MODEL_ID="${THOR_MODEL_ID}" \
         -e THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
         -e THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
+        -e THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}" \
+        -e THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}" \
+        -e THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}" \
+        -e THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH}" \
         -e THOR_OPENCLAW_TOOLS_DENY_JSON="$(thor_openclaw_tools_deny_json)" \
         "${cluster_container}" \
         sh <<'SH'
@@ -192,6 +223,10 @@ kubectl -n openshell exec "${THOR_SANDBOX_NAME}" -- env \
     THOR_MODEL_ID="${THOR_MODEL_ID}" \
     THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
     THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
+    THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}" \
+    THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}" \
+    THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}" \
+    THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH}" \
     THOR_OPENCLAW_TOOLS_DENY_JSON="${THOR_OPENCLAW_TOOLS_DENY_JSON}" \
     sh -lc '
 python3 - <<'"'"'PY'"'"'
@@ -206,6 +241,10 @@ provider_name = os.environ["THOR_LOCAL_PROVIDER_NAME"]
 provider_label = "Local vLLM" if provider_name == "vllm-local" else provider_name
 primary_model = f"inference/{model_id}"
 context_window = int(os.environ.get("THOR_TARGET_MAX_MODEL_LEN") or "65536")
+main_max_concurrent = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT") or "1")
+subagents_max_concurrent = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT") or "1")
+subagents_max_children = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN") or "1")
+subagents_max_spawn_depth = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH") or "1")
 tools_deny = json.loads(os.environ["THOR_OPENCLAW_TOOLS_DENY_JSON"])
 
 onboard_path = Path("/sandbox/.nemoclaw/config.json")
@@ -262,12 +301,17 @@ with openclaw_path.open(encoding="utf-8") as f:
 
 agents_defaults = openclaw_cfg.setdefault("agents", {}).setdefault("defaults", {})
 agents_defaults.setdefault("model", {})["primary"] = primary_model
+agents_defaults["maxConcurrent"] = main_max_concurrent
 agents_defaults.setdefault("models", {})[primary_model] = {
     "params": {
         "parallel_tool_calls": False,
         "temperature": 0,
     }
 }
+subagents_cfg = agents_defaults.setdefault("subagents", {})
+subagents_cfg["maxConcurrent"] = subagents_max_concurrent
+subagents_cfg["maxChildrenPerAgent"] = subagents_max_children
+subagents_cfg["maxSpawnDepth"] = subagents_max_spawn_depth
 
 models_cfg = openclaw_cfg.setdefault("models", {})
 models_cfg["mode"] = "merge"
