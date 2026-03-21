@@ -7,7 +7,7 @@ The upstream repository assumes local Nemotron 3 Nano inference. This fork now t
 ## Status
 
 This repository has now been validated end-to-end on a Jetson AGX Thor host for
-the `qwen3.5-35b-a3b-fp8` path.
+the `qwen3.5-27b-fp8` coding path.
 
 For a more operational handoff note aimed at future coding sessions, see
 [`AGENT_NOTES.md`](AGENT_NOTES.md).
@@ -30,20 +30,25 @@ Validated on this host:
 - OpenShell gateway creation and sandbox creation
 - local vLLM provider creation and `inference.local` routing
 - sandbox policy baseline installation with `strict-local`
-- internal NemoClaw/OpenClaw config sync to `Qwen3.5-35B-A3B-FP8`
+- internal NemoClaw/OpenClaw config sync to `Qwen3.5-27B-FP8`
 - end-to-end reply from inside the sandbox via:
   - `openclaw agent --agent main --local -m "Reply with one word: working" --session-id test`
+- end-to-end tool execution from inside the sandbox via:
+  - `openclaw agent --agent main --local --thinking off -m "Run uname -a and python3 --version, write both to /sandbox/smoke.txt, then reply done." --session-id smoke-tools`
 
 Current validated runtime on this Thor:
 
 - sandbox name: `thor-assistant`
 - provider name: `vllm-local`
-- served model id: `Qwen3.5-35B-A3B-FP8`
+- served model id: `Qwen3.5-27B-FP8`
 - validated runtime targets:
   - `--max-model-len 65536`
   - `--kv-cache-dtype fp8`
   - `--max-num-seqs 16`
   - auto tool choice enabled with `qwen3_coder`
+  - `parallel_tool_calls=false` in sandbox OpenClaw config
+  - `temperature=0` in sandbox OpenClaw config
+  - sandbox tool surface reduced to `read`, `edit`, `write`, `exec`, `process`
 
 Still incomplete or only partially validated:
 
@@ -51,6 +56,7 @@ Still incomplete or only partially validated:
 - The old `nemotron3-thor*.sh` launchers are still upstream leftovers and should not be treated as the preferred path for this fork.
 - This repository is a setup and hardening layer for NemoClaw/OpenShell on Thor. It does not itself implement the higher-level orchestrator/coder/tester workflow logic.
 - Other model profiles are not yet validated end-to-end on this host from this fork.
+- The `qwen3.5-35b-a3b-fp8` path remains text-capable, but tool-use reliability on that stack is still not considered validated.
 
 Important operational rule:
 
@@ -503,24 +509,30 @@ Start with small operator checks:
 ```bash
 source "$HOME/.nvm/nvm.sh"
 nvm use 22
-./status.sh qwen3.5-35b-a3b-fp8
+./status.sh qwen3.5-27b-fp8
 nemoclaw thor-assistant status
 ```
 
 Then do the validated inference smoke test from inside the sandbox:
 
 ```bash
-openclaw agent --agent main --local \
+openclaw agent --agent main --local --thinking off \
   -m "Reply with one word: working" --session-id test
 ```
 
-A simple tool-use smoke test is:
+The validated tool-use smoke test on the current 27B stack is:
 
 ```bash
-openclaw agent --agent main --local \
+openclaw agent --agent main --local --thinking off \
   -m "Run uname -a and python3 --version, write both to /sandbox/smoke.txt, then reply done." \
   --session-id smoke-tools
-cat /sandbox/smoke.txt
+```
+
+If a previous broken model/tool round leaves the embedded agent replaying stale
+history, reset the sandbox-local session store and retry:
+
+```bash
+./reset-sandbox-session-state.sh qwen3.5-27b-fp8
 ```
 
 After that, the next useful test is a real repo task in a disposable sandbox

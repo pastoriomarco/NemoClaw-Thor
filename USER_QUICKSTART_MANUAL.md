@@ -7,7 +7,7 @@ Current validated stack:
 
 - sandbox: `thor-assistant`
 - provider: `vllm-local`
-- model: `Qwen3.5-35B-A3B-FP8`
+- model: `Qwen3.5-27B-FP8`
 - policy baseline: `strict-local`
 
 ## 1. Shell Prep
@@ -30,7 +30,7 @@ export PATH="$HOME/.local/bin:$PATH"
 Check health:
 
 ```bash
-./status.sh qwen3.5-35b-a3b-fp8
+./status.sh qwen3.5-27b-fp8
 nemoclaw thor-assistant status
 ```
 
@@ -51,7 +51,7 @@ openshell sandbox connect thor-assistant
 Start the model server in one terminal:
 
 ```bash
-./start-model.sh qwen3.5-35b-a3b-fp8
+./start-model.sh qwen3.5-27b-fp8
 ```
 
 Start the OpenShell gateway in another:
@@ -63,20 +63,20 @@ openshell gateway start --name nemoclaw
 Then verify and connect:
 
 ```bash
-./status.sh qwen3.5-35b-a3b-fp8
+./status.sh qwen3.5-27b-fp8
 nemoclaw thor-assistant connect
 ```
 
 If `./status.sh` says the sandbox is missing, recreate it:
 
 ```bash
-./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+./install.sh qwen3.5-27b-fp8 --policy-profile strict-local
 ```
 
 If the install is present and only the provider/model binding needs refresh:
 
 ```bash
-./configure-local-provider.sh qwen3.5-35b-a3b-fp8
+./configure-local-provider.sh qwen3.5-27b-fp8
 ```
 
 ## 3. Quick Overview
@@ -107,17 +107,35 @@ openshell inference get
 Minimal inference test from inside the sandbox:
 
 ```bash
-openclaw agent --agent main --local \
+openclaw agent --agent main --local --thinking off \
   -m "Reply with one word: working" --session-id test
 ```
 
-Simple tool-use smoke test from inside the sandbox:
+Tool-use status on the current validated stack:
+
+```text
+Plain text inference works.
+Tool execution works end-to-end on the validated 27B stack.
+```
 
 ```bash
-openclaw agent --agent main --local \
+openclaw agent --agent main --local --thinking off \
   -m "Run uname -a and python3 --version, write both to /sandbox/smoke.txt, then reply done." \
   --session-id smoke-tools
-cat /sandbox/smoke.txt
+```
+
+If a previous broken model/tool round leaves the embedded agent replaying stale
+history, clear the sandbox-local session store and retry:
+
+```bash
+./reset-sandbox-session-state.sh qwen3.5-27b-fp8
+```
+
+Direct shell commands are still useful for quick runtime checks:
+
+```bash
+uname -a
+python3 --version
 ```
 
 For real work, clone or copy a disposable repo into `/sandbox` and operate on
@@ -226,6 +244,10 @@ pre-install state.
 - The currently validated path is one tracked sandbox, `thor-assistant`.
   OpenShell can support multiple sandboxes, but that is not the main validated
   operator path for this repo.
+- The validated coding/tool-use stack on this Thor is currently
+  `Qwen3.5-27B-FP8`.
+- The `Qwen3.5-35B-A3B-FP8` path may still be useful for plain inference, but
+  it is not the validated tool-use profile.
 - If you switch model profiles, re-run `./configure-local-provider.sh <profile>`
   after starting the new vLLM server so the inference route and sandbox runtime
   config stay aligned.

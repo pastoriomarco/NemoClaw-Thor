@@ -20,8 +20,8 @@ the base stack safer, more local-first, and more reversible on Jetson Thor.
 
 ## Validated State As Of 2026-03-21
 
-The repo is no longer just a draft for the `qwen3.5-35b-a3b-fp8` path. A full
-Thor run was completed and verified on the target machine.
+The repo is no longer just a draft for the `qwen3.5-27b-fp8` coding path. A
+full Thor run was completed and verified on the target machine.
 
 Validated on this host:
 
@@ -29,7 +29,7 @@ Validated on this host:
 - JetPack 7.1 / L4T 38.4
 - OpenShell `0.0.12`
 - NemoClaw installed from the upstream repo cloned at `~/NemoClaw`
-- local vLLM serving `Qwen3.5-35B-A3B-FP8`
+- local vLLM serving `Qwen3.5-27B-FP8`
 - OpenShell provider `vllm-local`
 - sandbox `thor-assistant`
 - policy baseline `strict-local`
@@ -46,13 +46,19 @@ What was actually proven:
 - Thor host fixes applied successfully
 - OpenShell gateway started successfully
 - sandbox image built and sandbox reached `Ready`
-- local provider route set to `Qwen3.5-35B-A3B-FP8`
-- `./status.sh qwen3.5-35b-a3b-fp8` passed all checks
-- inside the sandbox, `openclaw agent --agent main --local -m "Reply with one word: working"` returned `working`
+- local provider route set to `Qwen3.5-27B-FP8`
+- `./status.sh qwen3.5-27b-fp8` passed all checks
+- inside the sandbox, `openclaw agent --agent main --local --thinking off -m "Reply with one word: working"` returned `working`
+- inside the sandbox, the tool-use smoke test now completes end-to-end when the embedded session store is clean
+
+What is not currently proven:
+
+- every other model profile from this repo on this host
+- stable tool-use behavior on the `qwen3.5-35b-a3b-fp8` path
 
 This does not mean every model profile is now validated. It means the
-`qwen3.5-35b-a3b-fp8` flow is working on this Thor with the Thor-side fixes in
-this repo.
+`qwen3.5-27b-fp8` flow is working on this Thor with the Thor-side fixes in this
+repo.
 
 ## Current Supported Operator Path
 
@@ -208,7 +214,7 @@ at the sibling `thor_llm` model READMEs.
 
 From `lib/config.sh` and `lib/launch.sh`:
 
-- default model profile: `qwen3.5-35b-a3b-fp8`
+- default model profile: `qwen3.5-27b-fp8`
 - supported profiles:
   - `qwen3.5-122b-a10b-nvfp4-resharded`
   - `qwen3.5-27b-fp8`
@@ -647,10 +653,23 @@ openclaw agent --agent main --local \
 Inside the sandbox:
 
 ```bash
-openclaw agent --agent main --local \
+openclaw agent --agent main --local --thinking off \
   -m "Run uname -a and python3 --version, write both to /sandbox/smoke.txt, then reply done." \
   --session-id smoke-tools
-cat /sandbox/smoke.txt
+```
+
+Current reality:
+
+- this now passes on the validated `qwen3.5-27b-fp8` stack
+- the working Thor-side config uses `openai-completions`, `parallel_tool_calls=false`, and a reduced tool surface of `read`, `edit`, `write`, `exec`, and `process`
+- the working Thor-side config also pins `temperature=0` for the local 27B OpenClaw model override
+- if a prior broken run poisoned the embedded local session history, run `./reset-sandbox-session-state.sh qwen3.5-27b-fp8` once before retrying
+
+If you want a direct non-agent fallback inside the sandbox:
+
+```bash
+uname -a
+python3 --version
 ```
 
 ### 4. Real repo task

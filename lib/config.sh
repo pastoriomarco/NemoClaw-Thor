@@ -162,7 +162,7 @@ normalize_model_profile() {
 
 resolve_model_profile() {
     local requested
-    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.5-35b-a3b-fp8}}")
+    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.5-27b-fp8}}")
 
     case "${requested}" in
         qwen3.5-122b-a10b-nvfp4-resharded)

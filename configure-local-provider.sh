@@ -45,7 +45,11 @@ if [[ -n "${sandbox_name}" ]]; then
 fi
 
 if openshell provider get "${THOR_LOCAL_PROVIDER_NAME}" &>/dev/null; then
-    pass "Provider ${THOR_LOCAL_PROVIDER_NAME} already exists"
+    info "Updating provider ${THOR_LOCAL_PROVIDER_NAME}..."
+    openshell provider update "${THOR_LOCAL_PROVIDER_NAME}" \
+        --credential OPENAI_API_KEY="${THOR_LOCAL_VLLM_API_KEY}" \
+        --config OPENAI_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL}"
+    pass "Provider ${THOR_LOCAL_PROVIDER_NAME} updated"
 else
     info "Creating provider ${THOR_LOCAL_PROVIDER_NAME}..."
     openshell provider create \

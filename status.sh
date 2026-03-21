@@ -193,6 +193,29 @@ import json, sys
 data = json.load(sys.stdin)
 print(data.get("openclaw_primary_model") or "")
 ' 2>/dev/null || echo "")
+        openclaw_api=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print(data.get("openclaw_inference_api") or "")
+' 2>/dev/null || echo "")
+        openclaw_context_window=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data.get("openclaw_inference_context_window")
+print("" if value is None else value)
+' 2>/dev/null || echo "")
+        openclaw_parallel_tool_calls=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data.get("openclaw_parallel_tool_calls")
+print("" if value is None else str(value).lower())
+' 2>/dev/null || echo "")
+        openclaw_temperature=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data.get("openclaw_temperature")
+print("" if value is None else value)
+' 2>/dev/null || echo "")
 
         if [[ "${onboard_model}" == "${THOR_MODEL_ID}" ]]; then
             pass "Sandbox onboard model: ${onboard_model}"
@@ -208,6 +231,42 @@ print(data.get("openclaw_primary_model") or "")
             record 0
         else
             warn "Sandbox primary model is '${primary_model:-unknown}' — expected 'inference/${THOR_MODEL_ID}'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${openclaw_api}" == "openai-completions" ]]; then
+            pass "Sandbox provider API: ${openclaw_api}"
+            record 0
+        else
+            warn "Sandbox provider API is '${openclaw_api:-unknown}' — expected 'openai-completions'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${openclaw_context_window}" == "${THOR_TARGET_MAX_MODEL_LEN}" ]]; then
+            pass "Sandbox context window: ${openclaw_context_window}"
+            record 0
+        else
+            warn "Sandbox context window is '${openclaw_context_window:-unknown}' — expected '${THOR_TARGET_MAX_MODEL_LEN}'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${openclaw_parallel_tool_calls}" == "false" ]]; then
+            pass "Sandbox parallel tool calls disabled"
+            record 0
+        else
+            warn "Sandbox parallel tool calls setting is '${openclaw_parallel_tool_calls:-unknown}' — expected 'false'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${openclaw_temperature}" == "0" ]]; then
+            pass "Sandbox temperature: ${openclaw_temperature}"
+            record 0
+        else
+            warn "Sandbox temperature is '${openclaw_temperature:-unknown}' — expected '0'"
             fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi

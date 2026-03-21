@@ -23,6 +23,9 @@ prepare_thor_launch_profile() {
     THOR_LAUNCH_GPU_MEMORY_UTILIZATION=""
     THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS=""
     THOR_LAUNCH_SPECULATIVE_CONFIG=""
+    THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
+    THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
+    THOR_CHAT_TEMPLATE_HOST_DIR="${THOR_CHAT_TEMPLATE_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/templates}"
 
     THOR_DOCKER_ENV_ARGS=()
     THOR_VLLM_ARGS=()
@@ -33,17 +36,24 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_HOST_MODEL_PATH="${THOR_HF_CACHE_DIR}/hub/qwen-3.5-122b-a10b-nvfp4-resharded/resharded"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.90}"
             THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS="${THOR_MAX_NUM_BATCHED_TOKENS:-8192}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
             THOR_DOCKER_ENV_ARGS+=("-e" "VLLM_USE_FLASHINFER_MOE_FP4=0")
             THOR_VLLM_ARGS+=(
                 "--quantization" "compressed-tensors"
                 "--attention-backend" "FLASHINFER"
                 "--language-model-only"
+                "--reasoning-parser" "qwen3"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
             )
             ;;
         qwen3.5-27b-fp8)
             THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.5-27B-FP8"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.90}"
             THOR_LAUNCH_SPECULATIVE_CONFIG="${THOR_SPECULATIVE_CONFIG:-{\"method\":\"qwen3_next_mtp\",\"num_speculative_tokens\":2}}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--tensor-parallel-size" "1"
@@ -57,6 +67,8 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.5-35B-A3B-FP8"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.90}"
             THOR_LAUNCH_SPECULATIVE_CONFIG="${THOR_SPECULATIVE_CONFIG:-{\"method\":\"qwen3_next_mtp\",\"num_speculative_tokens\":2}}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--tensor-parallel-size" "1"
@@ -69,6 +81,8 @@ prepare_thor_launch_profile() {
         qwen3.5-35b-a3b-nvfp4)
             THOR_LAUNCH_MODEL_SOURCE="Kbenkhaled/Qwen3.5-35B-A3B-NVFP4"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--reasoning-parser" "qwen3"
@@ -106,6 +120,10 @@ prepare_thor_launch_profile() {
     if [[ -n "${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}" ]]; then
         THOR_VLLM_ARGS+=("--max-num-batched-tokens" "${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}")
     fi
+
+    if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH}" ]]; then
+        THOR_VLLM_ARGS+=("--chat-template" "${THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH}")
+    fi
 }
 
 check_thor_launch_prereqs() {
@@ -129,6 +147,12 @@ check_thor_launch_prereqs() {
         return 1
     fi
 
+    if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}" && ! -f "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}" ]]; then
+        fail "Required chat template not found: ${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}"
+        fix "Restore the NemoClaw-Thor templates directory or set THOR_CHAT_TEMPLATE_HOST_DIR."
+        return 1
+    fi
+
     mkdir -p "${THOR_HF_CACHE_DIR}" "${THOR_VLLM_CACHE_DIR}" "${THOR_TORCH_CACHE_DIR}"
     return 0
 }
@@ -146,6 +170,9 @@ print_thor_launch_summary() {
     if [[ -n "${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}" ]]; then
         echo "  Max batched tokens: ${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}"
     fi
+    if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}" ]]; then
+        echo "  Chat template:      ${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}"
+    fi
     echo "  HF cache:           ${THOR_HF_CACHE_DIR}"
     echo "  vLLM cache:         ${THOR_VLLM_CACHE_DIR}"
     echo "  Torch cache:        ${THOR_TORCH_CACHE_DIR}"
@@ -153,9 +180,14 @@ print_thor_launch_summary() {
 
 run_thor_vllm_container() {
     local docker_tty_args=()
+    local docker_mount_args=()
 
     if [[ -t 0 && -t 1 ]]; then
         docker_tty_args=(-i -t)
+    fi
+
+    if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}" ]]; then
+        docker_mount_args=(-v "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}:${THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH}:ro")
     fi
 
     docker run --rm \
@@ -168,6 +200,7 @@ run_thor_vllm_container() {
         -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface" \
         -v "${THOR_VLLM_CACHE_DIR}:/root/.cache/vllm" \
         -v "${THOR_TORCH_CACHE_DIR}:/root/.cache/torch" \
+        "${docker_mount_args[@]}" \
         "${THOR_DOCKER_ENV_ARGS[@]}" \
         "${THOR_VLLM_IMAGE}" \
         vllm serve "${THOR_LAUNCH_MODEL_SOURCE}" "${THOR_VLLM_ARGS[@]}"
