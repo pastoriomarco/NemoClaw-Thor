@@ -97,8 +97,11 @@ prepare_thor_launch_profile() {
         "--max-model-len" "${THOR_LAUNCH_MAX_MODEL_LEN}"
         "--kv-cache-dtype" "${THOR_LAUNCH_KV_CACHE_DTYPE}"
         "--max-num-seqs" "${THOR_LAUNCH_MAX_NUM_SEQS}"
-        "--api-key" "${THOR_LOCAL_VLLM_API_KEY}"
     )
+
+    if [[ -n "${THOR_LOCAL_VLLM_API_KEY}" && "${THOR_LOCAL_VLLM_API_KEY}" != "dummy" ]]; then
+        THOR_VLLM_ARGS+=("--api-key" "${THOR_LOCAL_VLLM_API_KEY}")
+    fi
 
     if [[ -n "${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}" ]]; then
         THOR_VLLM_ARGS+=("--max-num-batched-tokens" "${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}")
@@ -149,7 +152,14 @@ print_thor_launch_summary() {
 }
 
 run_thor_vllm_container() {
-    docker run --rm -it \
+    local docker_tty_args=()
+
+    if [[ -t 0 && -t 1 ]]; then
+        docker_tty_args=(-i -t)
+    fi
+
+    docker run --rm \
+        "${docker_tty_args[@]}" \
         --runtime nvidia --gpus all \
         --ipc=host --network host \
         -e HF_HOME=/data/models/huggingface \

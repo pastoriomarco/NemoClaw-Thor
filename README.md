@@ -6,10 +6,14 @@ The upstream repository assumes local Nemotron 3 Nano inference. This fork now t
 
 ## Status
 
-This repository is a usable draft, not yet fully validated end-to-end on Thor hardware.
+This repository has now been validated end-to-end on a Jetson AGX Thor host for
+the `qwen3.5-35b-a3b-fp8` path.
 
 For a more operational handoff note aimed at future coding sessions, see
 [`AGENT_NOTES.md`](AGENT_NOTES.md).
+
+For day-to-day operator usage, see
+[`USER_QUICKSTART_MANUAL.md`](USER_QUICKSTART_MANUAL.md).
 
 Implemented now:
 
@@ -17,13 +21,41 @@ Implemented now:
 - `start-model.sh` and the Qwen convenience wrappers provide local vLLM launch paths for the supported model profiles.
 - Static and dynamic sandbox policy tooling is in place for `strict-local`, `local-hardened`, and `research-lite`.
 - Host backup/apply/restore scripts are in place for the Thor-specific OpenShell fixes.
+- The Thor wrapper now recovers from the current upstream NemoClaw onboarding failure on Thor where step 6 tries to rewrite an immutable `~/.openclaw/openclaw.json` inside the sandbox.
+- Sandbox, provider, and internal OpenClaw/NemoClaw runtime state are now synced to exact tracked names and model ids instead of list-order guesses.
 
-Still incomplete or not yet validated:
+Validated on this host:
 
-- The full flow has not yet been run and validated end-to-end on the target Thor from this fork.
-- The upstream `NemoClaw` onboarding path is still interactive and cloud-first, and still asks for an NVIDIA API key before the local provider override is applied.
+- Jetson AGX Thor / JetPack 7.1 / L4T 38.4
+- OpenShell gateway creation and sandbox creation
+- local vLLM provider creation and `inference.local` routing
+- sandbox policy baseline installation with `strict-local`
+- internal NemoClaw/OpenClaw config sync to `Qwen3.5-35B-A3B-FP8`
+- end-to-end reply from inside the sandbox via:
+  - `openclaw agent --agent main --local -m "Reply with one word: working" --session-id test`
+
+Current validated runtime on this Thor:
+
+- sandbox name: `thor-assistant`
+- provider name: `vllm-local`
+- served model id: `Qwen3.5-35B-A3B-FP8`
+- validated runtime targets:
+  - `--max-model-len 65536`
+  - `--kv-cache-dtype fp8`
+  - `--max-num-seqs 16`
+  - auto tool choice enabled with `qwen3_coder`
+
+Still incomplete or only partially validated:
+
+- The upstream `NemoClaw` onboarding path is still interactive and cloud-first.
 - The old `nemotron3-thor*.sh` launchers are still upstream leftovers and should not be treated as the preferred path for this fork.
 - This repository is a setup and hardening layer for NemoClaw/OpenShell on Thor. It does not itself implement the higher-level orchestrator/coder/tester workflow logic.
+- Other model profiles are not yet validated end-to-end on this host from this fork.
+
+Important operational rule:
+
+- use this repo's `install.sh` / `configure-local-provider.sh`
+- do not treat raw upstream `nemoclaw onboard` as the supported Thor path
 
 ## Current Scope
 
@@ -91,11 +123,13 @@ Relevant model docs in this workspace:
 
 ### Current upstream constraint that still applies
 
-The upstream `NemoClaw` onboarding flow is still cloud-first.
+The upstream `NemoClaw` onboarding flow is still cloud-first and still has one
+Thor-specific failure mode that this repo works around afterward.
 
 - Today, the onboarding wizard still asks for an NVIDIA API key.
 - This fork intends to switch the actual inference route to a local provider after onboarding.
-- Until the installer is rewritten, that upstream onboarding constraint remains in force.
+- On Thor, the upstream step that rewrites `~/.openclaw/openclaw.json` can fail because the sandbox image now makes that file immutable by design.
+- `install.sh` and `configure-local-provider.sh` in this repo now recover from that state and finish the local-provider sync from the host side.
 
 ## Safety Requirements
 
@@ -297,13 +331,45 @@ The intended final setup is:
 
 ## Install Sequence
 
-If the Thor host fixes are not already in place, the most direct path is:
+For a fresh Thor or fresh JetPack reinstall, the validated sequence is staged,
+not the single-command path.
+
+Recommended sequence on a fresh host:
+
+1. Apply the host fixes first.
+2. Start the local vLLM server in one terminal.
+3. Run the NemoClaw-Thor installer in a second terminal.
+
+If you want the currently validated runtime targets on a fresh host, export:
+
+```bash
+export THOR_TARGET_MAX_MODEL_LEN=65536
+export THOR_TARGET_KV_CACHE_DTYPE=fp8
+export THOR_TARGET_MAX_NUM_SEQS=16
+```
+
+Then run:
+
+```bash
+./apply-host-fixes.sh
+./start-model.sh qwen3.5-35b-a3b-fp8
+./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+```
+
+This is the path that matches the validated Thor run.
+
+The one-command shortcut still exists:
 
 ```bash
 ./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local --apply-host-fixes
 ```
 
-That flag runs `./apply-host-fixes.sh` first, which:
+But it is not the preferred local-vLLM onboarding path on a clean host because
+the host-fix step restarts Docker, which also stops any already-running vLLM
+container. Use the staged sequence above when you want the local provider path
+to be available during onboarding.
+
+`--apply-host-fixes` runs `./apply-host-fixes.sh` first, which:
 
 1. saves a restore snapshot of the current host state
 2. clones `jetsonhacks/OpenShell-Thor` if needed
@@ -369,6 +435,101 @@ All launchers target:
 - `--max-num-seqs 8` by default
 
 The smaller models can still be pushed further with environment overrides after validation.
+
+For the currently validated Thor runtime, this host has:
+
+- `THOR_TARGET_MAX_MODEL_LEN=65536`
+- `THOR_TARGET_KV_CACHE_DTYPE=fp8`
+- `THOR_TARGET_MAX_NUM_SEQS=16`
+
+If you stop vLLM and want to reclaim memory before starting another model, run:
+
+```bash
+sudo sync
+sudo sysctl -w vm.drop_caches=3
+```
+
+before launching the next server.
+
+## Using An Installed Stack
+
+If the current install is still running, you can use it immediately.
+
+For `nemoclaw` commands, activate the Node 22 runtime first:
+
+```bash
+source "$HOME/.nvm/nvm.sh"
+nvm use 22
+export PATH="$HOME/.local/bin:$PATH"
+nemoclaw thor-assistant connect
+```
+
+For a direct OpenShell shell, only the `openshell` path is required:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+openshell sandbox connect thor-assistant
+```
+
+If you want to bring the stack back after a reboot or after stopping services:
+
+```bash
+source "$HOME/.nvm/nvm.sh"
+nvm use 22
+export PATH="$HOME/.local/bin:$PATH"
+./start-model.sh qwen3.5-35b-a3b-fp8
+openshell gateway start --name nemoclaw
+./status.sh qwen3.5-35b-a3b-fp8
+nemoclaw thor-assistant connect
+```
+
+If `./status.sh` reports that the sandbox is missing, rerun:
+
+```bash
+./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+```
+
+If `~/NemoClaw` already exists and you only need to refresh the local-provider
+binding after a model change, use:
+
+```bash
+./configure-local-provider.sh qwen3.5-35b-a3b-fp8
+```
+
+## Suggested Tests
+
+Start with small operator checks:
+
+```bash
+source "$HOME/.nvm/nvm.sh"
+nvm use 22
+./status.sh qwen3.5-35b-a3b-fp8
+nemoclaw thor-assistant status
+```
+
+Then do the validated inference smoke test from inside the sandbox:
+
+```bash
+openclaw agent --agent main --local \
+  -m "Reply with one word: working" --session-id test
+```
+
+A simple tool-use smoke test is:
+
+```bash
+openclaw agent --agent main --local \
+  -m "Run uname -a and python3 --version, write both to /sandbox/smoke.txt, then reply done." \
+  --session-id smoke-tools
+cat /sandbox/smoke.txt
+```
+
+After that, the next useful test is a real repo task in a disposable sandbox
+workspace under `/sandbox`, for example:
+
+- inspect a local repo clone
+- make a tiny code change
+- run the repo test command
+- report what passed or failed
 
 ## Not Yet Updated
 

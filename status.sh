@@ -9,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/checks.sh"
 source "${SCRIPT_DIR}/lib/config.sh"
+source "${SCRIPT_DIR}/lib/sandbox-runtime.sh"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     echo "Usage: ./status.sh [model-profile]"
@@ -166,6 +167,50 @@ else
         info "The stack is not currently pointing at the saved local vLLM provider."
         fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 2
+    fi
+fi
+
+header "Sandbox Runtime Config"
+echo ""
+
+if [[ -z "${sandbox_name}" ]]; then
+    warn "Skipping sandbox runtime config check because no sandbox is resolved"
+    record 2
+else
+    runtime_summary=$(sandbox_runtime_config_summary_json "${sandbox_name}" 2>/dev/null || echo "")
+    if [[ -z "${runtime_summary}" ]]; then
+        warn "Could not inspect runtime config inside sandbox '${sandbox_name}'"
+        fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+        record 2
+    else
+        onboard_model=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print(data.get("onboard_model") or "")
+' 2>/dev/null || echo "")
+        primary_model=$(printf '%s' "${runtime_summary}" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print(data.get("openclaw_primary_model") or "")
+' 2>/dev/null || echo "")
+
+        if [[ "${onboard_model}" == "${THOR_MODEL_ID}" ]]; then
+            pass "Sandbox onboard model: ${onboard_model}"
+            record 0
+        else
+            warn "Sandbox onboard model is '${onboard_model:-unknown}' — expected '${THOR_MODEL_ID}'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
+
+        if [[ "${primary_model}" == "inference/${THOR_MODEL_ID}" ]]; then
+            pass "Sandbox primary model: ${primary_model}"
+            record 0
+        else
+            warn "Sandbox primary model is '${primary_model:-unknown}' — expected 'inference/${THOR_MODEL_ID}'"
+            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            record 2
+        fi
     fi
 fi
 

@@ -70,6 +70,15 @@ echo ""
 "${HELPER_REPO_DIR}/setup-openshell-network.sh"
 echo ""
 
+header "Clearing stale iptables-nft compatibility rules"
+echo ""
+if clear_stale_nft_compat_firewall; then
+    pass "Cleared stale nft compatibility tables left behind by iptables-nft"
+else
+    info "No stale iptables-nft compatibility tables detected"
+fi
+echo ""
+
 pass "Thor host fixes applied"
 echo ""
 echo "If you need to revert to the pre-change host state:"

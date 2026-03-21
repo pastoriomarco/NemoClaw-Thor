@@ -9,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/checks.sh"
 source "${SCRIPT_DIR}/lib/config.sh"
+source "${SCRIPT_DIR}/lib/sandbox-runtime.sh"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     echo "Usage: ./configure-local-provider.sh [model-profile]"
@@ -38,6 +39,11 @@ if ! openshell gateway info &>/dev/null; then
     exit 1
 fi
 
+sandbox_name=$(resolve_thor_sandbox_name 2>/dev/null || echo "")
+if [[ -n "${sandbox_name}" ]]; then
+    THOR_MANAGED_SANDBOX_NAME="${sandbox_name}"
+fi
+
 if openshell provider get "${THOR_LOCAL_PROVIDER_NAME}" &>/dev/null; then
     pass "Provider ${THOR_LOCAL_PROVIDER_NAME} already exists"
 else
@@ -48,8 +54,8 @@ else
         --credential OPENAI_API_KEY="${THOR_LOCAL_VLLM_API_KEY}" \
         --config OPENAI_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL}"
     pass "Provider ${THOR_LOCAL_PROVIDER_NAME} created"
-    THOR_MANAGED_PROVIDER_NAMES=$(csv_append_unique "${THOR_MANAGED_PROVIDER_NAMES:-}" "${THOR_LOCAL_PROVIDER_NAME}")
 fi
+THOR_MANAGED_PROVIDER_NAMES=$(csv_append_unique "${THOR_MANAGED_PROVIDER_NAMES:-}" "${THOR_LOCAL_PROVIDER_NAME}")
 
 info "Setting inference route to ${THOR_MODEL_ID}..."
 openshell inference set \
@@ -57,6 +63,36 @@ openshell inference set \
     --model "${THOR_MODEL_ID}" \
     --no-verify
 pass "Inference route set to ${THOR_LOCAL_PROVIDER_NAME} / ${THOR_MODEL_ID}"
+
+if [[ -n "${sandbox_name}" ]]; then
+    info "Syncing sandbox runtime config for ${sandbox_name}..."
+    sync_sandbox_runtime_config "${sandbox_name}"
+    pass "Sandbox runtime config synced to ${THOR_MODEL_ID}"
+
+    registry_file="$(thor_nemoclaw_registry_file)"
+    if [[ -f "${registry_file}" ]]; then
+        python3 - "${registry_file}" "${sandbox_name}" "${THOR_MODEL_ID}" "${THOR_LOCAL_PROVIDER_NAME}" <<'PYEOF'
+import json
+import sys
+
+path, sandbox_name, model_id, provider_name = sys.argv[1:5]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+
+entry = data.get("sandboxes", {}).get(sandbox_name)
+if isinstance(entry, dict):
+    entry["model"] = model_id
+    entry["provider"] = provider_name
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+PYEOF
+        pass "Updated ~/.nemoclaw registry for ${sandbox_name}"
+    fi
+else
+    warn "Could not resolve a sandbox name to sync internal NemoClaw config"
+    fix "Set THOR_MANAGED_SANDBOX_NAME in ${THOR_CONFIG_FILE}, or rerun install/onboard."
+fi
 
 save_thor_runtime_config
 pass "Saved runtime config to ${THOR_CONFIG_FILE}"

@@ -8,6 +8,23 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
+prepend_path_once() {
+    local dir="${1:-}"
+    [[ -n "${dir}" && -d "${dir}" ]] || return 0
+
+    case ":${PATH:-}:" in
+        *":${dir}:"*) ;;
+        *) export PATH="${dir}:${PATH:-}" ;;
+    esac
+}
+
+ensure_thor_runtime_path() {
+    prepend_path_once "${HOME}/.local/bin"
+    prepend_path_once "${NVM_BIN:-}"
+}
+
+ensure_thor_runtime_path
+
 thor_config_file() {
     local config_home
     config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -204,11 +221,20 @@ load_thor_runtime_config() {
     local env_policy_profile="${THOR_POLICY_PROFILE:-}"
     local env_managed_sandbox_name="${THOR_MANAGED_SANDBOX_NAME:-}"
     local env_managed_provider_names="${THOR_MANAGED_PROVIDER_NAMES:-}"
+    local env_target_max_model_len="${THOR_TARGET_MAX_MODEL_LEN:-}"
+    local env_target_kv_cache_dtype="${THOR_TARGET_KV_CACHE_DTYPE:-}"
+    local env_target_max_num_seqs="${THOR_TARGET_MAX_NUM_SEQS:-}"
+    local file_target_max_model_len=""
+    local file_target_kv_cache_dtype=""
+    local file_target_max_num_seqs=""
     THOR_CONFIG_FILE="$(thor_config_file)"
 
     if [[ -f "${THOR_CONFIG_FILE}" ]]; then
         # shellcheck source=/dev/null
         source "${THOR_CONFIG_FILE}"
+        file_target_max_model_len="${THOR_TARGET_MAX_MODEL_LEN:-}"
+        file_target_kv_cache_dtype="${THOR_TARGET_KV_CACHE_DTYPE:-}"
+        file_target_max_num_seqs="${THOR_TARGET_MAX_NUM_SEQS:-}"
     fi
 
     if [[ -n "${env_profile}" ]]; then
@@ -234,6 +260,15 @@ load_thor_runtime_config() {
     [[ -n "${env_managed_provider_names}" ]] && THOR_MANAGED_PROVIDER_NAMES="${env_managed_provider_names}"
 
     resolve_model_profile "${THOR_MODEL_PROFILE:-}"
+
+    [[ -n "${file_target_max_model_len}" ]] && THOR_TARGET_MAX_MODEL_LEN="${file_target_max_model_len}"
+    [[ -n "${file_target_kv_cache_dtype}" ]] && THOR_TARGET_KV_CACHE_DTYPE="${file_target_kv_cache_dtype}"
+    [[ -n "${file_target_max_num_seqs}" ]] && THOR_TARGET_MAX_NUM_SEQS="${file_target_max_num_seqs}"
+    [[ -n "${env_target_max_model_len}" ]] && THOR_TARGET_MAX_MODEL_LEN="${env_target_max_model_len}"
+    [[ -n "${env_target_kv_cache_dtype}" ]] && THOR_TARGET_KV_CACHE_DTYPE="${env_target_kv_cache_dtype}"
+    [[ -n "${env_target_max_num_seqs}" ]] && THOR_TARGET_MAX_NUM_SEQS="${env_target_max_num_seqs}"
+
+    return 0
 }
 
 save_thor_runtime_config() {

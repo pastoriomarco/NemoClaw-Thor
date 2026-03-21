@@ -287,13 +287,30 @@ echo "  The sandbox policy baseline has already been replaced with:"
 echo "    ${THOR_POLICY_PROFILE}"
 echo "  This script will reapply the Thor local-provider configuration afterward."
 echo ""
+echo "  Local vLLM onboarding support is enabled automatically for this run"
+echo "  via NEMOCLAW_EXPERIMENTAL=1."
+if curl -sf --max-time 2 -H "Authorization: Bearer ${THOR_LOCAL_VLLM_API_KEY}" "${THOR_HOST_VLLM_MODELS_URL}" >/dev/null 2>&1; then
+    echo "  Detected a live local vLLM endpoint on ${THOR_HOST_VLLM_MODELS_URL}."
+    echo "  Select Local vLLM during onboarding to avoid the cloud/API-key path."
+    echo ""
+fi
 echo "  Press Enter to continue..."
 read -r
 
 before_provider_names_csv=$(list_openshell_provider_names | paste -sd, -)
 
 cd "${NEMOCLAW_DIR}"
-./install.sh
+set +e
+NEMOCLAW_EXPERIMENTAL="${NEMOCLAW_EXPERIMENTAL:-1}" ./install.sh
+upstream_install_status=$?
+set -e
+
+if [[ "${upstream_install_status}" -ne 0 ]]; then
+    warn "Upstream NemoClaw installer exited with status ${upstream_install_status}"
+    info "Current upstream can fail on Thor during OpenClaw runtime sync because"
+    info "the sandbox image locks ~/.openclaw/openclaw.json as immutable."
+    info "Attempting Thor-side recovery from the partially completed install..."
+fi
 
 SANDBOX_NAME=$(recent_nemoclaw_registry_sandbox_name 2>/dev/null || echo "")
 if [[ -n "${SANDBOX_NAME}" ]]; then
@@ -303,6 +320,24 @@ if [[ -n "${SANDBOX_NAME}" ]]; then
 else
     warn "Could not determine the NemoClaw sandbox name from ~/.nemoclaw/sandboxes.json"
     info "Status and uninstall will need an explicit sandbox name until this is recorded."
+fi
+
+if [[ "${upstream_install_status}" -ne 0 ]]; then
+    if [[ -z "${SANDBOX_NAME}" ]]; then
+        fail "Could not recover a sandbox name from the partial upstream install"
+        fix "Inspect ~/.nemoclaw/sandboxes.json and openshell sandbox list"
+        exit "${upstream_install_status}"
+    fi
+
+    if ! openshell sandbox get "${SANDBOX_NAME}" &>/dev/null; then
+        fail "Sandbox '${SANDBOX_NAME}' is not reachable after upstream install failure"
+        fix "Inspect: openshell sandbox list"
+        fix "Inspect: nemoclaw ${SANDBOX_NAME} logs --follow"
+        exit "${upstream_install_status}"
+    fi
+
+    warn "Recovered partial install using sandbox '${SANDBOX_NAME}'"
+    info "Continuing with Thor-side provider and sandbox config sync."
 fi
 
 if [[ -n "${SANDBOX_NAME}" ]]; then

@@ -115,6 +115,15 @@ create_host_backup() {
 
     sudo iptables-save > "${backup_dir}/iptables.rules.v4"
     sudo ip6tables-save > "${backup_dir}/ip6tables.rules.v6"
+    if command -v iptables-nft-save &>/dev/null; then
+        sudo iptables-nft-save > "${backup_dir}/iptables-nft.rules.v4" 2>/dev/null || true
+    fi
+    if command -v ip6tables-nft-save &>/dev/null; then
+        sudo ip6tables-nft-save > "${backup_dir}/ip6tables-nft.rules.v6" 2>/dev/null || true
+    fi
+    if command -v nft &>/dev/null; then
+        sudo nft list ruleset > "${backup_dir}/nft.ruleset" 2>/dev/null || true
+    fi
 
     if command -v docker &>/dev/null; then
         docker ps -a > "${backup_dir}/docker-ps-a.txt" 2>/dev/null || true
@@ -269,4 +278,46 @@ ensure_openshell_thor_repo() {
 
     mkdir -p "$(dirname "${repo_dir}")"
     git clone "${repo_url}" "${repo_dir}"
+}
+
+clear_stale_nft_compat_firewall() {
+    local changed=0
+    local table=""
+
+    if command -v iptables-nft-save &>/dev/null; then
+        if sudo iptables-nft-save 2>/dev/null | grep -Eq '(^-A DOCKER|^-A FORWARD|^-A OUTPUT|^-A PREROUTING|^-A POSTROUTING|^\*nat|^\*filter)'; then
+            changed=1
+        fi
+    fi
+    if command -v ip6tables-nft-save &>/dev/null; then
+        if sudo ip6tables-nft-save 2>/dev/null | grep -Eq '(^-A DOCKER|^-A FORWARD|^-A OUTPUT|^-A PREROUTING|^-A POSTROUTING|^\*nat|^\*filter)'; then
+            changed=1
+        fi
+    fi
+
+    if [[ "${changed}" == "0" ]]; then
+        return 1
+    fi
+
+    if command -v iptables-nft &>/dev/null; then
+        sudo iptables-nft -P INPUT ACCEPT >/dev/null 2>&1 || true
+        sudo iptables-nft -P FORWARD ACCEPT >/dev/null 2>&1 || true
+        sudo iptables-nft -P OUTPUT ACCEPT >/dev/null 2>&1 || true
+        for table in raw mangle nat filter security; do
+            sudo iptables-nft -t "${table}" -F >/dev/null 2>&1 || true
+            sudo iptables-nft -t "${table}" -X >/dev/null 2>&1 || true
+        done
+    fi
+
+    if command -v ip6tables-nft &>/dev/null; then
+        sudo ip6tables-nft -P INPUT ACCEPT >/dev/null 2>&1 || true
+        sudo ip6tables-nft -P FORWARD ACCEPT >/dev/null 2>&1 || true
+        sudo ip6tables-nft -P OUTPUT ACCEPT >/dev/null 2>&1 || true
+        for table in raw mangle nat filter security; do
+            sudo ip6tables-nft -t "${table}" -F >/dev/null 2>&1 || true
+            sudo ip6tables-nft -t "${table}" -X >/dev/null 2>&1 || true
+        done
+    fi
+
+    return 0
 }

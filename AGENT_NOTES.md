@@ -3,6 +3,8 @@
 This file is a session handoff and operational note for future work on this
 repository. It is intentionally more explicit and more candid than the README.
 
+For the operator-facing usage guide, see `USER_QUICKSTART_MANUAL.md`.
+
 ## What This Repo Is
 
 This repository is a Thor-specific integration and hardening layer around:
@@ -15,6 +17,53 @@ This repository is a Thor-specific integration and hardening layer around:
 It is not the agent runtime itself, and it is not the place where the actual
 multi-agent orchestrator/coder/tester logic is implemented. Its job is to make
 the base stack safer, more local-first, and more reversible on Jetson Thor.
+
+## Validated State As Of 2026-03-21
+
+The repo is no longer just a draft for the `qwen3.5-35b-a3b-fp8` path. A full
+Thor run was completed and verified on the target machine.
+
+Validated on this host:
+
+- Jetson AGX Thor
+- JetPack 7.1 / L4T 38.4
+- OpenShell `0.0.12`
+- NemoClaw installed from the upstream repo cloned at `~/NemoClaw`
+- local vLLM serving `Qwen3.5-35B-A3B-FP8`
+- OpenShell provider `vllm-local`
+- sandbox `thor-assistant`
+- policy baseline `strict-local`
+
+Validated runtime parameters for that run:
+
+- `--max-model-len 65536`
+- `--kv-cache-dtype fp8`
+- `--max-num-seqs 16`
+- auto tool choice enabled with `qwen3_coder`
+
+What was actually proven:
+
+- Thor host fixes applied successfully
+- OpenShell gateway started successfully
+- sandbox image built and sandbox reached `Ready`
+- local provider route set to `Qwen3.5-35B-A3B-FP8`
+- `./status.sh qwen3.5-35b-a3b-fp8` passed all checks
+- inside the sandbox, `openclaw agent --agent main --local -m "Reply with one word: working"` returned `working`
+
+This does not mean every model profile is now validated. It means the
+`qwen3.5-35b-a3b-fp8` flow is working on this Thor with the Thor-side fixes in
+this repo.
+
+## Current Supported Operator Path
+
+Use this repo's wrapper flow, not raw upstream onboarding:
+
+- `./install.sh`
+- `./configure-local-provider.sh`
+- `./status.sh`
+
+Do not treat raw upstream `nemoclaw onboard` as the supported Thor workflow.
+It still has a Thor-specific failure mode described below.
 
 ## What This Repo Is Expected To Do
 
@@ -181,6 +230,43 @@ Serving defaults across profiles:
 - max sequences: `8`
 
 These are conservative startup defaults, not finished throughput claims.
+
+On this validated host, the saved runtime config was overridden to:
+
+- `THOR_TARGET_MAX_MODEL_LEN=65536`
+- `THOR_TARGET_KV_CACHE_DTYPE=fp8`
+- `THOR_TARGET_MAX_NUM_SEQS=16`
+
+Those values live in `~/.config/nemoclaw-thor/config.env` and are not the repo
+defaults for a brand-new machine unless they are exported or saved first.
+
+## Current Known Upstream Thor Caveat
+
+Current upstream NemoClaw still tries to rewrite `~/.openclaw/openclaw.json`
+from inside the sandbox during onboarding step 6.
+
+That conflicts with the current sandbox image design, which intentionally makes
+`/sandbox/.openclaw/openclaw.json` root-owned and read-only.
+
+Observed behavior on Thor:
+
+- upstream onboarding creates the sandbox successfully
+- upstream onboarding creates the provider successfully
+- step 6 fails when it tries to rewrite the immutable file
+
+This repo now works around that by:
+
+- allowing upstream onboarding to get as far as sandbox creation
+- recovering the sandbox name from `~/.nemoclaw/sandboxes.json`
+- syncing the internal NemoClaw/OpenClaw runtime config from the host side in
+  `configure-local-provider.sh`
+- updating the host-side registry so `nemoclaw <name> status` shows the real
+  model id
+
+Operational rule:
+
+- use the Thor wrapper scripts
+- do not debug this by repeatedly rerunning raw `nemoclaw onboard`
 
 ## Policy Model
 
@@ -435,6 +521,16 @@ curl -s -H "Authorization: Bearer dummy" http://127.0.0.1:8000/v1/models | pytho
 The served model id must match the runtime config expected by
 `configure-local-provider.sh` and `status.sh`.
 
+If vLLM is stopped and a different model needs to be loaded, Thor may retain
+page cache aggressively. The working recovery command on this host was:
+
+```bash
+sudo sync
+sudo sysctl -w vm.drop_caches=3
+```
+
+Run that before starting the next vLLM server if memory does not come back.
+
 ### Phase 5: OpenShell and NemoClaw runtime
 
 Check:
@@ -452,6 +548,123 @@ Watch for:
 - local provider not created
 - inference route still pointing at a non-local provider
 - host vLLM reachable but serving the wrong model id
+
+## Fresh Host Install Guidance
+
+The validated clean sequence on a fresh Thor is staged:
+
+1. apply host fixes
+2. start vLLM
+3. run the NemoClaw-Thor installer
+
+Recommended commands:
+
+```bash
+export THOR_TARGET_MAX_MODEL_LEN=65536
+export THOR_TARGET_KV_CACHE_DTYPE=fp8
+export THOR_TARGET_MAX_NUM_SEQS=16
+
+./apply-host-fixes.sh
+./start-model.sh qwen3.5-35b-a3b-fp8
+./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+```
+
+Why not the single-command `--apply-host-fixes` path for this case:
+
+- `apply-host-fixes.sh` restarts Docker
+- restarting Docker stops a vLLM container started earlier
+- upstream onboarding only offers local vLLM when the server is already up
+
+The one-command path still exists, but it is not the preferred local-vLLM path
+for a clean host.
+
+## How To Use The Current Install
+
+If the current services are still up, use:
+
+```bash
+source "$HOME/.nvm/nvm.sh"
+nvm use 22
+export PATH="$HOME/.local/bin:$PATH"
+nemoclaw thor-assistant connect
+```
+
+or:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+openshell sandbox connect thor-assistant
+```
+
+If services were stopped or the host rebooted:
+
+```bash
+source "$HOME/.nvm/nvm.sh"
+nvm use 22
+export PATH="$HOME/.local/bin:$PATH"
+./start-model.sh qwen3.5-35b-a3b-fp8
+openshell gateway start --name nemoclaw
+./status.sh qwen3.5-35b-a3b-fp8
+nemoclaw thor-assistant connect
+```
+
+If the sandbox is missing after restart, rerun:
+
+```bash
+./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+```
+
+If the install is present and only the provider binding needs refresh:
+
+```bash
+./configure-local-provider.sh qwen3.5-35b-a3b-fp8
+```
+
+## Suggested Tests For Real Use
+
+Use the following progression.
+
+### 1. Stack health
+
+```bash
+source "$HOME/.nvm/nvm.sh"
+nvm use 22
+./status.sh qwen3.5-35b-a3b-fp8
+nemoclaw thor-assistant status
+```
+
+### 2. Minimal inference
+
+Inside the sandbox:
+
+```bash
+openclaw agent --agent main --local \
+  -m "Reply with one word: working" --session-id test
+```
+
+### 3. Tool-use smoke test
+
+Inside the sandbox:
+
+```bash
+openclaw agent --agent main --local \
+  -m "Run uname -a and python3 --version, write both to /sandbox/smoke.txt, then reply done." \
+  --session-id smoke-tools
+cat /sandbox/smoke.txt
+```
+
+### 4. Real repo task
+
+Inside the sandbox:
+
+- clone or copy a disposable repo into `/sandbox`
+- ask the agent to inspect it
+- ask for one tiny code change
+- run the repo test command
+- inspect the diff and logs
+
+This is a better first real test than broad internet tasks because the default
+policy is intentionally local-only.
 
 ## What To Verify About Policy
 
