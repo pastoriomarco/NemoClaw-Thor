@@ -206,6 +206,51 @@ Typical workflow:
 4. Ask the agent to inspect files, edit code, and run commands.
 5. Review results, logs, tests, and diffs from the sandbox shell.
 
+### Work on a local repo safely
+
+`openshell sandbox upload` copies files into the sandbox. It does not create a
+live link back to your host repo.
+
+Example:
+
+```bash
+openshell sandbox upload thor-assistant /path/to/repo /sandbox/myrepo
+nemoclaw thor-assistant connect
+```
+
+Then inside the sandbox:
+
+```bash
+cd /sandbox/myrepo
+openclaw tui
+```
+
+Important:
+
+- Edits made by the agent stay in `/sandbox/myrepo`.
+- Your original host repo is not modified automatically.
+- Copy results back out explicitly when you are ready.
+
+To copy the whole repo back out:
+
+```bash
+openshell sandbox download thor-assistant /sandbox/myrepo /path/to/output-copy
+```
+
+To copy out only a patch:
+
+```bash
+# inside the sandbox
+cd /sandbox/myrepo
+git diff > /sandbox/myrepo.patch
+```
+
+Then on the host:
+
+```bash
+openshell sandbox download thor-assistant /sandbox/myrepo.patch .
+```
+
 Useful host-side commands:
 
 ```bash
