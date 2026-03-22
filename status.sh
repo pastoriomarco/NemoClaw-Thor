@@ -44,17 +44,7 @@ header "OpenShell Gateway"
 echo ""
 
 check_openshell_installed && record 0 || record 1
-
-if command -v openshell &>/dev/null; then
-    if openshell gateway info &>/dev/null; then
-        pass "OpenShell gateway is running"
-        record 0
-    else
-        fail "OpenShell gateway is not running"
-        fix "Run: openshell gateway start"
-        record 1
-    fi
-fi
+check_openshell_gateway && record 0 || record 1
 
 header "vLLM Inference Server"
 echo ""
@@ -131,6 +121,31 @@ else
         fail "Sandbox '${sandbox_name}' is in phase: ${sandbox_phase}"
         fix "Check logs: nemoclaw ${sandbox_name} logs --follow"
         fix "Check status: openshell sandbox list"
+        record 1
+    fi
+fi
+
+header "Native Connect Path"
+echo ""
+
+if [[ -z "${sandbox_name}" ]]; then
+    warn "Skipping native connect check because no sandbox is resolved"
+    record 2
+else
+    gateway_secret=$(gateway_ssh_handshake_secret 2>/dev/null || echo "")
+    sandbox_secret=$(sandbox_ssh_handshake_secret "${sandbox_name}" 2>/dev/null || echo "")
+
+    if [[ -z "${gateway_secret}" || -z "${sandbox_secret}" ]]; then
+        warn "Could not inspect sandbox SSH handshake state"
+        fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+        record 2
+    elif [[ "${gateway_secret}" == "${sandbox_secret}" ]]; then
+        pass "Sandbox SSH handshake secret matches the gateway"
+        record 0
+    else
+        fail "Sandbox SSH handshake secret does not match the gateway"
+        info "Native 'nemoclaw thor-assistant connect' will fail until the sandbox is resynced."
+        fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 1
     fi
 fi

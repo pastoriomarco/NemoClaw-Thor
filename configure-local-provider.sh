@@ -33,9 +33,7 @@ if ! command -v openshell &>/dev/null; then
     exit 1
 fi
 
-if ! openshell gateway info &>/dev/null; then
-    fail "OpenShell gateway is not running"
-    fix "Run: openshell gateway start"
+if ! ensure_openshell_gateway_running; then
     exit 1
 fi
 
@@ -69,6 +67,10 @@ openshell inference set \
 pass "Inference route set to ${THOR_LOCAL_PROVIDER_NAME} / ${THOR_MODEL_ID}"
 
 if [[ -n "${sandbox_name}" ]]; then
+    info "Reconciling sandbox SSH connect state for ${sandbox_name}..."
+    reconcile_sandbox_ssh_handshake_secret "${sandbox_name}"
+    pass "Sandbox SSH connect state is healthy"
+
     info "Syncing sandbox runtime config for ${sandbox_name}..."
     sync_sandbox_runtime_config "${sandbox_name}"
     pass "Sandbox runtime config synced to ${THOR_MODEL_ID}"

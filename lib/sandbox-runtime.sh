@@ -20,26 +20,15 @@ print(json.dumps([
 PYEOF
 }
 
-active_openshell_gateway_name() {
-    command -v openshell &>/dev/null || return 1
-
-    openshell gateway info 2>/dev/null \
-        | sed 's/\x1b\[[0-9;]*m//g' \
-        | awk -F': ' '/Gateway:/ {print $2; exit}'
+thor_openshell_gateway_name() {
+    printf '%s\n' "${THOR_OPENSHELL_GATEWAY_NAME:-nemoclaw}"
 }
 
-active_openshell_cluster_container_name() {
+thor_openshell_cluster_container_name() {
     command -v docker &>/dev/null || return 1
 
-    local gateway_name="${1:-}"
-    if [[ -z "${gateway_name}" ]]; then
-        gateway_name=$(active_openshell_gateway_name 2>/dev/null || true)
-    fi
-
-    [[ -n "${gateway_name}" ]] || return 1
-
-    local container_name="openshell-cluster-${gateway_name}"
-    if docker ps --format '{{.Names}}' | grep -Fx "${container_name}" >/dev/null 2>&1; then
+    local container_name="openshell-cluster-$(thor_openshell_gateway_name)"
+    if docker ps -a --format '{{.Names}}' | grep -Fx "${container_name}" >/dev/null 2>&1; then
         printf '%s\n' "${container_name}"
         return 0
     fi
@@ -47,12 +36,142 @@ active_openshell_cluster_container_name() {
     return 1
 }
 
+gateway_ssh_handshake_secret() {
+    local cluster_container=""
+    cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
+    [[ -n "${cluster_container}" ]] || return 1
+
+    docker exec \
+        "${cluster_container}" \
+        sh -lc "kubectl -n openshell get statefulset openshell -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"OPENSHELL_SSH_HANDSHAKE_SECRET\")].value}'"
+}
+
+sandbox_ssh_handshake_secret() {
+    local sandbox_name="${1:-}"
+    local cluster_container=""
+
+    [[ -n "${sandbox_name}" ]] || return 1
+    cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
+    [[ -n "${cluster_container}" ]] || return 1
+
+    docker exec \
+        "${cluster_container}" \
+        sh -lc "kubectl -n openshell get sandbox \"${sandbox_name}\" -o jsonpath='{.spec.podTemplate.spec.containers[0].env[?(@.name==\"OPENSHELL_SSH_HANDSHAKE_SECRET\")].value}'"
+}
+
+wait_for_sandbox_pod_ready() {
+    local sandbox_name="${1:-}"
+    local cluster_container=""
+    local attempts="${2:-60}"
+
+    [[ -n "${sandbox_name}" ]] || return 1
+    cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
+    [[ -n "${cluster_container}" ]] || return 1
+
+    local i phase ready
+    for i in $(seq 1 "${attempts}"); do
+        phase=$(docker exec "${cluster_container}" sh -lc "kubectl -n openshell get pod \"${sandbox_name}\" -o jsonpath='{.status.phase}'" 2>/dev/null || true)
+        ready=$(docker exec "${cluster_container}" sh -lc "kubectl -n openshell get pod \"${sandbox_name}\" -o jsonpath='{.status.containerStatuses[0].ready}'" 2>/dev/null || true)
+        if [[ "${phase}" == "Running" && "${ready}" == "true" ]]; then
+            return 0
+        fi
+        sleep 2
+    done
+
+    return 1
+}
+
+reconcile_sandbox_ssh_handshake_secret() {
+    local sandbox_name="${1:-}"
+    local cluster_container=""
+    local gateway_secret=""
+    local sandbox_secret=""
+    local patch_json=""
+
+    [[ -n "${sandbox_name}" ]] || return 1
+    cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
+    [[ -n "${cluster_container}" ]] || return 1
+
+    gateway_secret=$(gateway_ssh_handshake_secret 2>/dev/null || true)
+    sandbox_secret=$(sandbox_ssh_handshake_secret "${sandbox_name}" 2>/dev/null || true)
+
+    if [[ -z "${gateway_secret}" || -z "${sandbox_secret}" ]]; then
+        fail "Could not inspect OpenShell SSH handshake state for '${sandbox_name}'"
+        fix "Check: ./start-gateway.sh"
+        fix "Check: openshell sandbox get ${sandbox_name}"
+        return 1
+    fi
+
+    if [[ "${gateway_secret}" == "${sandbox_secret}" ]]; then
+        pass "Sandbox SSH handshake secret matches the gateway"
+        return 0
+    fi
+
+    warn "Sandbox SSH handshake secret drifted from the gateway"
+    info "Updating sandbox '${sandbox_name}' to the current gateway handshake secret..."
+
+    patch_json=$(
+        python3 -c '
+import json
+import sys
+
+gateway_secret = sys.argv[1]
+data = json.load(sys.stdin)
+env = (
+    data.get("spec", {})
+    .get("podTemplate", {})
+    .get("spec", {})
+    .get("containers", [{}])[0]
+    .get("env", [])
+)
+
+for idx, item in enumerate(env):
+    if item.get("name") == "OPENSHELL_SSH_HANDSHAKE_SECRET":
+        if item.get("value") == gateway_secret:
+            print("")
+        else:
+            print(json.dumps([{
+                "op": "replace",
+                "path": f"/spec/podTemplate/spec/containers/0/env/{idx}/value",
+                "value": gateway_secret,
+            }]))
+        break
+else:
+    print(json.dumps([{
+        "op": "add",
+        "path": "/spec/podTemplate/spec/containers/0/env/-",
+        "value": {
+            "name": "OPENSHELL_SSH_HANDSHAKE_SECRET",
+            "value": gateway_secret,
+        },
+    }]))
+' "${gateway_secret}" \
+        < <(docker exec "${cluster_container}" sh -lc "kubectl -n openshell get sandbox \"${sandbox_name}\" -o json")
+    )
+
+    if [[ -n "${patch_json}" ]]; then
+        docker exec "${cluster_container}" \
+            sh -lc "kubectl -n openshell patch sandbox \"${sandbox_name}\" --type='json' -p='${patch_json}'" >/dev/null
+        docker exec "${cluster_container}" \
+            sh -lc "kubectl -n openshell delete pod \"${sandbox_name}\" --wait=false" >/dev/null
+    fi
+
+    if ! wait_for_sandbox_pod_ready "${sandbox_name}" 60; then
+        fail "Sandbox '${sandbox_name}' did not return to Ready after SSH handshake reconciliation"
+        fix "Check: openshell sandbox get ${sandbox_name}"
+        fix "Check: docker logs $(thor_openshell_cluster_container_name) | tail -n 80"
+        return 1
+    fi
+
+    pass "Sandbox SSH handshake secret matches the gateway"
+}
+
 sandbox_runtime_config_summary_json() {
     local sandbox_name="${1:-}"
     local cluster_container=""
 
     [[ -n "${sandbox_name}" ]] || return 1
-    cluster_container=$(active_openshell_cluster_container_name 2>/dev/null || true)
+    cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
     [[ -n "${cluster_container}" ]] || return 1
 
     docker exec \
@@ -196,7 +315,7 @@ sync_sandbox_runtime_config() {
         return 1
     fi
 
-    cluster_container=$(active_openshell_cluster_container_name 2>/dev/null || true)
+    cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
     if [[ -z "${cluster_container}" ]]; then
         fail "Could not determine the active OpenShell cluster container"
         fix "Check: openshell gateway info"

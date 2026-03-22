@@ -23,7 +23,7 @@ if [[ -f "${PID_FILE}" ]]; then
 fi
 
 if sudo -n true >/dev/null 2>&1; then
-    cluster_container="$(active_openshell_cluster_container_name 2>/dev/null || true)"
+    cluster_container="$(thor_openshell_cluster_container_name 2>/dev/null || true)"
     sandbox_name="$(resolve_thor_sandbox_name 2>/dev/null || true)"
     if [[ -n "${cluster_container}" && -n "${sandbox_name}" ]]; then
         sudo docker exec "${cluster_container}" sh -lc \

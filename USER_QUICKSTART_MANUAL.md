@@ -1,23 +1,21 @@
 # User Quickstart Manual
 
-This manual is for daily use of `NemoClaw-Thor` on a Thor that has already been
-set up with this repo.
+This manual is the operator path for `NemoClaw-Thor` on a Thor that already has
+OpenShell installed and the Thor host fixes applied.
 
-Validated operator path:
+Validated baseline:
 
+- gateway: `nemoclaw`
 - sandbox: `thor-assistant`
 - provider: `vllm-local`
-- policy baseline: `strict-local`
-- validated model profiles:
-  - `qwen3.5-27b-fp8`
-  - `qwen3.5-35b-a3b-fp8`
-  - `qwen3.5-122b-a10b-nvfp4-resharded`
+- policy: `strict-local`
 
 Important rule:
 
-- Starting a model with `./start-model.sh <profile>` does not by itself switch
-  NemoClaw to that model.
-- After any model change, run `./configure-local-provider.sh <profile>`.
+- `./start-model.sh <profile>` only starts vLLM.
+- `./configure-local-provider.sh <profile>` binds NemoClaw/OpenShell to the
+  running model, ensures the gateway is up, and repairs native
+  `nemoclaw thor-assistant connect` if the OpenShell SSH handshake state drifted.
 
 ## 1. Shell Prep
 
@@ -30,64 +28,79 @@ nvm use 22
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Notes:
+## 2. Clean Install From Scratch
 
-- `nemoclaw` needs Node 22.
-- `openshell` lives in `~/.local/bin`.
+Use this on a fresh Thor install or after a full uninstall.
 
-## 2. Common Use Cases
-
-### Reconnect to a running stack
-
-If the model server, gateway, and sandbox are already up:
+1. Apply the Thor host fixes once:
 
 ```bash
-./status.sh <profile>
+./apply-host-fixes.sh
+```
+
+2. Start the model server and leave it running in that terminal:
+
+```bash
+./start-model.sh qwen3.5-35b-a3b-fp8
+```
+
+3. In a second terminal, run the installer:
+
+```bash
+./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+```
+
+4. Verify and connect:
+
+```bash
+./status.sh qwen3.5-35b-a3b-fp8
 nemoclaw thor-assistant connect
 ```
 
-If you want a direct shell instead:
-
-```bash
-openshell sandbox connect thor-assistant
-```
-
-If you are not sure what model the host is serving:
-
-```bash
-curl -sf http://127.0.0.1:8000/v1/models
-```
-
-### Use the terminal UI
-
-After `nemoclaw thor-assistant connect`, the simplest interactive interface is:
-
-```bash
-openclaw tui
-```
-
 Notes:
 
-- This is the preferred manual chat interface.
-- It runs inside the sandbox shell.
-- If you ever see a stale-session issue after a model switch, run
-  `./reset-sandbox-session-state.sh <profile>` from the host first.
+- `install.sh` now ensures the `nemoclaw` OpenShell gateway is running before it
+  continues.
+- If `~/NemoClaw` already exists, this is no longer a clean install. Either use
+  `./uninstall.sh` first or switch to the reconfigure/start paths below.
 
-### Start the stack after reboot or after services were stopped
+## 3. Start An Existing Install
 
-In terminal 1, start the model server:
+Use this when the repo is already installed and you only need to bring the stack
+ back up.
 
-```bash
-./start-model.sh <profile>
-```
-
-In terminal 2, start the OpenShell gateway:
+1. Start the model server and leave it running:
 
 ```bash
-openshell gateway start --name nemoclaw
+./start-model.sh qwen3.5-35b-a3b-fp8
 ```
 
-Then bind NemoClaw to the running model, verify, and connect:
+2. Rebind the local provider and repair the sandbox runtime state if needed:
+
+```bash
+./configure-local-provider.sh qwen3.5-35b-a3b-fp8
+```
+
+3. Verify and connect:
+
+```bash
+./status.sh qwen3.5-35b-a3b-fp8
+nemoclaw thor-assistant connect
+```
+
+This is also the clean reboot path. After a reboot, do the same 3 steps above.
+
+If `./status.sh` still says the sandbox is missing, recreate it with:
+
+```bash
+./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+```
+
+## 4. Reconfigure An Existing Install
+
+### Switch NemoClaw to a different running model
+
+Start the new model first, then rebind the provider:
 
 ```bash
 ./configure-local-provider.sh <profile>
@@ -95,41 +108,85 @@ Then bind NemoClaw to the running model, verify, and connect:
 nemoclaw thor-assistant connect
 ```
 
-If `./status.sh` says the sandbox is missing:
+Examples:
 
 ```bash
-./install.sh <profile> --policy-profile strict-local
+./configure-local-provider.sh qwen3.5-27b-fp8
+./configure-local-provider.sh qwen3.5-35b-a3b-fp8
+./configure-local-provider.sh qwen3.5-122b-a10b-nvfp4-resharded
 ```
 
-### Switch NemoClaw to a different already-running model
+### Reset stale local session history
 
-This is the common case when vLLM is serving one model, but the sandbox runtime
-was last configured for another.
-
-Example: `35B` is running, but NemoClaw was last bound to `122B`.
+If a prior local run left the embedded session store in a bad state:
 
 ```bash
-./configure-local-provider.sh qwen3.5-35b-a3b-fp8
-./status.sh qwen3.5-35b-a3b-fp8
+./reset-sandbox-session-state.sh <profile>
+```
+
+### Launcher knobs
+
+The most relevant per-run overrides for `./start-model.sh` are:
+
+- `THOR_MAX_MODEL_LEN`
+- `THOR_KV_CACHE_DTYPE`
+- `THOR_MAX_NUM_SEQS`
+- `THOR_OPENCLAW_MAIN_MAX_CONCURRENT`
+- `THOR_GPU_MEMORY_UTILIZATION`
+- `THOR_MAX_NUM_BATCHED_TOKENS`
+
+Example for `35B-A3B-FP8`:
+
+```bash
+THOR_MAX_MODEL_LEN=65536 \
+THOR_KV_CACHE_DTYPE=fp8 \
+THOR_MAX_NUM_SEQS=20 \
+THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1 \
+THOR_GPU_MEMORY_UTILIZATION=0.80 \
+THOR_MAX_NUM_BATCHED_TOKENS=8192 \
+./start-model.sh qwen3.5-35b-a3b-fp8
+```
+
+Example for `122B-A10B-NVFP4-resharded`:
+
+```bash
+THOR_MAX_MODEL_LEN=65536 \
+THOR_KV_CACHE_DTYPE=fp8 \
+THOR_MAX_NUM_SEQS=6 \
+THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1 \
+THOR_GPU_MEMORY_UTILIZATION=0.80 \
+THOR_MAX_NUM_BATCHED_TOKENS=8192 \
+./start-model.sh qwen3.5-122b-a10b-nvfp4-resharded
+```
+
+Persistent defaults are saved in:
+
+```text
+~/.config/nemoclaw-thor/config.env
+```
+
+## 5. Use The Installed Sandbox
+
+Connect:
+
+```bash
 nemoclaw thor-assistant connect
 ```
 
-If the previous model left stale embedded session history behind, reset it first:
+Inside the sandbox, the main interactive UI is:
 
 ```bash
-./reset-sandbox-session-state.sh qwen3.5-35b-a3b-fp8
+openclaw tui
 ```
 
-### Run quick smoke tests
-
-From inside the sandbox, plain inference:
+Quick smoke test inside the sandbox:
 
 ```bash
 openclaw agent --agent main --local --thinking off \
   -m "Reply with one word: working" --session-id test
 ```
 
-From inside the sandbox, tool-use smoke:
+Tool-use smoke test inside the sandbox:
 
 ```bash
 openclaw agent --agent main --local --thinking off \
@@ -138,121 +195,35 @@ openclaw agent --agent main --local --thinking off \
 cat /sandbox/smoke.txt
 ```
 
-If the first plain run says `No reply from agent`, retry once. After model
-switches, `./reset-sandbox-session-state.sh <profile>` can also help.
+### Work on a repo copy inside the sandbox
 
-### Use the browser dashboard on the Thor host
-
-`openclaw dashboard` only prints the Control UI URL. It does not start the
-OpenClaw gateway by itself.
-
-To use the dashboard in a browser on the Thor host, you need both:
-
-- an OpenClaw gateway running inside the sandbox
-- a host-side dashboard access helper from this repo
-
-Terminal 1, on the host, connect to the sandbox:
-
-```bash
-nemoclaw thor-assistant connect
-```
-
-Then inside the sandbox:
-
-- if no OpenClaw gateway is running yet, start it and leave it running:
-
-```bash
-HOME=/sandbox openclaw gateway run
-```
-
-- if you see `gateway already running`, do not start a second one; reuse the
-  existing gateway
-
-Terminal 2, on the host, start the dashboard access helper:
-
-```bash
-./start-dashboard-access.sh
-```
-
-On first connect, open the tokenized URL printed by
-`./start-dashboard-access.sh` in a fresh Firefox tab. The plain
-`http://127.0.0.1:18789/` URL can show `device identity required` until the
-token is supplied.
-
-If you need to print the token URL again, run this inside the sandbox:
-
-```bash
-HOME=/sandbox openclaw dashboard --no-open
-```
-
-After the first successful tokenized connect, the same browser profile will
-usually remember the gateway settings.
-
-Current limitation:
-
-- The dashboard is usable for connection and visibility, but browser-originated
-  prompts are not yet reliable on this Thor setup.
-- The same prompt can work in `openclaw tui` while the dashboard shows
-  `LLM request timed out.`
-- This currently looks like a Control UI / gateway session-state bug, not a
-  vLLM throughput problem.
-- For now, use the dashboard for observation and use `openclaw tui` for real
-  prompting.
-- Avoid driving the same session from both TUI and the dashboard at the same
-  time.
-- If the dashboard path gets wedged, close the browser tab and run
-  `./reset-sandbox-session-state.sh <profile>` from the host.
-
-## 3. How To Use It
-
-What you are connecting to:
-
-- `nemoclaw thor-assistant connect` opens a shell inside the sandbox.
-- `openclaw tui` is the main terminal UI for normal prompting.
-- The main writable workspace is `/sandbox`.
-- Local inference is routed through OpenShell to the host vLLM server.
-- `strict-local` blocks broad outbound internet by default.
-
-Typical workflow:
-
-1. Connect to the sandbox.
-2. Change into `/sandbox`.
-3. Copy or clone a disposable repo there.
-4. Ask the agent to inspect files, edit code, and run commands.
-5. Review results, logs, tests, and diffs from the sandbox shell.
-
-### Work on a local repo safely
-
-`openshell sandbox upload` copies files into the sandbox. It does not create a
-live link back to your host repo.
-
-Example:
+Upload a repo into `/sandbox`:
 
 ```bash
 openshell sandbox upload thor-assistant /path/to/repo /sandbox/myrepo
-nemoclaw thor-assistant connect
 ```
 
-Then inside the sandbox:
+Then connect and work in the copy:
 
 ```bash
+nemoclaw thor-assistant connect
 cd /sandbox/myrepo
 openclaw tui
 ```
 
 Important:
 
-- Edits made by the agent stay in `/sandbox/myrepo`.
-- Your original host repo is not modified automatically.
-- Copy results back out explicitly when you are ready.
+- `openshell sandbox upload` copies files into the sandbox.
+- Agent edits stay in `/sandbox/myrepo`.
+- Your host repo is not changed automatically.
 
-To copy the whole repo back out:
+Copy the repo back out:
 
 ```bash
 openshell sandbox download thor-assistant /sandbox/myrepo /path/to/output-copy
 ```
 
-To copy out only a patch:
+Or copy out only a patch:
 
 ```bash
 # inside the sandbox
@@ -266,76 +237,37 @@ Then on the host:
 openshell sandbox download thor-assistant /sandbox/myrepo.patch .
 ```
 
-Useful host-side commands:
+### Dashboard
+
+The dashboard is optional.
+
+- Use `openclaw tui` for real prompting.
+- The dashboard is still useful for visibility, but browser-originated prompts
+  are not fully reliable on this Thor setup.
+
+If you still want the dashboard:
+
+1. Inside the sandbox, keep the OpenClaw gateway running:
 
 ```bash
-nemoclaw thor-assistant status
-nemoclaw thor-assistant logs --follow
-openshell sandbox list
-openshell inference get
+HOME=/sandbox openclaw gateway run
 ```
 
-For real work, operate on a repo copy inside `/sandbox`, not on the host working
-tree directly.
-
-## 4. Optional Launch Knobs
-
-These are one-run overrides for `./start-model.sh`:
-
-- `THOR_MAX_MODEL_LEN`: context window
-- `THOR_KV_CACHE_DTYPE`: usually `fp8`
-- `THOR_MAX_NUM_SEQS`: concurrent sequences
-- `THOR_OPENCLAW_MAIN_MAX_CONCURRENT`: reserve this many OpenClaw main-session
-  slots; subagent concurrency is derived from the remaining sequence budget
-- `THOR_GPU_MEMORY_UTILIZATION`: vLLM GPU memory target
-- `THOR_MAX_NUM_BATCHED_TOKENS`: prefill batching limit
-
-Example for `35B`:
+2. On the host, start the access helper:
 
 ```bash
-THOR_MAX_MODEL_LEN=65536 \
-THOR_KV_CACHE_DTYPE=fp8 \
-THOR_MAX_NUM_SEQS=20 \
-THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1 \
-THOR_GPU_MEMORY_UTILIZATION=0.80 \
-THOR_MAX_NUM_BATCHED_TOKENS=8192 \
-./start-model.sh qwen3.5-35b-a3b-fp8
+./start-dashboard-access.sh
 ```
 
-Example for `122B`:
+3. Open the tokenized URL printed by the helper in Firefox.
+
+To print the token URL again inside the sandbox:
 
 ```bash
-THOR_MAX_MODEL_LEN=65536 \
-THOR_KV_CACHE_DTYPE=fp8 \
-THOR_MAX_NUM_SEQS=6 \
-THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1 \
-THOR_GPU_MEMORY_UTILIZATION=0.80 \
-THOR_MAX_NUM_BATCHED_TOKENS=8192 \
-./start-model.sh qwen3.5-122b-a10b-nvfp4-resharded
+HOME=/sandbox openclaw dashboard --no-open
 ```
 
-How the derived OpenClaw limits work:
-
-- main agent concurrency = `THOR_OPENCLAW_MAIN_MAX_CONCURRENT` if it fits
-- subagent concurrency = `THOR_MAX_NUM_SEQS - effective_main_concurrency`
-- Thor keeps at least one subagent slot available, so if you request too large a
-  main concurrency, the effective main value is clamped to `THOR_MAX_NUM_SEQS - 1`
-- `./status.sh <profile>` shows the effective OpenClaw main and subagent values
-
-Persistent defaults live in:
-
-```text
-~/.config/nemoclaw-thor/config.env
-```
-
-The persistent keys are:
-
-- `THOR_TARGET_MAX_MODEL_LEN`
-- `THOR_TARGET_KV_CACHE_DTYPE`
-- `THOR_TARGET_MAX_NUM_SEQS`
-- `THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT`
-
-## 5. Stop Or Shutdown
+## 6. Stop Without Uninstalling
 
 ### Leave only the current shell
 
@@ -369,59 +301,58 @@ sudo sysctl -w vm.drop_caches=3
 openshell gateway stop
 ```
 
-### Stop the browser dashboard path
+### Stop the dashboard path
 
-If you started the OpenClaw gateway inside the sandbox for the browser UI,
-stop the host-side dashboard helper from a host shell:
+If you started the browser dashboard helper:
 
 ```bash
 ./stop-dashboard-access.sh
 ```
 
-Then stop the sandbox-side OpenClaw gateway from the sandbox shell with
-`Ctrl-C`.
+Then stop the sandbox-side `openclaw gateway run` process with `Ctrl-C`.
 
-### Delete the sandbox
+## 7. Uninstall Cleanly
 
-List first:
-
-```bash
-openshell sandbox list
-nemoclaw list
-```
-
-Delete by name:
+1. Stop the model server and drop caches:
 
 ```bash
-openshell sandbox delete thor-assistant
+docker ps --format '{{.ID}}\t{{.Command}}' | grep 'vllm serve'
+docker stop <container-id>
+sudo sync
+sudo sysctl -w vm.drop_caches=3
 ```
 
-Alternative:
+2. Stop the OpenShell gateway:
 
 ```bash
-nemoclaw thor-assistant destroy
+openshell gateway stop
 ```
 
-### Full cleanup
-
-Remove the install artifacts tracked by this repo:
+3. Remove the NemoClaw-Thor tracked install:
 
 ```bash
 ./uninstall.sh
 ```
 
-If you also want to revert the saved Thor host changes:
+4. If you also want to revert the saved Thor host changes:
 
 ```bash
 ./restore-host-state.sh
 ```
 
-## 6. Important Notes
+Notes:
 
-- `nemoclaw stop` is usually not the command you want here. It does not manage
-  the local vLLM server in this Thor setup.
-- The main validated path is one tracked sandbox, `thor-assistant`.
-- After switching model profiles, always run
-  `./configure-local-provider.sh <profile>`.
-- A model can be running correctly while the sandbox is still bound to a
-  different profile. `./status.sh <profile>` is the quickest sanity check.
+- `./uninstall.sh` removes the tracked sandbox, tracked providers, the
+  `nemoclaw` CLI, `~/NemoClaw`, and the Thor runtime config.
+- It does not remove OpenShell itself, Docker, Node.js, or local model weights.
+- It asks whether to remove `~/.nemoclaw`.
+
+## 8. Practical Rules
+
+- Use `nemoclaw thor-assistant connect` as the normal shell entrypoint.
+- Use `openclaw tui` as the normal prompt UI.
+- After any model change, run `./configure-local-provider.sh <profile>`.
+- After a reboot, use the same path as any normal restart:
+  `./start-model.sh`, then `./configure-local-provider.sh`, then `./status.sh`.
+- If you stop vLLM, always run `sudo sysctl -w vm.drop_caches=3` before loading
+  another model.

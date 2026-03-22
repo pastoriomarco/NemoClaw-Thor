@@ -364,6 +364,9 @@ Then run:
 
 This is the path that matches the validated Thor run.
 
+`install.sh` now ensures the `nemoclaw` OpenShell gateway is running before it
+hands off to upstream NemoClaw.
+
 The one-command shortcut still exists:
 
 ```bash
@@ -477,17 +480,22 @@ export PATH="$HOME/.local/bin:$PATH"
 openshell sandbox connect thor-assistant
 ```
 
-If you want to bring the stack back after a reboot or after stopping services:
+If you want to bring the stack back after a reboot or after stopping services,
+the clean path is:
 
 ```bash
 source "$HOME/.nvm/nvm.sh"
 nvm use 22
 export PATH="$HOME/.local/bin:$PATH"
 ./start-model.sh qwen3.5-35b-a3b-fp8
-openshell gateway start --name nemoclaw
+./configure-local-provider.sh qwen3.5-35b-a3b-fp8
 ./status.sh qwen3.5-35b-a3b-fp8
 nemoclaw thor-assistant connect
 ```
+
+`configure-local-provider.sh` now revives the `nemoclaw` gateway if needed and
+repairs native `nemoclaw thor-assistant connect` if the sandbox SSH handshake
+state drifted from the gateway.
 
 If `./status.sh` reports that the sandbox is missing, rerun:
 

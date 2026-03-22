@@ -206,6 +206,7 @@ resolve_model_profile() {
     THOR_LOCAL_VLLM_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL:-http://host.openshell.internal:8000/v1}"
     THOR_HOST_VLLM_MODELS_URL="${THOR_HOST_VLLM_MODELS_URL:-http://127.0.0.1:8000/v1/models}"
     THOR_LOCAL_VLLM_API_KEY="${THOR_LOCAL_VLLM_API_KEY:-dummy}"
+    THOR_OPENSHELL_GATEWAY_NAME="${THOR_OPENSHELL_GATEWAY_NAME:-nemoclaw}"
     THOR_MANAGED_SANDBOX_NAME="${THOR_MANAGED_SANDBOX_NAME:-}"
     THOR_MANAGED_PROVIDER_NAMES="${THOR_MANAGED_PROVIDER_NAMES:-}"
     THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT:-1}"
@@ -263,6 +264,7 @@ load_thor_runtime_config() {
     local env_base_url="${THOR_LOCAL_VLLM_BASE_URL:-}"
     local env_host_models_url="${THOR_HOST_VLLM_MODELS_URL:-}"
     local env_api_key="${THOR_LOCAL_VLLM_API_KEY:-}"
+    local env_gateway_name="${THOR_OPENSHELL_GATEWAY_NAME:-}"
     local env_policy_profile="${THOR_POLICY_PROFILE:-}"
     local env_managed_sandbox_name="${THOR_MANAGED_SANDBOX_NAME:-}"
     local env_managed_provider_names="${THOR_MANAGED_PROVIDER_NAMES:-}"
@@ -300,11 +302,12 @@ load_thor_runtime_config() {
         unset THOR_MODEL_ID
     fi
 
-    [[ -n "${env_policy_profile}" ]] && THOR_POLICY_PROFILE="${env_policy_profile}"
     [[ -n "${env_provider_name}" ]] && THOR_LOCAL_PROVIDER_NAME="${env_provider_name}"
     [[ -n "${env_base_url}" ]] && THOR_LOCAL_VLLM_BASE_URL="${env_base_url}"
     [[ -n "${env_host_models_url}" ]] && THOR_HOST_VLLM_MODELS_URL="${env_host_models_url}"
     [[ -n "${env_api_key}" ]] && THOR_LOCAL_VLLM_API_KEY="${env_api_key}"
+    [[ -n "${env_gateway_name}" ]] && THOR_OPENSHELL_GATEWAY_NAME="${env_gateway_name}"
+    [[ -n "${env_policy_profile}" ]] && THOR_POLICY_PROFILE="${env_policy_profile}"
     [[ -n "${env_managed_sandbox_name}" ]] && THOR_MANAGED_SANDBOX_NAME="${env_managed_sandbox_name}"
     [[ -n "${env_managed_provider_names}" ]] && THOR_MANAGED_PROVIDER_NAMES="${env_managed_provider_names}"
 
@@ -338,6 +341,7 @@ save_thor_runtime_config() {
         printf "THOR_LOCAL_VLLM_BASE_URL=%q\n" "${THOR_LOCAL_VLLM_BASE_URL}"
         printf "THOR_HOST_VLLM_MODELS_URL=%q\n" "${THOR_HOST_VLLM_MODELS_URL}"
         printf "THOR_LOCAL_VLLM_API_KEY=%q\n" "${THOR_LOCAL_VLLM_API_KEY}"
+        printf "THOR_OPENSHELL_GATEWAY_NAME=%q\n" "${THOR_OPENSHELL_GATEWAY_NAME}"
         printf "THOR_MANAGED_SANDBOX_NAME=%q\n" "${THOR_MANAGED_SANDBOX_NAME:-}"
         printf "THOR_MANAGED_PROVIDER_NAMES=%q\n" "${THOR_MANAGED_PROVIDER_NAMES:-}"
         printf "THOR_TARGET_MAX_MODEL_LEN=%q\n" "${THOR_TARGET_MAX_MODEL_LEN}"
@@ -352,6 +356,7 @@ print_thor_runtime_config() {
     echo "  Served model id:   ${THOR_MODEL_ID}"
     echo "  Policy profile:    ${THOR_POLICY_PROFILE}"
     echo "  Provider name:     ${THOR_LOCAL_PROVIDER_NAME}"
+    echo "  Gateway name:      ${THOR_OPENSHELL_GATEWAY_NAME}"
     echo "  OpenShell URL:     ${THOR_LOCAL_VLLM_BASE_URL}"
     echo "  Host models URL:   ${THOR_HOST_VLLM_MODELS_URL}"
     if [[ -n "${THOR_MANAGED_SANDBOX_NAME:-}" ]]; then

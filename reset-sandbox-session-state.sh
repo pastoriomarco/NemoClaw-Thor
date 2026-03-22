@@ -27,7 +27,7 @@ if [[ -z "${sandbox_name}" ]]; then
     exit 1
 fi
 
-cluster_container="$(active_openshell_cluster_container_name 2>/dev/null || true)"
+cluster_container="$(thor_openshell_cluster_container_name 2>/dev/null || true)"
 if [[ -z "${cluster_container}" ]]; then
     fail "Could not determine the active OpenShell cluster container"
     fix "Check: openshell gateway info"

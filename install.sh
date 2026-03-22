@@ -242,7 +242,14 @@ PYEOF
     pass "cgroupns fix applied and Docker restarted successfully"
 fi
 
-header "Step 3: Checking for existing NemoClaw installation"
+header "Step 3: Ensuring the OpenShell gateway is running"
+echo ""
+
+if ! ensure_openshell_gateway_running; then
+    exit 1
+fi
+
+header "Step 4: Checking for existing NemoClaw installation"
 echo ""
 
 if [[ -d "${NEMOCLAW_DIR}" ]]; then
@@ -256,11 +263,11 @@ fi
 
 pass "${NEMOCLAW_DIR} does not exist — ready to install"
 
-header "Step 4: Preparing Node.js runtime"
+header "Step 5: Preparing Node.js runtime"
 echo ""
 activate_preferred_node_runtime
 
-header "Step 5: Cloning NemoClaw"
+header "Step 6: Cloning NemoClaw"
 echo ""
 info "Cloning ${NEMOCLAW_REPO} to ${NEMOCLAW_DIR}..."
 echo ""
@@ -268,13 +275,13 @@ echo ""
 git clone "${NEMOCLAW_REPO}" "${NEMOCLAW_DIR}"
 pass "NemoClaw cloned to ${NEMOCLAW_DIR}"
 
-header "Step 6: Installing hardened sandbox policy"
+header "Step 7: Installing hardened sandbox policy"
 echo ""
 install_static_policy_profile "${NEMOCLAW_DIR}" "${THOR_POLICY_PROFILE}"
 save_thor_runtime_config
 echo ""
 
-header "Step 7: Running NemoClaw installer"
+header "Step 8: Running NemoClaw installer"
 echo ""
 echo "  The upstream NemoClaw installer and onboarding wizard will now run."
 echo "  Depending on the upstream version and your environment, you may be prompted for:"
@@ -347,7 +354,7 @@ fi
 
 disown -a 2>/dev/null || true
 
-header "Step 8: Verifying nemoclaw installation"
+header "Step 9: Verifying nemoclaw installation"
 echo ""
 refresh_nemoclaw_path
 
@@ -362,7 +369,7 @@ fi
 
 pass "nemoclaw found at $(command -v nemoclaw)"
 
-header "Step 9: Configuring local inference"
+header "Step 10: Configuring local inference"
 echo ""
 "${SCRIPT_DIR}/configure-local-provider.sh" "${THOR_MODEL_PROFILE}"
 
@@ -387,11 +394,12 @@ echo "  Model:     ${THOR_MODEL_ID}"
 echo ""
 echo -e "${BOLD}  Next steps:${NC}"
 echo ""
-echo "  1. Start your selected local model server:"
+echo "  1. If the local model server is not already running, start it:"
 echo "       ./start-model.sh ${THOR_MODEL_PROFILE}"
 echo "  2. Run: ./status.sh ${THOR_MODEL_PROFILE}"
-echo "  3. If the agent later needs temporary internet, either:"
+echo "  3. Connect with: nemoclaw ${SANDBOX_NAME} connect"
+echo "  4. If the agent later needs temporary internet, either:"
 echo "       ./apply-policy-additions.sh research-lite"
 echo "     or use: openshell term"
-echo "  4. Connect to the sandbox and run a one-message smoke test."
+echo "  5. Run a one-message smoke test inside the sandbox."
 echo ""

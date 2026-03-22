@@ -23,7 +23,7 @@ LOG_FILE="${STATE_DIR}/proxy.log"
 mkdir -p "${STATE_DIR}"
 
 sandbox_name="$(resolve_thor_sandbox_name)"
-cluster_container="$(active_openshell_cluster_container_name)"
+cluster_container="$(thor_openshell_cluster_container_name)"
 
 if ! sudo -n true >/dev/null 2>&1; then
     echo "Passwordless sudo is required for dashboard access helpers." >&2

@@ -53,14 +53,61 @@ check_openshell_installed() {
 }
 
 check_openshell_gateway() {
-    if openshell gateway info &>/dev/null; then
-        pass "OpenShell gateway is running"
+    local gateway_name="${THOR_OPENSHELL_GATEWAY_NAME:-nemoclaw}"
+
+    if openshell status -g "${gateway_name}" &>/dev/null; then
+        pass "OpenShell gateway '${gateway_name}' is running"
         return 0
     else
-        fail "OpenShell gateway is not running"
-        fix "Run: openshell gateway start"
+        fail "OpenShell gateway '${gateway_name}' is not reachable"
+        fix "Run: ./start-gateway.sh"
         return 1
     fi
+}
+
+ensure_openshell_gateway_running() {
+    local gateway_name="${THOR_OPENSHELL_GATEWAY_NAME:-nemoclaw}"
+    local container_name="openshell-cluster-${gateway_name}"
+    local attempts="${1:-60}"
+
+    if ! command -v openshell &>/dev/null; then
+        fail "openshell command not found"
+        fix "Install OpenShell before continuing."
+        return 1
+    fi
+
+    if openshell status -g "${gateway_name}" &>/dev/null; then
+        pass "OpenShell gateway '${gateway_name}' is running"
+        return 0
+    fi
+
+    if ! command -v docker &>/dev/null; then
+        fail "docker command not found"
+        fix "Install Docker before trying to revive the OpenShell gateway."
+        return 1
+    fi
+
+    if docker ps -a --format '{{.Names}}' | grep -Fx "${container_name}" >/dev/null 2>&1; then
+        info "Starting existing OpenShell gateway container: ${container_name}"
+        docker start "${container_name}" >/dev/null
+    else
+        info "Creating OpenShell gateway '${gateway_name}'..."
+        openshell gateway start --name "${gateway_name}" --recreate >/dev/null
+    fi
+
+    local i
+    for i in $(seq 1 "${attempts}"); do
+        if openshell status -g "${gateway_name}" &>/dev/null; then
+            pass "OpenShell gateway '${gateway_name}' is running"
+            return 0
+        fi
+        sleep 2
+    done
+
+    fail "OpenShell gateway '${gateway_name}' did not become reachable"
+    fix "Check: docker ps --format '{{.Names}} {{.Status}}'"
+    fix "Check: docker logs ${container_name} | tail -n 80"
+    return 1
 }
 
 # ── openshell-thor fix verification ───────────────────────────────────────────

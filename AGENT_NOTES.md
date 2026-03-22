@@ -586,6 +586,9 @@ export THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1
 ./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
 ```
 
+`install.sh` now ensures the `nemoclaw` OpenShell gateway is running before the
+upstream NemoClaw install/onboard step.
+
 OpenClaw concurrency is now written explicitly into the sandbox config during
 `configure-local-provider.sh` / `install.sh` sync:
 
@@ -629,10 +632,15 @@ source "$HOME/.nvm/nvm.sh"
 nvm use 22
 export PATH="$HOME/.local/bin:$PATH"
 ./start-model.sh qwen3.5-35b-a3b-fp8
-openshell gateway start --name nemoclaw
+./configure-local-provider.sh qwen3.5-35b-a3b-fp8
 ./status.sh qwen3.5-35b-a3b-fp8
 nemoclaw thor-assistant connect
 ```
+
+`configure-local-provider.sh` is now the normal restart/reboot recovery entry:
+it revives the `nemoclaw` gateway if needed, rebinds the local inference route,
+and reconciles the sandbox SSH handshake secret so native
+`nemoclaw thor-assistant connect` works again.
 
 If the sandbox is missing after restart, rerun:
 
