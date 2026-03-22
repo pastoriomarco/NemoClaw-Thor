@@ -352,8 +352,6 @@ if [[ -n "${SANDBOX_NAME}" ]]; then
     openshell forward start 18789 "${SANDBOX_NAME}" --background
 fi
 
-disown -a 2>/dev/null || true
-
 header "Step 9: Verifying nemoclaw installation"
 echo ""
 refresh_nemoclaw_path

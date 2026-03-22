@@ -348,6 +348,41 @@ print("" if value is None else value)
     fi
 fi
 
+header "Sandbox OpenClaw Gateway"
+echo ""
+
+if [[ -z "${sandbox_name}" ]]; then
+    warn "Skipping sandbox gateway check because no sandbox is resolved"
+    record 2
+else
+    forward_line=$(openshell forward list 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | awk -v name="${sandbox_name}" '$1 == name && $3 == "18789" && /running/ {found=1} END {print found+0}')
+
+    if [[ "${forward_line}" == "1" ]]; then
+        if python3 -c "
+import socket, sys
+try:
+    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
+    s.close()
+except Exception:
+    sys.exit(1)
+" >/dev/null 2>&1; then
+            pass "OpenClaw gateway is reachable via host forward on port 18789"
+            record 0
+        else
+            warn "Host forward on port 18789 is active but OpenClaw gateway is not responding"
+            info "The gateway may not be running inside the sandbox yet."
+            fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway run &"
+            record 2
+        fi
+    else
+        info "No active host forward on port 18789 — gateway check skipped"
+        info "To enable this check: openshell forward start 18789 ${sandbox_name} --background"
+        record 0
+    fi
+fi
+
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo ""
@@ -383,6 +418,10 @@ if [[ -n "${sandbox_name}" ]]; then
     echo "  Expected: a short reply from ${THOR_MODEL_ID}."
     echo '  Note: "No reply from agent" on the first attempt can happen'
     echo "  while the model warms up — wait a moment and try again."
+    echo ""
+    echo "  If openclaw tui shows 'gateway disconnected':"
+    echo "    HOME=/sandbox openclaw gateway run &"
+    echo "    openclaw tui"
     echo ""
     echo "  For temporary outbound access during troubleshooting:"
     echo "    ./apply-policy-additions.sh research-lite"

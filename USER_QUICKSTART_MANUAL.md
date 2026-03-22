@@ -179,6 +179,14 @@ Inside the sandbox, the main interactive UI is:
 openclaw tui
 ```
 
+The OpenClaw gateway normally auto-starts inside the sandbox. If the TUI shows
+"gateway disconnected", start the gateway manually:
+
+```bash
+HOME=/sandbox openclaw gateway run &
+openclaw tui
+```
+
 Quick smoke test inside the sandbox:
 
 ```bash
@@ -247,11 +255,7 @@ The dashboard is optional.
 
 If you still want the dashboard:
 
-1. Inside the sandbox, keep the OpenClaw gateway running:
-
-```bash
-HOME=/sandbox openclaw gateway run
-```
+1. Inside the sandbox, make sure the OpenClaw gateway is running (see above).
 
 2. On the host, start the access helper:
 
@@ -351,6 +355,7 @@ Notes:
 
 - Use `nemoclaw thor-assistant connect` as the normal shell entrypoint.
 - Use `openclaw tui` as the normal prompt UI.
+- If the TUI shows "gateway disconnected": `HOME=/sandbox openclaw gateway run &`
 - After any model change, run `./configure-local-provider.sh <profile>`.
 - After a reboot, use the same path as any normal restart:
   `./start-model.sh`, then `./configure-local-provider.sh`, then `./status.sh`.

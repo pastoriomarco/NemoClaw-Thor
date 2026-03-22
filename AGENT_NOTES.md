@@ -58,7 +58,10 @@ What is not currently proven:
 
 Known operator limitation as of this session:
 
-- `openclaw tui` is the reliable prompt surface.
+- `openclaw tui` requires the OpenClaw gateway inside the sandbox. The gateway
+  normally auto-starts. If the TUI shows "gateway disconnected: closed | idle",
+  start it manually: `HOME=/sandbox openclaw gateway run &`
+- `openclaw agent --agent main --local ...` works without the gateway.
 - The browser dashboard can connect and is useful for visibility, but
   browser-originated prompts can still fail with `LLM request timed out.` even
   when the same prompt works in TUI.
