@@ -360,20 +360,39 @@ else
         | awk -v name="${sandbox_name}" '$1 == name && $3 == "18789" && /running/ {found=1} END {print found+0}')
 
     if [[ "${forward_line}" == "1" ]]; then
-        if python3 -c "
+        # Send a WebSocket upgrade request to verify the actual gateway process
+        # is running, not just the SSH tunnel (which accepts TCP but resets).
+        gateway_probe=$(python3 -c "
 import socket, sys
 try:
     s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
+    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
+    s.settimeout(5)
+    data = s.recv(1024)
     s.close()
-except Exception:
-    sys.exit(1)
-" >/dev/null 2>&1; then
+    # Any HTTP response means the gateway is alive (101 Switching Protocols, 400, etc.)
+    if data and (b'HTTP/' in data or b'websocket' in data.lower()):
+        print('ok')
+    elif not data:
+        # Empty response — tunnel accepted but nothing behind it
+        print('empty')
+    else:
+        print('no-http')
+except ConnectionResetError:
+    # SSH tunnel accepted but nothing behind it — gateway not running
+    print('reset')
+except Exception as e:
+    print('error')
+" 2>/dev/null || echo "error")
+
+        if [[ "${gateway_probe}" == "ok" ]]; then
             pass "OpenClaw gateway is reachable via host forward on port 18789"
             record 0
         else
             warn "Host forward on port 18789 is active but OpenClaw gateway is not responding"
-            info "The gateway may not be running inside the sandbox yet."
-            fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway run &"
+            info "The gateway process may not be running inside the sandbox."
+            fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Or inside the sandbox: HOME=/sandbox openclaw gateway run &"
             record 2
         fi
     else
@@ -420,8 +439,9 @@ if [[ -n "${sandbox_name}" ]]; then
     echo "  while the model warms up — wait a moment and try again."
     echo ""
     echo "  If openclaw tui shows 'gateway disconnected':"
+    echo "    ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+    echo "  Or inside the sandbox:"
     echo "    HOME=/sandbox openclaw gateway run &"
-    echo "    openclaw tui"
     echo ""
     echo "  For temporary outbound access during troubleshooting:"
     echo "    ./apply-policy-additions.sh research-lite"

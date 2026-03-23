@@ -325,6 +325,99 @@ PY
 SH
 }
 
+sandbox_ssh_command() {
+    local sandbox_name="${1:-}"
+    shift
+    local cmd="$*"
+
+    [[ -n "${sandbox_name}" ]] || return 1
+    [[ -n "${cmd}" ]] || return 1
+
+    local openshell_bin
+    openshell_bin=$(command -v openshell 2>/dev/null || echo "")
+    [[ -n "${openshell_bin}" ]] || return 1
+
+    local gateway_name
+    gateway_name=$(thor_openshell_gateway_name)
+
+    ssh -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR \
+        -o "ProxyCommand=${openshell_bin} ssh-proxy --gateway-name ${gateway_name} --name ${sandbox_name}" \
+        "sandbox@openshell-${sandbox_name}" "${cmd}"
+}
+
+ensure_sandbox_gateway_running() {
+    local sandbox_name="${1:-}"
+    [[ -n "${sandbox_name}" ]] || return 1
+
+    # Check if the gateway is already reachable via the host forward.
+    local forward_running=""
+    forward_running=$(openshell forward list 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | awk -v name="${sandbox_name}" '$1 == name && $3 == "18789" && /running/ {found=1} END {print found+0}')
+
+    if [[ "${forward_running}" == "1" ]]; then
+        local probe=""
+        probe=$(python3 -c "
+import socket
+try:
+    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
+    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\n\r\n')
+    s.settimeout(5)
+    data = s.recv(1024)
+    s.close()
+    print('ok' if data and b'HTTP/' in data else 'empty')
+except ConnectionResetError:
+    print('reset')
+except Exception:
+    print('error')
+" 2>/dev/null || echo "error")
+
+        if [[ "${probe}" == "ok" ]]; then
+            pass "OpenClaw gateway is already running"
+            return 0
+        fi
+    fi
+
+    # Ensure the host forward is active.
+    if [[ "${forward_running}" != "1" ]]; then
+        openshell forward stop 18789 "${sandbox_name}" 2>/dev/null || true
+        openshell forward start 18789 "${sandbox_name}" --background >/dev/null 2>&1 || true
+    fi
+
+    # Start the gateway inside the sandbox via SSH (must be in the SSH
+    # network namespace for the host forward to reach it).
+    info "Starting OpenClaw gateway inside sandbox '${sandbox_name}'..."
+    sandbox_ssh_command "${sandbox_name}" \
+        'HOME=/sandbox nohup openclaw gateway run > /sandbox/openclaw-gateway.log 2>&1 & disown; sleep 2; tail -3 /sandbox/openclaw-gateway.log >&2' 2>&1 || true
+
+    # Verify it started.
+    sleep 1
+    local verify=""
+    verify=$(python3 -c "
+import socket
+try:
+    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
+    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\n\r\n')
+    s.settimeout(5)
+    data = s.recv(1024)
+    s.close()
+    print('ok' if data and b'HTTP/' in data else 'fail')
+except Exception:
+    print('fail')
+" 2>/dev/null || echo "fail")
+
+    if [[ "${verify}" == "ok" ]]; then
+        pass "OpenClaw gateway started successfully"
+        return 0
+    else
+        warn "OpenClaw gateway did not start — TUI may show 'gateway disconnected'"
+        fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway run &"
+        return 2
+    fi
+}
+
 sync_sandbox_runtime_config() {
     local sandbox_name="${1:-}"
     local cluster_container=""

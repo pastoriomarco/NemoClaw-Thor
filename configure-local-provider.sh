@@ -103,6 +103,10 @@ fi
 save_thor_runtime_config
 pass "Saved runtime config to ${THOR_CONFIG_FILE}"
 
+info "Ensuring OpenClaw gateway is running inside the sandbox..."
+ensure_sandbox_gateway_running "${sandbox_name}" || true
+echo ""
+
 vllm_response=$(curl -s --max-time 5 \
     -H "Authorization: Bearer ${THOR_LOCAL_VLLM_API_KEY}" \
     "${THOR_HOST_VLLM_MODELS_URL}" 2>/dev/null || echo "")
