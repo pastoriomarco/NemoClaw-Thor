@@ -41,6 +41,19 @@ gateway_ssh_handshake_secret() {
     cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
     [[ -n "${cluster_container}" ]] || return 1
 
+    # Read from the running openshell-0 pod, not the statefulset spec.
+    # After a reboot the gateway can rotate its handshake secret during init,
+    # and the statefulset spec may lag behind the running process.
+    local live_secret=""
+    live_secret=$(docker exec "${cluster_container}" \
+        kubectl -n openshell exec openshell-0 -- printenv OPENSHELL_SSH_HANDSHAKE_SECRET 2>/dev/null || true)
+
+    if [[ -n "${live_secret}" ]]; then
+        printf '%s' "${live_secret}"
+        return 0
+    fi
+
+    # Fallback to statefulset spec if the pod is not yet exec-ready.
     docker exec \
         "${cluster_container}" \
         sh -lc "kubectl -n openshell get statefulset openshell -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"OPENSHELL_SSH_HANDSHAKE_SECRET\")].value}'"
@@ -54,6 +67,17 @@ sandbox_ssh_handshake_secret() {
     cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
     [[ -n "${cluster_container}" ]] || return 1
 
+    # Read from the running sandbox pod first, matching the gateway-side approach.
+    local live_secret=""
+    live_secret=$(docker exec "${cluster_container}" \
+        kubectl -n openshell exec "${sandbox_name}" -- printenv OPENSHELL_SSH_HANDSHAKE_SECRET 2>/dev/null || true)
+
+    if [[ -n "${live_secret}" ]]; then
+        printf '%s' "${live_secret}"
+        return 0
+    fi
+
+    # Fallback to sandbox CRD spec if the pod is not yet exec-ready.
     docker exec \
         "${cluster_container}" \
         sh -lc "kubectl -n openshell get sandbox \"${sandbox_name}\" -o jsonpath='{.spec.podTemplate.spec.containers[0].env[?(@.name==\"OPENSHELL_SSH_HANDSHAKE_SECRET\")].value}'"
