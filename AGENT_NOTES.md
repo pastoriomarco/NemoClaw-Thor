@@ -18,60 +18,193 @@ It is not the agent runtime itself, and it is not the place where the actual
 multi-agent orchestrator/coder/tester logic is implemented. Its job is to make
 the base stack safer, more local-first, and more reversible on Jetson Thor.
 
-## Validated State As Of 2026-03-21
+## CRITICAL: Upstream Evolution Warning
 
-The repo is no longer just a draft for the `qwen3.5-27b-fp8` coding path. A
-full Thor run was completed and verified on the target machine.
+NemoClaw, OpenClaw, and OpenShell are all rapidly evolving NVIDIA projects in
+active alpha/beta development. APIs, config formats, CLI flags, sandbox image
+internals, and onboarding flows change frequently between releases.
+
+**The suggested install path for a new machine is: have a frontier-class coding
+model (Claude, GPT-4, etc.) follow the install instructions interactively on
+the target machine and fix any issues that arise in real time.** Do not blindly
+run scripts expecting them to work unchanged against a newer upstream. Treat
+this repo's scripts as a reference implementation and adaptation guide, not as
+a frozen installer.
+
+Specific upstream areas that have broken or changed between versions:
+
+- OpenClaw device pairing protocol and auth modes
+- Sandbox image filesystem layout and permission model for `/sandbox/.openclaw/`
+- `openclaw.json` config schema (new keys, changed nesting)
+- OpenShell gateway SSH handshake secret rotation behavior on reboot
+- OpenShell sandbox CRD spec format
+- NemoClaw onboarding wizard prompts and step ordering
+- NemoClaw CLI subcommands (`nemoclaw <sandbox> exec` was removed)
+- Network namespace isolation between SSH sessions and pod root namespace
+
+When updating, change one component at a time and verify with `./status.sh`
+after each change.
+
+## Validated State
+
+### 2026-03-23 — qwen3.5-35b-a3b-fp8 (multimodal)
 
 Validated on this host:
 
 - Jetson AGX Thor
 - JetPack 7.1 / L4T 38.4
 - OpenShell `0.0.12`
-- NemoClaw installed from the upstream repo cloned at `~/NemoClaw`
-- local vLLM serving `Qwen3.5-27B-FP8`
+- OpenClaw `2026.3.11` (29dc654) inside sandbox
+- NemoClaw `be7ec09` from upstream repo cloned at `~/NemoClaw`
+- local vLLM serving `Qwen3.5-35B-A3B-FP8` (multimodal: text + image + video)
+- vLLM image: `ghcr.io/nvidia-ai-iot/vllm:0.16.0-g15d76f74e-r38.2-arm64-sbsa-cu130-24.04`
 - OpenShell provider `vllm-local`
 - sandbox `thor-assistant`
 - policy baseline `strict-local`
 
-Validated runtime parameters for that run:
+Validated runtime parameters:
 
 - `--max-model-len 65536`
 - `--kv-cache-dtype fp8`
-- `--max-num-seqs 16`
-- auto tool choice enabled with `qwen3_coder`
+- `--max-num-seqs 8`
+- `--tensor-parallel-size 1`
+- auto tool choice with `qwen3_coder` parser
+- speculative decoding with `qwen3_next_mtp` (2 speculative tokens)
+- **no** `--language-model-only` flag (full multimodal with vision encoder)
 
-What was actually proven:
+What was proven:
 
-- Thor host fixes applied successfully
-- OpenShell gateway started successfully
-- sandbox image built and sandbox reached `Ready`
-- local provider route set to `Qwen3.5-27B-FP8`
-- `./status.sh qwen3.5-27b-fp8` passed all checks
-- inside the sandbox, `openclaw agent --agent main --local --thinking off -m "Reply with one word: working"` returned `working`
-- inside the sandbox, the tool-use smoke test now completes end-to-end when the embedded session store is clean
+- Full reboot recovery cycle: reboot → `configure-local-provider.sh` → all 19
+  status checks pass → TUI connects → agent responds to inference
+- SSH handshake secret reconciliation after gateway secret rotation on reboot
+- OpenClaw gateway auto-start in the correct network namespace
+- Device identity pre-pairing for TUI access without manual approval
+- Model warmup request during configure to avoid cold-start latency
+- Programmatic agent invocation via `openclaw agent --json` from host SSH
 
-What is not currently proven:
+### 2026-03-21 — qwen3.5-27b-fp8 (text-only)
 
-- every other model profile from this repo on this host
-- stable tool-use behavior on the `qwen3.5-35b-a3b-fp8` path
+Previous validation on the same host with `Qwen3.5-27B-FP8`:
 
-Known operator limitation as of this session:
+- `--max-num-seqs 16` (higher than 35B due to smaller model)
+- tool-use smoke test passed end-to-end
+- `openclaw agent --agent main --local` worked without gateway
 
-- `openclaw tui` requires the OpenClaw gateway inside the sandbox. The gateway
-  normally auto-starts. If the TUI shows "gateway disconnected: closed | idle",
-  start it manually: `HOME=/sandbox openclaw gateway run &`
-- `openclaw agent --agent main --local ...` works without the gateway.
-- The browser dashboard can connect and is useful for visibility, but
-  browser-originated prompts can still fail with `LLM request timed out.` even
-  when the same prompt works in TUI.
-- The current evidence points to a Control UI / gateway session-state issue,
-  not a raw vLLM throughput problem.
+Known operator limitations:
+
+- The browser dashboard can connect but browser-originated prompts can fail
+  with `LLM request timed out.` even when TUI works. This is a Control UI /
+  gateway session-state issue, not vLLM throughput.
 - Avoid driving the same session from both TUI and dashboard concurrently.
+- First inference after model load is slow (30-60s); the warmup request in
+  `configure-local-provider.sh` mitigates this.
 
-This does not mean every model profile is now validated. It means the
-`qwen3.5-27b-fp8` flow is working on this Thor with the Thor-side fixes in this
-repo.
+## Bugs Fixed In This Fork (2026-03-23)
+
+These are the non-obvious issues discovered during live Thor operation. Future
+agents should be aware of these because upstream changes may reintroduce them
+or change the conditions under which they appear.
+
+### 1. SSH handshake secret drift after reboot
+
+**Symptom:** `nemoclaw thor-assistant connect` fails with "Connection reset by
+peer". Sandbox logs show "SSH connection: handshake verification failed".
+
+**Root cause:** After a reboot, the OpenShell gateway pod (`openshell-0`)
+regenerates its SSH handshake secret during init. The old
+`gateway_ssh_handshake_secret()` function read from the **statefulset spec**,
+which lags behind the running pod's actual secret. This caused
+`reconcile_sandbox_ssh_handshake_secret()` to falsely report secrets as
+matching when they had diverged.
+
+**Fix in `lib/sandbox-runtime.sh`:** Both `gateway_ssh_handshake_secret()` and
+`sandbox_ssh_handshake_secret()` now read from the running pod's environment
+via `kubectl exec ... printenv OPENSHELL_SSH_HANDSHAKE_SECRET` first, with
+fallback to the spec if the pod is not yet exec-ready.
+
+**How to detect:** `./status.sh` checks this under "Native Connect Path". If
+it reports a mismatch, run `./configure-local-provider.sh` which reconciles
+automatically.
+
+### 2. OpenClaw gateway runs in wrong network namespace
+
+**Symptom:** `openclaw tui` shows "gateway disconnected: closed" even though
+`./status.sh` shows the gateway check passing.
+
+**Root cause:** The sandbox has two network namespaces:
+- **Pod root namespace** — where `kubectl exec` runs
+- **SSH session namespace** — where `nemoclaw connect` / SSH sessions land
+
+The OpenClaw gateway must run in the SSH session namespace because the
+`openshell forward` tunnel (host:18789 → sandbox:18789) routes through the SSH
+proxy and lands in the SSH namespace. Starting the gateway via `kubectl exec`
+puts it in the wrong namespace — the port is listening but unreachable through
+the tunnel.
+
+**Fix in `lib/sandbox-runtime.sh`:** `ensure_sandbox_gateway_running()` starts
+the gateway via SSH (using `openshell ssh-proxy` as ProxyCommand), not via
+`kubectl exec`. This places the gateway in the SSH namespace where the tunnel
+can reach it.
+
+**How to detect:** The `status.sh` gateway probe now sends an actual HTTP
+request through the tunnel instead of just checking TCP connectivity. A TCP-
+only check was a false positive because the SSH tunnel accepts connections even
+when nothing is behind it.
+
+### 3. OpenClaw device pairing required after every pod restart
+
+**Symptom:** `openclaw tui` shows "Pairing required. Run openclaw devices list,
+approve your request ID, then reconnect."
+
+**Root cause:** OpenClaw's device pairing system requires each TUI client to be
+registered in `~/.openclaw/devices/paired.json`. After a pod restart, this file
+is lost (ephemeral pod storage). The device identity
+(`~/.openclaw/identity/device.json`) persists because it was created during
+initial install, but the pairing record does not.
+
+Neither `--auth none` nor `dangerouslyDisableDeviceAuth` in the config disable
+the WebSocket-level device pairing check (they only affect transport auth and
+the control UI respectively).
+
+**Fix in `lib/sandbox-runtime.sh`:** `ensure_sandbox_gateway_running()` pre-
+populates `paired.json` by reading the existing device identity from
+`device.json`, extracting the raw Ed25519 public key (stripping the SPKI ASN.1
+header, converting to URL-safe base64 without padding), and writing a pre-
+approved paired entry before starting the gateway.
+
+**Critical detail:** The public key format in `paired.json` must be the raw
+32-byte Ed25519 key in URL-safe base64 without padding (e.g.,
+`1xH7ArHVjG1Hn4YO...`), NOT the full SPKI-encoded PEM key (e.g.,
+`MCowBQYDK2VwAyEA1xH7...`). Getting this wrong causes the gateway to reject
+the device as "not-paired" even though the deviceId matches.
+
+### 4. status.sh gateway check was a false positive
+
+**Symptom:** `./status.sh` reports "OpenClaw gateway is reachable" but TUI
+cannot connect.
+
+**Root cause:** The original check used a TCP connect probe to port 18789.
+The SSH tunnel itself accepts TCP connections and then forwards them. If nothing
+is listening on 18789 inside the sandbox, the tunnel accepts the connection but
+the remote end resets or returns empty — the TCP connect still succeeds.
+
+**Fix in `status.sh`:** The probe now sends an HTTP request and checks for an
+HTTP response. An empty response, connection reset, or timeout all correctly
+report as gateway-not-running.
+
+### 5. Cron directory permissions inside sandbox
+
+**Symptom:** Gateway log shows `EACCES: permission denied, open
+'/sandbox/.openclaw/cron/jobs.json'`.
+
+**Root cause:** The `/sandbox/.openclaw/cron/` directory is created by the
+sandbox image as root-owned. The gateway runs as the `sandbox` user and cannot
+create `jobs.json`.
+
+**Fix in `lib/sandbox-runtime.sh`:** Both `sync_sandbox_runtime_config()` (via
+`kubectl exec` as root) and `ensure_sandbox_gateway_running()` (via SSH)
+ensure the cron directory exists and is writable, and create an empty
+`jobs.json` if missing.
 
 ## Current Supported Operator Path
 
@@ -185,6 +318,9 @@ The most important files are:
   - supported model profiles and saved runtime config
 - `lib/launch.sh`
   - per-model vLLM args and defaults
+- `lib/sandbox-runtime.sh`
+  - SSH handshake reconciliation, sandbox config sync, gateway lifecycle,
+    device pre-pairing — this is where most of the non-obvious fixes live
 - `lib/policy.sh`
   - static and dynamic policy helpers
 - `lib/host-state.sh`
@@ -887,12 +1023,75 @@ Recommended order:
    before applying host fixes.
 7. Change one variable at a time and keep the install path observable.
 
+## Programmatic Agent Access From Host
+
+The sandbox agents can be driven programmatically from the host via SSH:
+
+```bash
+# Run a single agent turn and get JSON output
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+    -o "ProxyCommand=openshell ssh-proxy --gateway-name nemoclaw --name thor-assistant" \
+    sandbox@openshell-thor-assistant \
+    'HOME=/sandbox openclaw agent --agent main --local --json --session-id my-task \
+      -m "your prompt here" --timeout 120'
+```
+
+Key points:
+
+- `--session-id` maintains conversation state across calls
+- `--json` returns structured output for parsing
+- `--local` runs the embedded agent (no gateway needed for agent CLI)
+- Multiple SSH sessions can run in parallel (one for TUI, one for automation)
+- Max concurrency: 1 main agent + 7 subagents (configured in openclaw.json)
+- The `sandbox_ssh_command` helper in `lib/sandbox-runtime.sh` wraps the SSH
+  proxy setup
+
+## Version Management Strategy
+
+This repo does not pin upstream versions. Instead:
+
+1. **Document what was validated** — the "Validated State" section records exact
+   versions, commits, and image tags that were tested together.
+2. **Document what broke and why** — the "Bugs Fixed" section explains the root
+   causes so future agents can recognize when upstream changes reintroduce
+   similar issues.
+3. **Treat scripts as adaptation guides** — the install and configure scripts
+   encode the integration logic, but a new install on a newer upstream may need
+   the scripts adjusted. A frontier coding model working interactively is the
+   recommended install path.
+4. **Change one component at a time** — update NemoClaw, OpenClaw, or OpenShell
+   separately and verify with `./status.sh` after each.
+
+Components that can update independently:
+
+| Component | Update trigger | Risk |
+|-----------|---------------|------|
+| NemoClaw (`~/NemoClaw`) | `git pull` | Install scripts, onboarding flow |
+| OpenClaw (in sandbox) | Sandbox image rebuild or `openclaw update` | Config format, pairing, gateway API |
+| OpenShell (host binary) | Manual binary update | SSH proxy, sandbox CRD, K3s internals |
+| vLLM image | Changed in `lib/launch.sh` | Model loading, GPU memory, API compat |
+
 ## Current Honest Summary
 
-This repo is no longer just an outline. It contains the major integration and
-hardening pieces needed for a local-first Thor setup around NemoClaw/OpenShell
-and local Qwen serving.
+This repo is validated end-to-end on Jetson AGX Thor with both `qwen3.5-27b-fp8`
+and `qwen3.5-35b-a3b-fp8` profiles. The full reboot recovery cycle works:
+reboot the device, run `./configure-local-provider.sh`, and the TUI connects
+with working inference.
 
-What is still missing is real end-to-end validation on the actual Thor target,
-plus any higher-level workflow layer that would turn this foundation into the
-full orchestrator/coder/tester development system the user ultimately wants.
+The integration layer handles several non-obvious issues that arise from
+running NemoClaw/OpenShell on Jetson Thor with local inference: SSH handshake
+secret rotation, network namespace isolation for the OpenClaw gateway, device
+pairing persistence across pod restarts, and accurate health checking.
+
+What is ready for use:
+
+- local-first inference with hardened sandbox policy
+- automated reboot recovery
+- programmatic agent access from the host
+- multimodal inference (Qwen3.5 vision encoder active on 35B profile)
+
+What is not yet built:
+
+- higher-level multi-agent orchestration (coding/QA/testing workflow)
+- automated upstream update testing
+- persistent workspace volumes across pod restarts
