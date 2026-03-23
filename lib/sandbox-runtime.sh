@@ -351,68 +351,152 @@ ensure_sandbox_gateway_running() {
     local sandbox_name="${1:-}"
     [[ -n "${sandbox_name}" ]] || return 1
 
-    # Check if the gateway is already reachable via the host forward.
+    # Ensure the host forward is active.
     local forward_running=""
     forward_running=$(openshell forward list 2>/dev/null \
         | sed 's/\x1b\[[0-9;]*m//g' \
         | awk -v name="${sandbox_name}" '$1 == name && $3 == "18789" && /running/ {found=1} END {print found+0}')
 
-    if [[ "${forward_running}" == "1" ]]; then
-        local probe=""
-        probe=$(python3 -c "
-import socket
-try:
-    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
-    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\n\r\n')
-    s.settimeout(5)
-    data = s.recv(1024)
-    s.close()
-    print('ok' if data and b'HTTP/' in data else 'empty')
-except ConnectionResetError:
-    print('reset')
-except Exception:
-    print('error')
-" 2>/dev/null || echo "error")
-
-        if [[ "${probe}" == "ok" ]]; then
-            pass "OpenClaw gateway is already running"
-            return 0
-        fi
-    fi
-
-    # Ensure the host forward is active.
     if [[ "${forward_running}" != "1" ]]; then
         openshell forward stop 18789 "${sandbox_name}" 2>/dev/null || true
         openshell forward start 18789 "${sandbox_name}" --background >/dev/null 2>&1 || true
     fi
 
-    # Start the gateway inside the sandbox via SSH (must be in the SSH
-    # network namespace for the host forward to reach it).
+    # Everything below runs in a single SSH session inside the sandbox.
+    # This is critical: the gateway must run in the SSH network namespace
+    # (not the pod root namespace) for the host forward to reach it.
+    #
+    # The script:
+    #   1. Kills any existing gateway (stale process from a previous run)
+    #   2. Pre-creates a device identity + paired.json so the TUI doesn't
+    #      need manual device approval (identities are lost on pod restart)
+    #   3. Starts the gateway with --auth none
+    #   4. Reports the result
     info "Starting OpenClaw gateway inside sandbox '${sandbox_name}'..."
-    sandbox_ssh_command "${sandbox_name}" \
-        'HOME=/sandbox nohup openclaw gateway run > /sandbox/openclaw-gateway.log 2>&1 & disown; sleep 2; tail -3 /sandbox/openclaw-gateway.log >&2' 2>&1 || true
+    local gw_result=""
+    gw_result=$(sandbox_ssh_command "${sandbox_name}" '
+#!/bin/sh
+set -e
+HOME=/sandbox
+export HOME
 
-    # Verify it started.
-    sleep 1
-    local verify=""
-    verify=$(python3 -c "
-import socket
-try:
-    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
-    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\n\r\n')
-    s.settimeout(5)
-    data = s.recv(1024)
-    s.close()
-    print('ok' if data and b'HTTP/' in data else 'fail')
-except Exception:
-    print('fail')
-" 2>/dev/null || echo "fail")
+OPENCLAW_DIR="$HOME/.openclaw"
+IDENTITY_DIR="$OPENCLAW_DIR/identity"
+DEVICES_DIR="$OPENCLAW_DIR/devices"
+CRON_DIR="$OPENCLAW_DIR/cron"
+GW_LOG="$HOME/openclaw-gateway.log"
 
-    if [[ "${verify}" == "ok" ]]; then
+# 1. Kill any existing gateway process.
+for pid_dir in /proc/[0-9]*; do
+    pid="${pid_dir##*/}"
+    comm=$(cat "$pid_dir/comm" 2>/dev/null || true)
+    case "$comm" in openclaw*) kill "$pid" 2>/dev/null || true ;; esac
+done
+sleep 1
+
+# 2. Ensure device identity exists and is pre-paired.
+python3 - <<'"'"'PY'"'"'
+import json, os, re, base64
+from pathlib import Path
+from datetime import datetime, timezone
+
+identity_dir = Path("/sandbox/.openclaw/identity")
+devices_dir = Path("/sandbox/.openclaw/devices")
+device_path = identity_dir / "device.json"
+paired_path = devices_dir / "paired.json"
+pending_path = devices_dir / "pending.json"
+cron_dir = Path("/sandbox/.openclaw/cron")
+cron_jobs = cron_dir / "jobs.json"
+
+# Ensure directories exist and are writable by sandbox user.
+for d in [identity_dir, devices_dir, cron_dir]:
+    d.mkdir(parents=True, exist_ok=True)
+
+# Ensure cron/jobs.json exists (gateway fails to start without it).
+if not cron_jobs.exists():
+    cron_jobs.write_text("{}\n")
+
+# If no device identity exists, let openclaw generate one later.
+if not device_path.exists():
+    print("no-identity")
+    raise SystemExit(0)
+
+with device_path.open() as f:
+    device = json.load(f)
+
+device_id = device["deviceId"]
+public_key_pem = device.get("publicKeyPem", "")
+
+# Extract the raw Ed25519 public key from the SPKI-encoded PEM.
+# The PEM contains a DER-encoded SPKI structure; for Ed25519 the
+# raw 32-byte key starts at byte offset 12 (after the ASN.1 header).
+# Convert to URL-safe base64 without padding to match what OpenClaw
+# devices approve produces.
+match = re.search(
+    r"-----BEGIN PUBLIC KEY-----\s*(.+?)\s*-----END PUBLIC KEY-----",
+    public_key_pem, re.DOTALL)
+if match:
+    spki_b64 = match.group(1).replace("\n", "")
+    spki_bytes = base64.b64decode(spki_b64)
+    # Ed25519 SPKI is 44 bytes: 12-byte header + 32-byte raw key
+    raw_key = spki_bytes[12:] if len(spki_bytes) == 44 else spki_bytes
+    public_key = base64.urlsafe_b64encode(raw_key).rstrip(b"=").decode()
+else:
+    public_key = ""
+
+now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+paired = {
+    device_id: {
+        "deviceId": device_id,
+        "publicKey": public_key,
+        "displayName": "openclaw-tui",
+        "platform": "linux",
+        "clientId": "cli",
+        "clientMode": "cli",
+        "role": "operator",
+        "roles": ["operator"],
+        "scopes": [
+            "operator.admin", "operator.read", "operator.write",
+            "operator.approvals", "operator.pairing"
+        ],
+        "approvedScopes": [
+            "operator.admin", "operator.read", "operator.write",
+            "operator.approvals", "operator.pairing"
+        ],
+        "approvedAt": now_ms,
+        "lastSeenAt": now_ms,
+    }
+}
+
+paired_path.write_text(json.dumps(paired, indent=2) + "\n")
+pending_path.write_text("[]\n")
+print("pre-paired")
+PY
+
+# 3. Start the gateway.
+nohup openclaw gateway run --auth none > "$GW_LOG" 2>&1 &
+disown
+GW_PID=$!
+sleep 3
+
+# 4. Check if it is alive.
+if kill -0 "$GW_PID" 2>/dev/null; then
+    echo "started"
+else
+    echo "failed"
+    cat "$GW_LOG" 2>/dev/null | tail -5 >&2
+fi
+' 2>&1) || true
+
+    if echo "${gw_result}" | grep -q "started"; then
         pass "OpenClaw gateway started successfully"
         return 0
+    elif echo "${gw_result}" | grep -q "already-running"; then
+        pass "OpenClaw gateway is already running"
+        return 0
     else
-        warn "OpenClaw gateway did not start — TUI may show 'gateway disconnected'"
+        warn "OpenClaw gateway may not have started correctly"
+        info "${gw_result}"
         fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway run &"
         return 2
     fi
@@ -590,13 +674,23 @@ tools_cfg.setdefault("sandbox", {}).setdefault("tools", {})["allow"] = [
 ]
 tools_cfg["sandbox"]["tools"]["deny"] = []
 
+openclaw_cron_dir = openclaw_path.parent / "cron"
+openclaw_cron_jobs = openclaw_cron_dir / "jobs.json"
+
 openclaw_path.parent.mkdir(parents=True, exist_ok=True)
 openclaw_identity_dir.mkdir(parents=True, exist_ok=True)
 openclaw_devices_dir.mkdir(parents=True, exist_ok=True)
+openclaw_cron_dir.mkdir(parents=True, exist_ok=True)
 chown_path(openclaw_identity_dir)
 chown_path(openclaw_devices_dir)
+chown_path(openclaw_cron_dir)
 os.chmod(openclaw_identity_dir, 0o700)
 os.chmod(openclaw_devices_dir, 0o700)
+os.chmod(openclaw_cron_dir, 0o755)
+if not openclaw_cron_jobs.exists():
+    openclaw_cron_jobs.write_text("{}\n")
+chown_path(openclaw_cron_jobs)
+os.chmod(openclaw_cron_jobs, 0o644)
 for writable_path in (
     openclaw_device_json,
     openclaw_device_auth_json,
