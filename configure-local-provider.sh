@@ -133,6 +133,31 @@ print(', '.join(models) if models else 'unknown')
     fi
 fi
 
+# Send a warmup request so the first real interaction doesn't stall.
+if [[ -n "${vllm_response}" ]]; then
+    info "Sending warmup request to ${THOR_MODEL_ID}..."
+    warmup_reply=$(curl -s --max-time 120 \
+        -H "Authorization: Bearer ${THOR_LOCAL_VLLM_API_KEY}" \
+        -H "Content-Type: application/json" \
+        "${THOR_LOCAL_VLLM_BASE_URL}/chat/completions" \
+        -d "{
+            \"model\": \"${THOR_MODEL_ID}\",
+            \"messages\": [{\"role\": \"user\", \"content\": \"Reply with one word: ready\"}],
+            \"max_tokens\": 16
+        }" 2>/dev/null || echo "")
+
+    if echo "${warmup_reply}" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+content = data['choices'][0]['message']['content']
+sys.exit(0 if content.strip() else 1)
+" 2>/dev/null; then
+        pass "Model warmup complete"
+    else
+        warn "Warmup request did not return a reply — first interaction may be slow"
+    fi
+fi
+
 echo ""
 echo -e "${GREEN}${BOLD}  Local provider configuration complete.${NC}"
 echo ""
