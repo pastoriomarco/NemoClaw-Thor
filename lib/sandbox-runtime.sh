@@ -174,10 +174,30 @@ else:
     )
 
     if [[ -n "${patch_json}" ]]; then
+        # Record the current pod UID so we can detect when the replacement pod
+        # is up — without this, wait_for_sandbox_pod_ready can mistake the
+        # still-running old pod as the new one (--wait=false returns immediately).
+        local old_uid=""
+        old_uid=$(docker exec "${cluster_container}" \
+            sh -lc "kubectl -n openshell get pod \"${sandbox_name}\" -o jsonpath='{.metadata.uid}'" 2>/dev/null || true)
+
         docker exec "${cluster_container}" \
             sh -lc "kubectl -n openshell patch sandbox \"${sandbox_name}\" --type='json' -p='${patch_json}'" >/dev/null
         docker exec "${cluster_container}" \
             sh -lc "kubectl -n openshell delete pod \"${sandbox_name}\" --wait=false" >/dev/null
+
+        # Wait until the pod UID changes (old pod gone, new pod created).
+        if [[ -n "${old_uid}" ]]; then
+            local wait_i new_uid
+            for wait_i in $(seq 1 30); do
+                new_uid=$(docker exec "${cluster_container}" \
+                    sh -lc "kubectl -n openshell get pod \"${sandbox_name}\" -o jsonpath='{.metadata.uid}'" 2>/dev/null || true)
+                if [[ -n "${new_uid}" && "${new_uid}" != "${old_uid}" ]]; then
+                    break
+                fi
+                sleep 2
+            done
+        fi
     fi
 
     if ! wait_for_sandbox_pod_ready "${sandbox_name}" 60; then
@@ -488,18 +508,94 @@ else
 fi
 ' 2>&1) || true
 
-    if echo "${gw_result}" | grep -q "started"; then
-        pass "OpenClaw gateway started successfully"
-        return 0
-    elif echo "${gw_result}" | grep -q "already-running"; then
-        pass "OpenClaw gateway is already running"
-        return 0
-    else
+    if ! echo "${gw_result}" | grep -qE "started|already-running"; then
         warn "OpenClaw gateway may not have started correctly"
         info "${gw_result}"
         fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway run &"
         return 2
     fi
+
+    # Verify the gateway is actually serving by probing from the host side.
+    # The PID check inside the SSH session can pass even if the gateway
+    # crashes shortly after startup (e.g. config reload triggered by a
+    # recent openclaw.json write from sync_sandbox_runtime_config).
+    local probe_ok=false
+    local probe_attempt
+    for probe_attempt in 1 2 3 4 5 6; do
+        sleep 2
+        local probe_result=""
+        probe_result=$(python3 -c "
+import socket
+try:
+    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
+    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\n\r\n')
+    s.settimeout(5)
+    data = s.recv(1024)
+    s.close()
+    print('ok' if data and b'HTTP/' in data else 'empty')
+except ConnectionResetError:
+    print('reset')
+except Exception:
+    print('error')
+" 2>/dev/null || echo "error")
+
+        if [[ "${probe_result}" == "ok" ]]; then
+            probe_ok=true
+            break
+        fi
+    done
+
+    if [[ "${probe_ok}" == "true" ]]; then
+        pass "OpenClaw gateway started successfully"
+        return 0
+    fi
+
+    # Gateway didn't stabilize — try one full restart (kills + starts again).
+    # This handles the case where a config file watcher triggered a crash
+    # shortly after the first start.
+    info "Gateway did not stabilize — retrying..."
+    sandbox_ssh_command "${sandbox_name}" '
+#!/bin/sh
+HOME=/sandbox; export HOME
+for pid_dir in /proc/[0-9]*; do
+    pid="${pid_dir##*/}"
+    comm=$(cat "$pid_dir/comm" 2>/dev/null || true)
+    case "$comm" in openclaw*) kill "$pid" 2>/dev/null || true ;; esac
+done
+sleep 2
+nohup openclaw gateway run --auth none > /sandbox/openclaw-gateway.log 2>&1 &
+disown
+sleep 3
+kill -0 $! 2>/dev/null && echo "restarted" || echo "failed"
+' >/dev/null 2>&1 || true
+
+    for probe_attempt in 1 2 3 4 5 6; do
+        sleep 2
+        local retry_result=""
+        retry_result=$(python3 -c "
+import socket
+try:
+    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
+    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\n\r\n')
+    s.settimeout(5)
+    data = s.recv(1024)
+    s.close()
+    print('ok' if data and b'HTTP/' in data else 'empty')
+except ConnectionResetError:
+    print('reset')
+except Exception:
+    print('error')
+" 2>/dev/null || echo "error")
+
+        if [[ "${retry_result}" == "ok" ]]; then
+            pass "OpenClaw gateway started successfully (after retry)"
+            return 0
+        fi
+    done
+
+    warn "OpenClaw gateway did not stabilize after retry"
+    fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway run &"
+    return 2
 }
 
 sync_sandbox_runtime_config() {

@@ -170,28 +170,28 @@ resolve_model_profile() {
             THOR_MODEL_ID_DEFAULT="Qwen3.5-122B-A10B-NVFP4-resharded"
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_MAX_NUM_SEQS="6"
             ;;
         qwen3.5-27b-fp8)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-FP8"
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_MAX_NUM_SEQS="7"
             ;;
         qwen3.5-35b-a3b-fp8)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-35B-A3B-FP8"
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_MAX_NUM_SEQS="20"
             ;;
         qwen3.5-35b-a3b-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-35B-A3B-NVFP4"
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_MAX_NUM_SEQS="20"
             ;;
         *)
             echo "Unsupported model profile: ${requested}" >&2
@@ -313,10 +313,24 @@ load_thor_runtime_config() {
 
     resolve_model_profile "${THOR_MODEL_PROFILE:-}"
 
-    [[ -n "${file_target_max_model_len}" ]] && THOR_TARGET_MAX_MODEL_LEN="${file_target_max_model_len}"
-    [[ -n "${file_target_kv_cache_dtype}" ]] && THOR_TARGET_KV_CACHE_DTYPE="${file_target_kv_cache_dtype}"
-    [[ -n "${file_target_max_num_seqs}" ]] && THOR_TARGET_MAX_NUM_SEQS="${file_target_max_num_seqs}"
-    [[ -n "${file_target_openclaw_main_max_concurrent}" ]] && THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="${file_target_openclaw_main_max_concurrent}"
+    # When a model profile is explicitly selected (via CLI argument or env),
+    # its per-model defaults (max_num_seqs, etc.) take precedence over saved
+    # config.env values. Saved config only overrides when no profile was
+    # explicitly given — this prevents stale values from a previous model
+    # from overriding the current profile's tuned parameters.
+    local profile_explicitly_selected="false"
+    if [[ -n "${selected_profile}" || -n "${env_profile}" ]]; then
+        profile_explicitly_selected="true"
+    fi
+
+    if [[ "${profile_explicitly_selected}" == "false" ]]; then
+        [[ -n "${file_target_max_model_len}" ]] && THOR_TARGET_MAX_MODEL_LEN="${file_target_max_model_len}"
+        [[ -n "${file_target_kv_cache_dtype}" ]] && THOR_TARGET_KV_CACHE_DTYPE="${file_target_kv_cache_dtype}"
+        [[ -n "${file_target_max_num_seqs}" ]] && THOR_TARGET_MAX_NUM_SEQS="${file_target_max_num_seqs}"
+        [[ -n "${file_target_openclaw_main_max_concurrent}" ]] && THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="${file_target_openclaw_main_max_concurrent}"
+    fi
+
+    # Explicit env vars always win (user override at invocation time).
     [[ -n "${env_target_max_model_len}" ]] && THOR_TARGET_MAX_MODEL_LEN="${env_target_max_model_len}"
     [[ -n "${env_target_kv_cache_dtype}" ]] && THOR_TARGET_KV_CACHE_DTYPE="${env_target_kv_cache_dtype}"
     [[ -n "${env_target_max_num_seqs}" ]] && THOR_TARGET_MAX_NUM_SEQS="${env_target_max_num_seqs}"
