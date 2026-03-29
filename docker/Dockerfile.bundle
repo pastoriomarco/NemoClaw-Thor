@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1.6
+#
+# NemoClaw-Thor vLLM — Bundled image with baked-in JIT caches
+#
+# Extends the compiled vLLM image with pre-built JIT kernel caches:
+#   - FlashInfer CUTLASS GEMM/MoE cubins (~889 MB)
+#   - Torch AOT compile cache + Triton attention kernels (~2 GiB)
+#
+# With these caches baked in, the container starts serving in ~4-6 min
+# (model load + CUDA graph warmup) instead of ~50-60 min on first launch.
+#
+# Usage:
+#   ./bundle.sh                          # build bundled image
+#   ./bundle.sh --push ghcr.io/ORG/REPO  # build and push to registry
+#
+# Running on a Thor:
+#   docker run --rm --runtime nvidia --gpus all --ipc=host --network host \
+#     -e NVIDIA_DISABLE_REQUIRE=true \
+#     -e VLLM_MODEL=Kbenkhaled/Qwen3.5-35B-A3B-NVFP4 \
+#     -v ~/my-hf-cache:/data/models/huggingface \
+#     -p 8000:8000 \
+#     nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132-bundled
+#
+# Or with docker compose — see bundle-compose.yml
+
+ARG BASE_IMAGE=nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132
+FROM ${BASE_IMAGE}
+
+# ── SM110 NVFP4 runtime environment (baked in, no need to pass -e flags) ───
+ENV NVIDIA_DISABLE_REQUIRE=true
+ENV VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass
+ENV VLLM_USE_FLASHINFER_MOE_FP4=1
+ENV VLLM_FLASHINFER_MOE_BACKEND=throughput
+ENV VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel
+ENV HF_HOME=/data/models/huggingface
+ENV HF_HUB_CACHE=/data/models/huggingface/hub
+ENV TRANSFORMERS_CACHE=/data/models/huggingface/hub
+ENV TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1
+
+# ── Bake in FlashInfer JIT cache (GEMM + MoE cubins for SM110a) ────────────
+# Avoids ~50 min JIT recompilation on first launch for CUTLASS GEMM/MoE kernels.
+# If /root/.cache/flashinfer is mounted as a volume, the volume takes precedence.
+COPY flashinfer-cache/ /root/.cache/flashinfer/
+
+# ── Bake in Torch AOT compile cache (compiled model graph + Triton attention) ─
+# Avoids ~50 min recompilation on first launch. torch.compile loads in ~4.5s.
+# If /root/.cache/vllm is mounted as a volume, the volume takes precedence.
+COPY vllm-cache/ /root/.cache/vllm/
+
+# ── Default command: serve Qwen3.5-35B-A3B-NVFP4 ──────────────────────────
+# Override VLLM_MODEL to serve a different model.
+# Override individual args via CMD or entrypoint.
+ENV VLLM_MODEL=Kbenkhaled/Qwen3.5-35B-A3B-NVFP4
+ENV VLLM_PORT=8000
+ENV VLLM_HOST=0.0.0.0
+ENV VLLM_MAX_MODEL_LEN=65536
+ENV VLLM_KV_CACHE_DTYPE=fp8
+ENV VLLM_GPU_MEM_UTIL=0.8
+ENV VLLM_MAX_NUM_SEQS=20
+
+# Wrapper entrypoint that converts env vars to vllm serve flags.
+COPY bundle-entrypoint.sh /workspace/bundle-entrypoint.sh
+RUN chmod +x /workspace/bundle-entrypoint.sh
+
+ENTRYPOINT ["/workspace/bundle-entrypoint.sh"]

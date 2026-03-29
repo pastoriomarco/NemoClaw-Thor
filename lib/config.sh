@@ -150,7 +150,9 @@ print_supported_model_profiles() {
     cat <<'EOF'
 Supported model profiles:
   qwen3.5-122b-a10b-nvfp4-resharded
+  qwen3.5-27b-claude-distilled-nvfp4  (DeltaNet hybrid, reasoning-distilled)
   qwen3.5-27b-fp8
+  qwen3.5-27b              (BF16, no quantization)
   qwen3.5-35b-a3b-fp8
   qwen3.5-35b-a3b-nvfp4
 EOF
@@ -171,6 +173,17 @@ resolve_model_profile() {
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="6"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.5-27b-claude-distilled-nvfp4)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="20"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwen3.5-27b-fp8)
             THOR_MODEL_PROFILE="${requested}"
@@ -178,6 +191,17 @@ resolve_model_profile() {
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="7"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.5-27b)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.5-27B"
+            THOR_TARGET_MAX_MODEL_LEN="32768"
+            THOR_TARGET_KV_CACHE_DTYPE="auto"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwen3.5-35b-a3b-fp8)
             THOR_MODEL_PROFILE="${requested}"
@@ -185,6 +209,8 @@ resolve_model_profile() {
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="20"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwen3.5-35b-a3b-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
@@ -192,6 +218,8 @@ resolve_model_profile() {
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="20"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
             ;;
         *)
             echo "Unsupported model profile: ${requested}" >&2

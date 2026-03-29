@@ -11,12 +11,13 @@ fi
 prepare_thor_launch_profile() {
     local profile="${1:-${THOR_MODEL_PROFILE:-}}"
 
-    THOR_VLLM_IMAGE="${THOR_VLLM_IMAGE:-ghcr.io/nvidia-ai-iot/vllm:0.16.0-g15d76f74e-r38.2-arm64-sbsa-cu130-24.04}"
+    THOR_VLLM_IMAGE="${THOR_VLLM_IMAGE:-nemoclaw-thor/vllm:latest}"
     THOR_VLLM_BIND_HOST="${THOR_VLLM_BIND_HOST:-0.0.0.0}"
     THOR_VLLM_PORT="${THOR_VLLM_PORT:-8000}"
     THOR_HF_CACHE_DIR="${THOR_HF_CACHE_DIR:-$HOME/thor-hf-cache}"
     THOR_VLLM_CACHE_DIR="${THOR_VLLM_CACHE_DIR:-$HOME/thor-vllm-cache}"
     THOR_TORCH_CACHE_DIR="${THOR_TORCH_CACHE_DIR:-$HOME/thor-torch-cache}"
+    THOR_FLASHINFER_CACHE_DIR="${THOR_FLASHINFER_CACHE_DIR:-$HOME/thor-flashinfer-cache}"
 
     THOR_LAUNCH_HOST_MODEL_PATH=""
     THOR_LAUNCH_MODEL_SOURCE=""
@@ -30,22 +31,34 @@ prepare_thor_launch_profile() {
     THOR_DOCKER_ENV_ARGS=()
     THOR_VLLM_ARGS=()
 
+    # SM110 (Thor): CUTLASS sm100 kernels are incompatible — disable them.
+    # FlashInfer FP8 is re-enabled: JIT cache has sm_110a GEMM kernels.
+    THOR_DOCKER_ENV_ARGS+=(
+        -e "VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel"
+    )
+
     case "${profile}" in
         qwen3.5-122b-a10b-nvfp4-resharded)
             THOR_LAUNCH_MODEL_SOURCE="/data/models/huggingface/hub/qwen-3.5-122b-a10b-nvfp4-resharded/resharded"
             THOR_LAUNCH_HOST_MODEL_PATH="${THOR_HF_CACHE_DIR}/hub/qwen-3.5-122b-a10b-nvfp4-resharded/resharded"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
             THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS="${THOR_MAX_NUM_BATCHED_TOKENS:-8192}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            THOR_DOCKER_ENV_ARGS+=("-e" "VLLM_USE_FLASHINFER_MOE_FP4=0")
+            # SM110 NVFP4: FlashInfer CUTLASS for GEMM + MoE, FlashInfer for attention.
+            # FlashInfer v0.6.7 FMHA works on SM110 (verified on 27B distilled, +38% vs triton_attn).
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
+            )
             THOR_VLLM_ARGS+=(
-                "--quantization" "compressed-tensors"
-                "--attention-backend" "FLASHINFER"
+                "--attention-backend" "flashinfer"
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
+                "--enable-prefix-caching"
             )
             ;;
         qwen3.5-27b-fp8)
@@ -57,6 +70,8 @@ prepare_thor_launch_profile() {
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--tensor-parallel-size" "1"
+                "--attention-backend" "flashinfer"
+                "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
@@ -72,6 +87,8 @@ prepare_thor_launch_profile() {
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--tensor-parallel-size" "1"
+                "--attention-backend" "flashinfer"
+                "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
@@ -83,12 +100,62 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
+            # SM110 NVFP4: FlashInfer CUTLASS for GEMM + MoE, FlashInfer for attention.
+            # FlashInfer v0.6.7 FMHA works on SM110 (verified on 27B distilled, +38% vs triton_attn).
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
+            )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
                 "--enable-prefix-caching"
+                "--max-num-batched-tokens" "4096"
+            )
+            ;;
+        qwen3.5-27b-claude-distilled-nvfp4)
+            # Qwen3.5-27B DeltaNet hybrid: 48 linear_attention + 16 full_attention layers.
+            # Mixed NVFP4 (W4A4 for gate/up/o_proj) + FP8 (down_proj, QKV) + BF16 (lm_head).
+            # Only the 16 full_attention layers use KV cache — much smaller KV footprint than pure dense.
+            # FlashInfer v0.6.7 FMHA works on SM110 (+38% vs triton_attn, verified).
+            # No MoE — VLLM_USE_FLASHINFER_MOE_FP4 not applicable.
+            # linear_attention layers handled by GatedDeltaNetAttention (vllm built-in).
+            THOR_LAUNCH_MODEL_SOURCE="mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--language-model-only"
+                "--reasoning-parser" "qwen3"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
+                "--enable-prefix-caching"
+            )
+            ;;
+        qwen3.5-27b)
+            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.5-27B"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.7}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--tensor-parallel-size" "1"
+                "--attention-backend" "flashinfer"
+                "--language-model-only"
+                "--enforce-eager"
+                "--reasoning-parser" "qwen3"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
             )
             ;;
         *)
@@ -111,6 +178,7 @@ prepare_thor_launch_profile() {
         "--max-model-len" "${THOR_LAUNCH_MAX_MODEL_LEN}"
         "--kv-cache-dtype" "${THOR_LAUNCH_KV_CACHE_DTYPE}"
         "--max-num-seqs" "${THOR_LAUNCH_MAX_NUM_SEQS}"
+        "--compilation-config" '{"custom_ops":["-quant_fp8","-quant_fp8","-quant_fp8"]}'
     )
 
     if [[ -n "${THOR_LOCAL_VLLM_API_KEY}" && "${THOR_LOCAL_VLLM_API_KEY}" != "dummy" ]]; then
@@ -153,7 +221,7 @@ check_thor_launch_prereqs() {
         return 1
     fi
 
-    mkdir -p "${THOR_HF_CACHE_DIR}" "${THOR_VLLM_CACHE_DIR}" "${THOR_TORCH_CACHE_DIR}"
+    mkdir -p "${THOR_HF_CACHE_DIR}" "${THOR_VLLM_CACHE_DIR}" "${THOR_TORCH_CACHE_DIR}" "${THOR_FLASHINFER_CACHE_DIR}"
     return 0
 }
 
@@ -176,6 +244,7 @@ print_thor_launch_summary() {
     echo "  HF cache:           ${THOR_HF_CACHE_DIR}"
     echo "  vLLM cache:         ${THOR_VLLM_CACHE_DIR}"
     echo "  Torch cache:        ${THOR_TORCH_CACHE_DIR}"
+    echo "  FlashInfer cache:   ${THOR_FLASHINFER_CACHE_DIR}"
 }
 
 run_thor_vllm_container() {
@@ -194,12 +263,15 @@ run_thor_vllm_container() {
         "${docker_tty_args[@]}" \
         --runtime nvidia --gpus all \
         --ipc=host --network host \
+        -e NVIDIA_DISABLE_REQUIRE=true \
         -e HF_HOME=/data/models/huggingface \
         -e HF_HUB_CACHE=/data/models/huggingface/hub \
         -e TRANSFORMERS_CACHE=/data/models/huggingface/hub \
+        -e TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 \
         -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface" \
         -v "${THOR_VLLM_CACHE_DIR}:/root/.cache/vllm" \
         -v "${THOR_TORCH_CACHE_DIR}:/root/.cache/torch" \
+        -v "${THOR_FLASHINFER_CACHE_DIR}:/root/.cache/flashinfer" \
         "${docker_mount_args[@]}" \
         "${THOR_DOCKER_ENV_ARGS[@]}" \
         "${THOR_VLLM_IMAGE}" \

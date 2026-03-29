@@ -626,6 +626,8 @@ sync_sandbox_runtime_config() {
         -e THOR_MODEL_ID="${THOR_MODEL_ID}" \
         -e THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
         -e THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
+        -e THOR_TARGET_MODEL_REASONING="${THOR_TARGET_MODEL_REASONING}" \
+        -e THOR_TARGET_MAX_TOKENS="${THOR_TARGET_MAX_TOKENS}" \
         -e THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}" \
         -e THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}" \
         -e THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}" \
@@ -639,6 +641,8 @@ kubectl -n openshell exec "${THOR_SANDBOX_NAME}" -- env \
     THOR_MODEL_ID="${THOR_MODEL_ID}" \
     THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
     THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
+    THOR_TARGET_MODEL_REASONING="${THOR_TARGET_MODEL_REASONING}" \
+    THOR_TARGET_MAX_TOKENS="${THOR_TARGET_MAX_TOKENS}" \
     THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}" \
     THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}" \
     THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}" \
@@ -740,11 +744,11 @@ providers_cfg["inference"] = {
         {
             "id": model_id,
             "name": model_id,
-            "reasoning": False,
+            "reasoning": os.environ.get("THOR_TARGET_MODEL_REASONING", "false").lower() == "true",
             "input": ["text"],
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
             "contextWindow": context_window,
-            "maxTokens": 4096,
+            "maxTokens": int(os.environ.get("THOR_TARGET_MAX_TOKENS") or "16384"),
         }
     ],
 }
@@ -801,6 +805,109 @@ with openclaw_path.open("w", encoding="utf-8") as f:
     json.dump(openclaw_cfg, f, indent=2)
     f.write("\n")
 os.chmod(openclaw_path, 0o444)
+
+# ---------------------------------------------------------------------------
+# Patch OpenClaw pi-ai provider: redirect inference.local to local
+# re-streaming proxy that buffers tool-call argument fragments.
+#
+# The qwen3_coder streaming tool parser in vLLM fragments large tool-call
+# arguments across many SSE chunks. OpenClaw (or the parser) silently drops
+# content.  The proxy buffers tool-call chunks and re-emits them intact.
+# ---------------------------------------------------------------------------
+oc_provider_js = Path(
+    "/usr/local/lib/node_modules/openclaw/node_modules/"
+    "@mariozechner/pi-ai/dist/providers/openai-completions.js"
+)
+if oc_provider_js.exists():
+    import re as _re
+    src = oc_provider_js.read_text(encoding="utf-8")
+    q = chr(34)  # JS double quote — avoids single quotes that break sh -lc
+
+    # --- Step 0: Strip ALL previous NemoClaw patches ---
+    # Remove any "// NemoClaw: ..." blocks (redirect, shim, comments)
+    src = _re.sub(r"\n\s*// NemoClaw:.*?(?=\n\s*(?:return |function |const |var |let |export |\}))", "", src, flags=_re.DOTALL)
+    # Remove standalone NemoClaw comment lines that might remain
+    src = _re.sub(r"\n\s*//\s*--\s*NemoClaw.*", "", src)
+    # Undo "const client = new OpenAI" -> "return new OpenAI"
+    src = src.replace("const client = new OpenAI({", "return new OpenAI({", 1)
+    # Undo "let openaiStream" -> "const openaiStream"
+    src = src.replace("let openaiStream = await client.chat.completions.create",
+                      "const openaiStream = await client.chat.completions.create", 1)
+    # Remove timeout addition if present
+    src = src.replace("        timeout: 1800000,\n", "")
+    # Undo stream:false if present
+    src = src.replace("stream: false,", "stream: true,", 1)
+    # Remove stale "return client;" lines
+    src = src.replace("\n    return client;\n}", "\n}")
+    src = src.replace("\n    return client;\n    }\n}", "\n}")
+    # Clean up orphan closing braces from removed if-blocks
+    src = src.replace("    });\n    }\n}", "    });\n}")
+
+    # --- Step 1: Apply clean patches ---
+    # (a) Add timeout to new OpenAI()
+    src = src.replace(
+        "defaultHeaders: headers,\n    });",
+        "defaultHeaders: headers,\n        timeout: 1800000,\n    });",
+        1
+    )
+    # (b) createClient: capture in variable, add redirect, return
+    src = src.replace("return new OpenAI({", "const client = new OpenAI({", 1)
+    anchor_pos = src.find("timeout: 1800000")
+    if anchor_pos >= 0:
+        close_pos = src.find("});", anchor_pos)
+        if close_pos >= 0:
+            ins = close_pos + len("});")
+            redirect = (
+                "\n    // NemoClaw: redirect to local re-streaming proxy\n"
+                "    if (client.baseURL && client.baseURL.includes("
+                + q + "inference.local" + q + ")) {\n"
+                "        client.baseURL = "
+                + q + "http://127.0.0.1:8001/v1" + q + ";\n"
+                "    }\n"
+                "    return client;"
+            )
+            src = src[:ins] + redirect + src[ins:]
+
+    oc_provider_js.chmod(0o644)
+    oc_provider_js.write_text(src, encoding="utf-8")
+    oc_provider_js.chmod(0o444)
+    # Remove stale backup if any
+    backup = oc_provider_js.with_suffix(".js.orig")
+    if backup.exists():
+        backup.unlink()
+
+# ---------------------------------------------------------------------------
+# Deploy re-streaming proxy (buffers tool-call argument fragments).
+# ---------------------------------------------------------------------------
+import base64
+_proxy_b64 = "IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwoiIiJSZS1zdHJlYW1pbmcgcHJveHkgZm9yIE9wZW5DbGF3IDwtPiB2TExNLgoKU2l0cyBiZXR3ZWVuIE9wZW5DbGF3IChzdHJlYW06dHJ1ZSkgYW5kIHZMTE0gKHN0cmVhbTp0cnVlKS4KQnVmZmVycyB0b29sLWNhbGwgYXJndW1lbnQgZnJhZ21lbnRzIGFuZCByZS1lbWl0cyB0aGVtIGFzIGNvbXBsZXRlIGNodW5rcy4KRm9yd2FyZHMgY29udGVudC9yZWFzb25pbmcgZGVsdGFzIGltbWVkaWF0ZWx5IHRvIGtlZXAgdGhlIGNvbm5lY3Rpb24gYWxpdmUuCgpVc2FnZToKICAgIHB5dGhvbjMgcmVzdHJlYW0tcHJveHkucHkgWy0tcG9ydCA4MDAxXSBbLS11cHN0cmVhbSBodHRwczovL2luZmVyZW5jZS5sb2NhbF0KClRoZSBwcm94eSBsaXN0ZW5zIG9uIEhUVFAgKG5vIFRMUykgYW5kIHNwZWFrcyBIVFRQUyB0byB0aGUgdXBzdHJlYW0uCiIiIgoKaW1wb3J0IGFyZ3BhcnNlCmltcG9ydCBqc29uCmltcG9ydCBzc2wKaW1wb3J0IHN5cwppbXBvcnQgdGltZQppbXBvcnQgdGhyZWFkaW5nCmZyb20gaHR0cC5zZXJ2ZXIgaW1wb3J0IEhUVFBTZXJ2ZXIsIEJhc2VIVFRQUmVxdWVzdEhhbmRsZXIKZnJvbSB1cmxsaWIucmVxdWVzdCBpbXBvcnQgUmVxdWVzdCwgdXJsb3Blbgpmcm9tIHVybGxpYi5lcnJvciBpbXBvcnQgVVJMRXJyb3IKCgpMT0dfRklMRSA9IE5vbmUKCgpkZWYgbG9nKG1zZyk6CiAgICB0cyA9IHRpbWUuc3RyZnRpbWUoIiVIOiVNOiVTIikKICAgIGxpbmUgPSBmIlt7dHN9XSB7bXNnfSIKICAgIHByaW50KGxpbmUsIGZpbGU9c3lzLnN0ZGVyciwgZmx1c2g9VHJ1ZSkKICAgIGlmIExPR19GSUxFOgogICAgICAgIHRyeToKICAgICAgICAgICAgd2l0aCBvcGVuKExPR19GSUxFLCAiYSIpIGFzIGY6CiAgICAgICAgICAgICAgICBmLndyaXRlKGxpbmUgKyAiXG4iKQogICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgICAgIHBhc3MKCgpkZWYgbWFrZV9zc2xfY3R4KCk6CiAgICBjdHggPSBzc2wuY3JlYXRlX2RlZmF1bHRfY29udGV4dCgpCiAgICBjdHguY2hlY2tfaG9zdG5hbWUgPSBGYWxzZQogICAgY3R4LnZlcmlmeV9tb2RlID0gc3NsLkNFUlRfTk9ORQogICAgcmV0dXJuIGN0eAoKClNTTF9DVFggPSBtYWtlX3NzbF9jdHgoKQoKCmNsYXNzIFByb3h5SGFuZGxlcihCYXNlSFRUUFJlcXVlc3RIYW5kbGVyKToKICAgIHVwc3RyZWFtOiBzdHIgPSAiaHR0cHM6Ly9pbmZlcmVuY2UubG9jYWwiCgogICAgZGVmIGxvZ19tZXNzYWdlKHNlbGYsIGZtdCwgKmFyZ3MpOgogICAgICAgIHBhc3MgICMgc3VwcHJlc3MgZGVmYXVsdCBhY2Nlc3MgbG9nCgogICAgZGVmIGRvX1BPU1Qoc2VsZik6CiAgICAgICAgY29udGVudF9sZW4gPSBpbnQoc2VsZi5oZWFkZXJzLmdldCgiQ29udGVudC1MZW5ndGgiLCAwKSkKICAgICAgICBib2R5ID0gc2VsZi5yZmlsZS5yZWFkKGNvbnRlbnRfbGVuKQoKICAgICAgICBpZiAiL2NoYXQvY29tcGxldGlvbnMiIG5vdCBpbiBzZWxmLnBhdGg6CiAgICAgICAgICAgIHNlbGYuX3Bhc3N0aHJvdWdoKGJvZHkpCiAgICAgICAgICAgIHJldHVybgoKICAgICAgICB0cnk6CiAgICAgICAgICAgIHJlcV9qc29uID0ganNvbi5sb2Fkcyhib2R5KQogICAgICAgIGV4Y2VwdCBqc29uLkpTT05EZWNvZGVFcnJvcjoKICAgICAgICAgICAgc2VsZi5fcGFzc3Rocm91Z2goYm9keSkKICAgICAgICAgICAgcmV0dXJuCgogICAgICAgIGlzX3N0cmVhbWluZyA9IHJlcV9qc29uLmdldCgic3RyZWFtIiwgRmFsc2UpCiAgICAgICAgaWYgbm90IGlzX3N0cmVhbWluZzoKICAgICAgICAgICAgc2VsZi5fcGFzc3Rocm91Z2goYm9keSkKICAgICAgICAgICAgcmV0dXJuCgogICAgICAgIHNlbGYuX3Jlc3RyZWFtKGJvZHksIHJlcV9qc29uKQoKICAgIGRlZiBkb19HRVQoc2VsZik6CiAgICAgICAgc2VsZi5fcGFzc3Rocm91Z2goYiIiKQoKICAgIGRlZiBfcGFzc3Rocm91Z2goc2VsZiwgYm9keSk6CiAgICAgICAgdXJsID0gc2VsZi51cHN0cmVhbSArIHNlbGYucGF0aAogICAgICAgIGhlYWRlcnMgPSB7CiAgICAgICAgICAgIGs6IHYgZm9yIGssIHYgaW4gc2VsZi5oZWFkZXJzLml0ZW1zKCkKICAgICAgICAgICAgaWYgay5sb3dlcigpIG5vdCBpbiAoImhvc3QiLCAidHJhbnNmZXItZW5jb2RpbmciKQogICAgICAgIH0KICAgICAgICByZXEgPSBSZXF1ZXN0KHVybCwgZGF0YT1ib2R5IGlmIHNlbGYuY29tbWFuZCA9PSAiUE9TVCIgZWxzZSBOb25lLAogICAgICAgICAgICAgICAgICAgICAgaGVhZGVycz1oZWFkZXJzLCBtZXRob2Q9c2VsZi5jb21tYW5kKQogICAgICAgIHRyeToKICAgICAgICAgICAgcmVzcCA9IHVybG9wZW4ocmVxLCBjb250ZXh0PVNTTF9DVFgsIHRpbWVvdXQ9MTgwMCkKICAgICAgICAgICAgc2VsZi5zZW5kX3Jlc3BvbnNlKHJlc3Auc3RhdHVzKQogICAgICAgICAgICBmb3IgaywgdiBpbiByZXNwLmdldGhlYWRlcnMoKToKICAgICAgICAgICAgICAgIGlmIGsubG93ZXIoKSBub3QgaW4gKCJ0cmFuc2Zlci1lbmNvZGluZyIsKToKICAgICAgICAgICAgICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKGssIHYpCiAgICAgICAgICAgIHNlbGYuZW5kX2hlYWRlcnMoKQogICAgICAgICAgICBzZWxmLndmaWxlLndyaXRlKHJlc3AucmVhZCgpKQogICAgICAgIGV4Y2VwdCBVUkxFcnJvciBhcyBlOgogICAgICAgICAgICBsb2coZiJwYXNzdGhyb3VnaCBlcnJvcjoge2V9IikKICAgICAgICAgICAgc2VsZi5zZW5kX2Vycm9yKDUwMiwgc3RyKGUpKQoKICAgIGRlZiBfcmVzdHJlYW0oc2VsZiwgYm9keSwgcmVxX2pzb24pOgogICAgICAgIHVybCA9IHNlbGYudXBzdHJlYW0gKyBzZWxmLnBhdGgKICAgICAgICBsb2coZiJyZXN0cmVhbTogUE9TVCB7dXJsfSBtb2RlbD17cmVxX2pzb24uZ2V0KCdtb2RlbCcsJz8nKX0iKQogICAgICAgIGhlYWRlcnMgPSB7CiAgICAgICAgICAgIGs6IHYgZm9yIGssIHYgaW4gc2VsZi5oZWFkZXJzLml0ZW1zKCkKICAgICAgICAgICAgaWYgay5sb3dlcigpIG5vdCBpbiAoImhvc3QiLCAidHJhbnNmZXItZW5jb2RpbmciKQogICAgICAgIH0KICAgICAgICBoZWFkZXJzWyJBY2NlcHQiXSA9ICJ0ZXh0L2V2ZW50LXN0cmVhbSIKICAgICAgICByZXEgPSBSZXF1ZXN0KHVybCwgZGF0YT1ib2R5LCBoZWFkZXJzPWhlYWRlcnMsIG1ldGhvZD0iUE9TVCIpCgogICAgICAgIHRyeToKICAgICAgICAgICAgcmVzcCA9IHVybG9wZW4ocmVxLCBjb250ZXh0PVNTTF9DVFgsIHRpbWVvdXQ9MTgwMCkKICAgICAgICBleGNlcHQgVVJMRXJyb3IgYXMgZToKICAgICAgICAgICAgbG9nKGYicmVzdHJlYW0gdXBzdHJlYW0gZXJyb3I6IHtlfSIpCiAgICAgICAgICAgIHNlbGYuc2VuZF9lcnJvcig1MDIsIHN0cihlKSkKICAgICAgICAgICAgcmV0dXJuCgogICAgICAgIGxvZyhmInJlc3RyZWFtOiB1cHN0cmVhbSBjb25uZWN0ZWQsIHN0YXR1cz17cmVzcC5zdGF0dXN9IikKCiAgICAgICAgc2VsZi5zZW5kX3Jlc3BvbnNlKDIwMCkKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCJDb250ZW50LVR5cGUiLCAidGV4dC9ldmVudC1zdHJlYW0iKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoIkNhY2hlLUNvbnRyb2wiLCAibm8tY2FjaGUiKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoIkNvbm5lY3Rpb24iLCAia2VlcC1hbGl2ZSIpCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcigiWC1BY2NlbC1CdWZmZXJpbmciLCAibm8iKQogICAgICAgIHNlbGYuZW5kX2hlYWRlcnMoKQoKICAgICAgICB0b29sX2NhbGxzID0ge30KICAgICAgICBmaW5pc2hfcmVhc29uID0gTm9uZQogICAgICAgIGxhc3RfY2h1bmtfYmFzZSA9IE5vbmUKICAgICAgICBldmVudHNfZm9yd2FyZGVkID0gMAogICAgICAgIGV2ZW50c19idWZmZXJlZCA9IDAKCiAgICAgICAgdHJ5OgogICAgICAgICAgICBidWYgPSBiIiIKICAgICAgICAgICAgZm9yIGxpbmVfYnl0ZXMgaW4gcmVzcDoKICAgICAgICAgICAgICAgIGJ1ZiArPSBsaW5lX2J5dGVzCiAgICAgICAgICAgICAgICB3aGlsZSBiIlxuXG4iIGluIGJ1ZjoKICAgICAgICAgICAgICAgICAgICBldmVudF9ieXRlcywgYnVmID0gYnVmLnNwbGl0KGIiXG5cbiIsIDEpCiAgICAgICAgICAgICAgICAgICAgZXZlbnRfc3RyID0gZXZlbnRfYnl0ZXMuZGVjb2RlKCJ1dGYtOCIsIGVycm9ycz0icmVwbGFjZSIpLnN0cmlwKCkKCiAgICAgICAgICAgICAgICAgICAgaWYgbm90IGV2ZW50X3N0cjoKICAgICAgICAgICAgICAgICAgICAgICAgY29udGludWUKCiAgICAgICAgICAgICAgICAgICAgaWYgZXZlbnRfc3RyID09ICJkYXRhOiBbRE9ORV0iOgogICAgICAgICAgICAgICAgICAgICAgICBpZiB0b29sX2NhbGxzOgogICAgICAgICAgICAgICAgICAgICAgICAgICAgc2VsZi5fZmx1c2hfdG9vbF9jYWxscyh0b29sX2NhbGxzLCBmaW5pc2hfcmVhc29uLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBsYXN0X2NodW5rX2Jhc2UpCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBsb2coZiJyZXN0cmVhbTogZmx1c2hlZCB7bGVuKHRvb2xfY2FsbHMpfSB0b29sIGNhbGxzIikKICAgICAgICAgICAgICAgICAgICAgICAgc2VsZi53ZmlsZS53cml0ZShiImRhdGE6IFtET05FXVxuXG4iKQogICAgICAgICAgICAgICAgICAgICAgICBzZWxmLndmaWxlLmZsdXNoKCkKICAgICAgICAgICAgICAgICAgICAgICAgbG9nKGYicmVzdHJlYW06IGRvbmUuIGZvcndhcmRlZD17ZXZlbnRzX2ZvcndhcmRlZH0gIgogICAgICAgICAgICAgICAgICAgICAgICAgICAgZiJidWZmZXJlZD17ZXZlbnRzX2J1ZmZlcmVkfSIpCiAgICAgICAgICAgICAgICAgICAgICAgIHJldHVybgoKICAgICAgICAgICAgICAgICAgICBpZiBub3QgZXZlbnRfc3RyLnN0YXJ0c3dpdGgoImRhdGE6ICIpOgogICAgICAgICAgICAgICAgICAgICAgICBzZWxmLndmaWxlLndyaXRlKGV2ZW50X2J5dGVzICsgYiJcblxuIikKICAgICAgICAgICAgICAgICAgICAgICAgc2VsZi53ZmlsZS5mbHVzaCgpCiAgICAgICAgICAgICAgICAgICAgICAgIGNvbnRpbnVlCgogICAgICAgICAgICAgICAgICAgIGRhdGFfc3RyID0gZXZlbnRfc3RyWzY6XQogICAgICAgICAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgICAgICAgICAgY2h1bmsgPSBqc29uLmxvYWRzKGRhdGFfc3RyKQogICAgICAgICAgICAgICAgICAgIGV4Y2VwdCBqc29uLkpTT05EZWNvZGVFcnJvcjoKICAgICAgICAgICAgICAgICAgICAgICAgc2VsZi53ZmlsZS53cml0ZShldmVudF9ieXRlcyArIGIiXG5cbiIpCiAgICAgICAgICAgICAgICAgICAgICAgIHNlbGYud2ZpbGUuZmx1c2goKQogICAgICAgICAgICAgICAgICAgICAgICBldmVudHNfZm9yd2FyZGVkICs9IDEKICAgICAgICAgICAgICAgICAgICAgICAgY29udGludWUKCiAgICAgICAgICAgICAgICAgICAgY2hvaWNlID0gKGNodW5rLmdldCgiY2hvaWNlcyIpIG9yIFt7fV0pWzBdCiAgICAgICAgICAgICAgICAgICAgZGVsdGEgPSBjaG9pY2UuZ2V0KCJkZWx0YSIsIHt9KQogICAgICAgICAgICAgICAgICAgIGZyID0gY2hvaWNlLmdldCgiZmluaXNoX3JlYXNvbiIpCiAgICAgICAgICAgICAgICAgICAgaWYgZnI6CiAgICAgICAgICAgICAgICAgICAgICAgIGZpbmlzaF9yZWFzb24gPSBmcgoKICAgICAgICAgICAgICAgICAgICB0Y19kZWx0YXMgPSBkZWx0YS5nZXQoInRvb2xfY2FsbHMiKQogICAgICAgICAgICAgICAgICAgIGhhc19jb250ZW50ID0gImNvbnRlbnQiIGluIGRlbHRhCiAgICAgICAgICAgICAgICAgICAgaGFzX3JlYXNvbmluZyA9ICJyZWFzb25pbmdfY29udGVudCIgaW4gZGVsdGEKCiAgICAgICAgICAgICAgICAgICAgaWYgdGNfZGVsdGFzOgogICAgICAgICAgICAgICAgICAgICAgICBmb3IgdGMgaW4gdGNfZGVsdGFzOgogICAgICAgICAgICAgICAgICAgICAgICAgICAgaWR4ID0gdGMuZ2V0KCJpbmRleCIsIDApCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBpZiBpZHggbm90IGluIHRvb2xfY2FsbHM6CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgdG9vbF9jYWxsc1tpZHhdID0gewogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAiaWQiOiB0Yy5nZXQoImlkIiwgIiIpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAidHlwZSI6IHRjLmdldCgidHlwZSIsICJmdW5jdGlvbiIpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAiZnVuY3Rpb24iOiB7CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAibmFtZSI6IHRjLmdldCgiZnVuY3Rpb24iLCB7fSkuZ2V0KCJuYW1lIiwgIiIpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgImFyZ3VtZW50cyI6ICIiLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB9LAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgICAgICAgICAgICAgIGVsc2U6CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgaWYgdGMuZ2V0KCJpZCIpOgogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB0b29sX2NhbGxzW2lkeF1bImlkIl0gPSB0Y1siaWQiXQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGZuID0gdGMuZ2V0KCJmdW5jdGlvbiIsIHt9KQogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGlmIGZuLmdldCgibmFtZSIpOgogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB0b29sX2NhbGxzW2lkeF1bImZ1bmN0aW9uIl1bIm5hbWUiXSA9IGZuWyJuYW1lIl0KICAgICAgICAgICAgICAgICAgICAgICAgICAgIGFyZ3NfZnJhZyA9IHRjLmdldCgiZnVuY3Rpb24iLCB7fSkuZ2V0KCJhcmd1bWVudHMiLCAiIikKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGlmIGFyZ3NfZnJhZzoKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB0b29sX2NhbGxzW2lkeF1bImZ1bmN0aW9uIl1bImFyZ3VtZW50cyJdICs9IGFyZ3NfZnJhZwogICAgICAgICAgICAgICAgICAgICAgICBldmVudHNfYnVmZmVyZWQgKz0gMQogICAgICAgICAgICAgICAgICAgICAgICBsYXN0X2NodW5rX2Jhc2UgPSBjaHVuawoKICAgICAgICAgICAgICAgICAgICAgICAgaWYgaGFzX2NvbnRlbnQgb3IgaGFzX3JlYXNvbmluZzoKICAgICAgICAgICAgICAgICAgICAgICAgICAgIGZ3ZF9kZWx0YSA9IHt9CiAgICAgICAgICAgICAgICAgICAgICAgICAgICBpZiBoYXNfY29udGVudDoKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBmd2RfZGVsdGFbImNvbnRlbnQiXSA9IGRlbHRhWyJjb250ZW50Il0KICAgICAgICAgICAgICAgICAgICAgICAgICAgIGlmIGhhc19yZWFzb25pbmc6CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgZndkX2RlbHRhWyJyZWFzb25pbmdfY29udGVudCJdID0gZGVsdGFbInJlYXNvbmluZ19jb250ZW50Il0KICAgICAgICAgICAgICAgICAgICAgICAgICAgIGlmICJyb2xlIiBpbiBkZWx0YToKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBmd2RfZGVsdGFbInJvbGUiXSA9IGRlbHRhWyJyb2xlIl0KICAgICAgICAgICAgICAgICAgICAgICAgICAgIGZ3ZF9jaHVuayA9IGRpY3QoY2h1bmspCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmd2RfY2hvaWNlID0gZGljdChjaG9pY2UpCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmd2RfY2hvaWNlWyJkZWx0YSJdID0gZndkX2RlbHRhCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmd2RfY2hvaWNlLnBvcCgiZmluaXNoX3JlYXNvbiIsIE5vbmUpCiAgICAgICAgICAgICAgICAgICAgICAgICAgICBmd2RfY2h1bmtbImNob2ljZXMiXSA9IFtmd2RfY2hvaWNlXQogICAgICAgICAgICAgICAgICAgICAgICAgICAgc2VsZi5fc2VuZF9zc2UoZndkX2NodW5rKQogICAgICAgICAgICAgICAgICAgICAgICAgICAgZXZlbnRzX2ZvcndhcmRlZCArPSAxCiAgICAgICAgICAgICAgICAgICAgZWxzZToKICAgICAgICAgICAgICAgICAgICAgICAgc2VsZi53ZmlsZS53cml0ZShldmVudF9ieXRlcyArIGIiXG5cbiIpCiAgICAgICAgICAgICAgICAgICAgICAgIHNlbGYud2ZpbGUuZmx1c2goKQogICAgICAgICAgICAgICAgICAgICAgICBldmVudHNfZm9yd2FyZGVkICs9IDEKCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgICAgICBsb2coZiJyZXN0cmVhbSBlcnJvcjoge3R5cGUoZSkuX19uYW1lX199OiB7ZX0iKQoKICAgICAgICBpZiB0b29sX2NhbGxzOgogICAgICAgICAgICBzZWxmLl9mbHVzaF90b29sX2NhbGxzKHRvb2xfY2FsbHMsIGZpbmlzaF9yZWFzb24sIGxhc3RfY2h1bmtfYmFzZSkKICAgICAgICBzZWxmLndmaWxlLndyaXRlKGIiZGF0YTogW0RPTkVdXG5cbiIpCiAgICAgICAgc2VsZi53ZmlsZS5mbHVzaCgpCiAgICAgICAgbG9nKGYicmVzdHJlYW06IGVuZGVkIChsb29wIGV4aXQpLiBmb3J3YXJkZWQ9e2V2ZW50c19mb3J3YXJkZWR9ICIKICAgICAgICAgICAgZiJidWZmZXJlZD17ZXZlbnRzX2J1ZmZlcmVkfSIpCgogICAgZGVmIF9mbHVzaF90b29sX2NhbGxzKHNlbGYsIHRvb2xfY2FsbHMsIGZpbmlzaF9yZWFzb24sIGJhc2VfY2h1bmspOgogICAgICAgIHRjX2xpc3QgPSBbXQogICAgICAgIGZvciBpZHggaW4gc29ydGVkKHRvb2xfY2FsbHMua2V5cygpKToKICAgICAgICAgICAgdGMgPSB0b29sX2NhbGxzW2lkeF0KICAgICAgICAgICAgdGNfbGlzdC5hcHBlbmQoewogICAgICAgICAgICAgICAgImluZGV4IjogaWR4LAogICAgICAgICAgICAgICAgImlkIjogdGNbImlkIl0sCiAgICAgICAgICAgICAgICAidHlwZSI6IHRjWyJ0eXBlIl0sCiAgICAgICAgICAgICAgICAiZnVuY3Rpb24iOiB7CiAgICAgICAgICAgICAgICAgICAgIm5hbWUiOiB0Y1siZnVuY3Rpb24iXVsibmFtZSJdLAogICAgICAgICAgICAgICAgICAgICJhcmd1bWVudHMiOiB0Y1siZnVuY3Rpb24iXVsiYXJndW1lbnRzIl0sCiAgICAgICAgICAgICAgICB9LAogICAgICAgICAgICB9KQoKICAgICAgICBjaHVuayA9IHsKICAgICAgICAgICAgImlkIjogYmFzZV9jaHVuay5nZXQoImlkIiwgIiIpIGlmIGJhc2VfY2h1bmsgZWxzZSAiIiwKICAgICAgICAgICAgIm9iamVjdCI6ICJjaGF0LmNvbXBsZXRpb24uY2h1bmsiLAogICAgICAgICAgICAiY3JlYXRlZCI6IGJhc2VfY2h1bmsuZ2V0KCJjcmVhdGVkIiwgMCkgaWYgYmFzZV9jaHVuayBlbHNlIDAsCiAgICAgICAgICAgICJtb2RlbCI6IGJhc2VfY2h1bmsuZ2V0KCJtb2RlbCIsICIiKSBpZiBiYXNlX2NodW5rIGVsc2UgIiIsCiAgICAgICAgICAgICJjaG9pY2VzIjogW3sKICAgICAgICAgICAgICAgICJpbmRleCI6IDAsCiAgICAgICAgICAgICAgICAiZGVsdGEiOiB7CiAgICAgICAgICAgICAgICAgICAgInRvb2xfY2FsbHMiOiB0Y19saXN0LAogICAgICAgICAgICAgICAgfSwKICAgICAgICAgICAgICAgICJmaW5pc2hfcmVhc29uIjogZmluaXNoX3JlYXNvbiBvciAidG9vbF9jYWxscyIsCiAgICAgICAgICAgIH1dLAogICAgICAgIH0KICAgICAgICBpZiBiYXNlX2NodW5rIGFuZCAidXNhZ2UiIGluIGJhc2VfY2h1bms6CiAgICAgICAgICAgIGNodW5rWyJ1c2FnZSJdID0gYmFzZV9jaHVua1sidXNhZ2UiXQoKICAgICAgICBmb3IgdGMgaW4gdGNfbGlzdDoKICAgICAgICAgICAgYXJnc19sZW4gPSBsZW4odGNbImZ1bmN0aW9uIl1bImFyZ3VtZW50cyJdKQogICAgICAgICAgICBsb2coZiIgIHRvb2xfY2FsbDoge3RjWydmdW5jdGlvbiddWyduYW1lJ119IGFyZ3NfbGVuPXthcmdzX2xlbn0iKQoKICAgICAgICBzZWxmLl9zZW5kX3NzZShjaHVuaykKCiAgICBkZWYgX3NlbmRfc3NlKHNlbGYsIGNodW5rKToKICAgICAgICBkYXRhID0ganNvbi5kdW1wcyhjaHVuaywgc2VwYXJhdG9ycz0oIiwiLCAiOiIpKQogICAgICAgIHNlbGYud2ZpbGUud3JpdGUoZiJkYXRhOiB7ZGF0YX1cblxuIi5lbmNvZGUoKSkKICAgICAgICBzZWxmLndmaWxlLmZsdXNoKCkKCgpkZWYgbWFpbigpOgogICAgZ2xvYmFsIExPR19GSUxFCiAgICBwYXJzZXIgPSBhcmdwYXJzZS5Bcmd1bWVudFBhcnNlcihkZXNjcmlwdGlvbj0iUmUtc3RyZWFtaW5nIHByb3h5IikKICAgIHBhcnNlci5hZGRfYXJndW1lbnQoIi0tcG9ydCIsIHR5cGU9aW50LCBkZWZhdWx0PTgwMDEpCiAgICBwYXJzZXIuYWRkX2FyZ3VtZW50KCItLXVwc3RyZWFtIiwgZGVmYXVsdD0iaHR0cHM6Ly9pbmZlcmVuY2UubG9jYWwiKQogICAgcGFyc2VyLmFkZF9hcmd1bWVudCgiLS1sb2ciLCBkZWZhdWx0PSIvc2FuZGJveC8ubmVtb2NsYXcvcmVzdHJlYW0tcHJveHkubG9nIikKICAgIGFyZ3MgPSBwYXJzZXIucGFyc2VfYXJncygpCgogICAgTE9HX0ZJTEUgPSBhcmdzLmxvZwogICAgUHJveHlIYW5kbGVyLnVwc3RyZWFtID0gYXJncy51cHN0cmVhbS5yc3RyaXAoIi8iKQoKICAgIHNlcnZlciA9IEhUVFBTZXJ2ZXIoKCIxMjcuMC4wLjEiLCBhcmdzLnBvcnQpLCBQcm94eUhhbmRsZXIpCiAgICBsb2coZiJsaXN0ZW5pbmcgb24gMTI3LjAuMC4xOnthcmdzLnBvcnR9IC0+IHthcmdzLnVwc3RyZWFtfSIpCgogICAgdGhyZWFkID0gdGhyZWFkaW5nLlRocmVhZCh0YXJnZXQ9c2VydmVyLnNlcnZlX2ZvcmV2ZXIsIGRhZW1vbj1UcnVlKQogICAgdGhyZWFkLnN0YXJ0KCkKICAgIHRyeToKICAgICAgICB0aHJlYWQuam9pbigpCiAgICBleGNlcHQgS2V5Ym9hcmRJbnRlcnJ1cHQ6CiAgICAgICAgc2VydmVyLnNodXRkb3duKCkKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgbWFpbigpCg=="
+_proxy_path = Path("/sandbox/.nemoclaw/restream-proxy.py")
+_proxy_path.parent.mkdir(parents=True, exist_ok=True)
+_proxy_path.write_bytes(base64.b64decode(_proxy_b64))
+_proxy_path.chmod(0o755)
+
+# Kill any existing proxy and start fresh
+import subprocess
+subprocess.run(["pkill", "-f", "restream-proxy"], capture_output=True)
+subprocess.Popen(
+    ["python3", str(_proxy_path), "--port", "8001",
+     "--upstream", "https://inference.local"],
+    stdout=open("/sandbox/.nemoclaw/restream-proxy.log", "w"),
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+)
+import time
+time.sleep(0.5)
+# Verify proxy started
+import socket
+_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    _sock.connect(("127.0.0.1", 8001))
+    print("restream-proxy: listening on :8001", flush=True)
+except ConnectionRefusedError:
+    print("WARNING: restream-proxy failed to start on :8001", flush=True)
+finally:
+    _sock.close()
 PY
 '
 SH
