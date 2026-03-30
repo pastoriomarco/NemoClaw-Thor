@@ -179,9 +179,9 @@ resolve_model_profile() {
         qwen3.5-27b-claude-distilled-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="7"
+            THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
