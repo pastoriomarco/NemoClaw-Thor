@@ -1025,10 +1025,57 @@ Recommended order:
 
 ## Programmatic Agent Access From Host
 
-The sandbox agents can be driven programmatically from the host via SSH:
+### Preferred method: kubectl exec (validated 2026-03-30)
+
+kubectl exec runs in the pod's root network namespace, where the nonstream
+proxy (port 8199) and vLLM (host.openshell.internal:8000) are both reachable.
+This avoids the network namespace isolation problems that affect SSH.
 
 ```bash
-# Run a single agent turn and get JSON output
+# Get the cluster container name
+CLUSTER=$(docker ps --format '{{.Names}}' | grep openshell-cluster)
+
+# Run a single agent task
+docker exec -i "$CLUSTER" \
+  kubectl -n openshell exec thor-assistant -- \
+    env HOME=/sandbox \
+    openclaw agent --agent main --local --json \
+      --session-id my-task \
+      -m "your prompt here" \
+      --timeout 600
+```
+
+### Session cleanup between tasks
+
+OpenClaw maps all `--session-id` values to a single internal key. Previous
+session state contaminates new tasks. **Clear between tasks:**
+
+```bash
+docker exec -i "$CLUSTER" \
+  kubectl -n openshell exec thor-assistant -- \
+    sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.jsonl && \
+           echo "{}" > /sandbox/.openclaw-data/agents/main/sessions/sessions.json'
+```
+
+### Workspace file cleanup
+
+OpenClaw auto-generates SOUL.md, TOOLS.md, etc. in the working directory on
+each run, inflating the system prompt. **Delete before each agent run:**
+
+```bash
+docker exec -i "$CLUSTER" \
+  kubectl -n openshell exec thor-assistant -- \
+    sh -c 'cd /sandbox/work/<task-dir> && rm -f SOUL.md TOOLS.md AGENT.md AGENTS.md 2>/dev/null; true'
+```
+
+### Legacy method: SSH
+
+SSH still works for the TUI and interactive use, but runs in a separate network
+namespace. The nonstream proxy on port 8199 is **not reachable from SSH** — SSH
+sessions can only reach the gateway on port 18789. For programmatic agent
+invocation, always prefer kubectl exec.
+
+```bash
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
     -o "ProxyCommand=openshell ssh-proxy --gateway-name nemoclaw --name thor-assistant" \
     sandbox@openshell-thor-assistant \
@@ -1041,10 +1088,49 @@ Key points:
 - `--session-id` maintains conversation state across calls
 - `--json` returns structured output for parsing
 - `--local` runs the embedded agent (no gateway needed for agent CLI)
-- Multiple SSH sessions can run in parallel (one for TUI, one for automation)
 - Max concurrency: 1 main agent + 7 subagents (configured in openclaw.json)
 - The `sandbox_ssh_command` helper in `lib/sandbox-runtime.sh` wraps the SSH
   proxy setup
+
+## Non-Streaming-to-SSE Proxy
+
+The nonstream proxy (`lib/nonstream-proxy.py`) is the key enabler for reliable
+tool calls with vLLM's qwen3_coder tool_call_parser.
+
+**Problem:** vLLM's streaming `qwen3_coder` parser has an IndexError bug that
+corrupts large tool-call arguments across SSE chunks. This causes empty
+`arguments` fields and broken file writes — the dominant failure mode in agent
+runs.
+
+**Solution:** The proxy sits inside the sandbox pod on `127.0.0.1:8199`:
+1. Receives streaming requests from OpenClaw
+2. Sends `stream: false` + `chat_template_kwargs: {enable_thinking: false}` to vLLM
+3. Waits for the complete response
+4. Converts it to chunked SSE format that OpenClaw expects
+
+Tool calls arrive intact regardless of argument size. No JS patching of
+OpenClaw's provider code is needed — the `baseUrl` in openclaw.json points
+directly to `http://127.0.0.1:8199/v1`.
+
+**Deployed by:** `sync_sandbox_runtime_config()` in `lib/sandbox-runtime.sh`.
+The proxy source is written inline and started as a background process.
+
+## Validated Agent Run (Run 4, 2026-03-30)
+
+Model: `Qwen3.5-27B-Claude-Distilled-NVFP4` on Jetson AGX Thor
+
+Infrastructure: kubectl exec + nonstream proxy + session cleanup between tasks
+
+Results (manyforge_core Phase 1, 5 tasks):
+- 450 implementation lines, 45 Phase 1 test cases, 52 total tests
+- 1 bug (use-after-erase UB in trajectory_cache.cpp)
+- 0 fix cycles — each task completed first try
+- ~5 min per task wall time
+- ~$2-5 Claude Opus API cost (supervisor dispatching only)
+
+This validates the full autonomous agent pipeline: write task prompt, kubectl
+exec, download results, verify on host, commit. Zero human intervention needed
+per task.
 
 ## Version Management Strategy
 
@@ -1073,25 +1159,27 @@ Components that can update independently:
 
 ## Current Honest Summary
 
-This repo is validated end-to-end on Jetson AGX Thor with both `qwen3.5-27b-fp8`
-and `qwen3.5-35b-a3b-fp8` profiles. The full reboot recovery cycle works:
-reboot the device, run `./configure-local-provider.sh`, and the TUI connects
-with working inference.
+This repo is validated end-to-end on Jetson AGX Thor with `qwen3.5-27b-fp8`,
+`qwen3.5-27b-claude-distilled-nvfp4`, and `qwen3.5-35b-a3b-fp8` profiles.
+The full reboot recovery cycle works: reboot the device, run
+`./configure-local-provider.sh`, and the TUI connects with working inference.
 
 The integration layer handles several non-obvious issues that arise from
 running NemoClaw/OpenShell on Jetson Thor with local inference: SSH handshake
 secret rotation, network namespace isolation for the OpenClaw gateway, device
-pairing persistence across pod restarts, and accurate health checking.
+pairing persistence across pod restarts, accurate health checking, and vLLM
+streaming tool_call_parser bugs (bypassed by the nonstream proxy).
 
 What is ready for use:
 
 - local-first inference with hardened sandbox policy
 - automated reboot recovery
-- programmatic agent access from the host
+- programmatic agent access from the host (kubectl exec preferred, SSH for TUI)
+- non-streaming-to-SSE proxy for reliable tool calls
+- autonomous agent tasks via kubectl exec with zero-touch per task
 - multimodal inference (Qwen3.5 vision encoder active on 35B profile)
 
 What is not yet built:
 
-- higher-level multi-agent orchestration (coding/QA/testing workflow)
 - automated upstream update testing
 - persistent workspace volumes across pod restarts

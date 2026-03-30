@@ -140,6 +140,7 @@ prepare_thor_launch_profile() {
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
                 "--enable-prefix-caching"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
             ;;
         qwen3.5-27b)
