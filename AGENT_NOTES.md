@@ -1027,7 +1027,7 @@ Recommended order:
 
 ### Preferred method: kubectl exec (validated 2026-03-30)
 
-kubectl exec runs in the pod's root network namespace, where the nonstream
+kubectl exec runs in the pod's root network namespace, where the restream
 proxy (port 8199) and vLLM (host.openshell.internal:8000) are both reachable.
 This avoids the network namespace isolation problems that affect SSH.
 
@@ -1042,7 +1042,7 @@ docker exec -i "$CLUSTER" \
     openclaw agent --agent main --local --json \
       --session-id my-task \
       -m "your prompt here" \
-      --timeout 600
+      --timeout 1800
 ```
 
 ### Session cleanup between tasks
@@ -1071,7 +1071,7 @@ docker exec -i "$CLUSTER" \
 ### Legacy method: SSH
 
 SSH still works for the TUI and interactive use, but runs in a separate network
-namespace. The nonstream proxy on port 8199 is **not reachable from SSH** — SSH
+namespace. The restream proxy on port 8199 is **not reachable from SSH** — SSH
 sessions can only reach the gateway on port 18789. For programmatic agent
 invocation, always prefer kubectl exec.
 
@@ -1092,34 +1092,81 @@ Key points:
 - The `sandbox_ssh_command` helper in `lib/sandbox-runtime.sh` wraps the SSH
   proxy setup
 
-## Non-Streaming-to-SSE Proxy
+## Re-Streaming Proxy (recommended since 2026-03-31)
 
-The nonstream proxy (`lib/nonstream-proxy.py`) is the key enabler for reliable
+The restream proxy (`lib/restream-proxy.py`) is the key enabler for reliable
 tool calls with vLLM's qwen3_coder tool_call_parser.
 
 **Problem:** vLLM's streaming `qwen3_coder` parser has an IndexError bug that
 corrupts large tool-call arguments across SSE chunks. This causes empty
 `arguments` fields and broken file writes — the dominant failure mode in agent
-runs.
+runs. (Documented upstream: vllm-project/vllm#29192, #19056, #21544.)
 
-**Solution:** The proxy sits inside the sandbox pod on `127.0.0.1:8199`:
-1. Receives streaming requests from OpenClaw
-2. Sends `stream: false` + `chat_template_kwargs: {enable_thinking: false}` to vLLM
-3. Waits for the complete response
-4. Converts it to chunked SSE format that OpenClaw expects
+**Solution:** The restream proxy sits inside the sandbox pod on `127.0.0.1:8199`:
+1. Receives streaming requests from OpenClaw (`stream: true`)
+2. Forwards them to vLLM as streaming (`stream: true`)
+3. Passes content and reasoning deltas through immediately (keeps SSE alive)
+4. Buffers only tool-call argument fragments, reassembles them as complete chunks
+5. Emits tool calls in canonical OpenAI streaming format when the stream ends
 
-Tool calls arrive intact regardless of argument size. No JS patching of
-OpenClaw's provider code is needed — the `baseUrl` in openclaw.json points
-directly to `http://127.0.0.1:8199/v1`.
+**Advantages over the previous nonstream proxy:**
+- **No timeout wall** — continuous streaming keeps the connection alive. The old
+  nonstream proxy waited for the *entire* response before sending anything,
+  hitting OpenClaw's per-request timeout on complex tasks (5-10+ minutes).
+- **Lower KV cache pressure** — vLLM can start freeing KV cache as tokens are
+  consumed, rather than holding the full sequence until completion.
+- **Thinking mode preserved** — the restream proxy does NOT inject
+  `enable_thinking: false`. Reasoning-distilled models (Qwen3.5-Claude-Distilled)
+  can use their full reasoning capability. The old proxy suppressed thinking,
+  which was cargo-culted from Nemotron3 latency optimization and actively hurt
+  code quality on reasoning-trained models.
+- **Reasoning traces forwarded** — `reasoning_content` deltas are forwarded
+  immediately alongside regular content.
+
+**Critical implementation details:**
+- Uses `Connection: close` (not `keep-alive`) — without this, SSE clients hang
+  forever waiting for the TCP connection to close. HTTP/1.1 without Content-Length
+  requires connection close to signal response completion.
+- Uses `ThreadingHTTPServer` (not `HTTPServer`) — prevents deadlock from abandoned
+  connections blocking subsequent requests.
+- Does NOT modify request bodies — no `stream: false`, no `enable_thinking: false`.
 
 **Deployed by:** `sync_sandbox_runtime_config()` in `lib/sandbox-runtime.sh`.
-The proxy source is written inline and started as a background process.
+The proxy source is uploaded from `lib/restream-proxy.py` and started as a
+background process.
+
+### Timeout chain
+
+All timeouts must be coherent: `session >= per_request < proxy_socket`.
+
+| Layer | Value | Controls |
+|-------|-------|----------|
+| `--timeout` (agent dispatch) | 1800s | Total session wall-clock time |
+| `timeoutSeconds` (openclaw.json) | 1800s | Per-LLM-request timeout (SSE keeps alive) |
+| Proxy → vLLM `urlopen` | 3600s | Socket timeout between SSE events |
+
+With streaming, the per-request timeout (layer 2) rarely triggers because SSE
+events flow continuously. The proxy socket timeout (layer 3) only triggers if
+vLLM completely stalls. The session timeout (layer 1) is the actual wall-clock
+limit — set it to at least 1800s for coding tasks.
+
+### Previous approach: nonstream proxy (deprecated)
+
+The old nonstream proxy (`lib/nonstream-proxy.py`) used `stream: false` to
+bypass the parser bug entirely. While simpler, it caused:
+- Timeout failures on complex tasks (single blocking HTTP request)
+- Forced thinking disabled (cargo-culted from Nemotron3)
+- Higher memory pressure (full response buffered)
+
+The nonstream proxy code is retained in the repo for reference but is no longer
+deployed by `sync_sandbox_runtime_config()`.
 
 ## Validated Agent Run (Run 4, 2026-03-30)
 
 Model: `Qwen3.5-27B-Claude-Distilled-NVFP4` on Jetson AGX Thor
 
 Infrastructure: kubectl exec + nonstream proxy + session cleanup between tasks
+(Run 4 used nonstream proxy; runs after 2026-03-31 use restream proxy)
 
 Results (manyforge_core Phase 1, 5 tasks):
 - 450 implementation lines, 45 Phase 1 test cases, 52 total tests
@@ -1168,14 +1215,14 @@ The integration layer handles several non-obvious issues that arise from
 running NemoClaw/OpenShell on Jetson Thor with local inference: SSH handshake
 secret rotation, network namespace isolation for the OpenClaw gateway, device
 pairing persistence across pod restarts, accurate health checking, and vLLM
-streaming tool_call_parser bugs (bypassed by the nonstream proxy).
+streaming tool_call_parser bugs (fixed by the restream proxy).
 
 What is ready for use:
 
 - local-first inference with hardened sandbox policy
 - automated reboot recovery
 - programmatic agent access from the host (kubectl exec preferred, SSH for TUI)
-- non-streaming-to-SSE proxy for reliable tool calls
+- re-streaming proxy for reliable tool calls with thinking mode preserved
 - autonomous agent tasks via kubectl exec with zero-touch per task
 - multimodal inference (Qwen3.5 vision encoder active on 35B profile)
 

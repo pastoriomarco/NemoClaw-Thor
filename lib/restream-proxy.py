@@ -6,9 +6,9 @@ Buffers tool-call argument fragments and re-emits them as complete chunks.
 Forwards content/reasoning deltas immediately to keep the connection alive.
 
 Usage:
-    python3 restream-proxy.py [--port 8001] [--upstream https://inference.local]
+    python3 restream-proxy.py [--port 8199] [--upstream http://host.openshell.internal:8000]
 
-The proxy listens on HTTP (no TLS) and speaks HTTPS to the upstream.
+The proxy listens on HTTP (no TLS) and speaks HTTP or HTTPS to the upstream.
 """
 
 import argparse
@@ -17,7 +17,7 @@ import ssl
 import sys
 import time
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -86,7 +86,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         req = Request(url, data=body if self.command == "POST" else None,
                       headers=headers, method=self.command)
         try:
-            resp = urlopen(req, context=SSL_CTX, timeout=1800)
+            resp = urlopen(req, context=SSL_CTX, timeout=3600)
             self.send_response(resp.status)
             for k, v in resp.getheaders():
                 if k.lower() not in ("transfer-encoding",):
@@ -108,7 +108,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         req = Request(url, data=body, headers=headers, method="POST")
 
         try:
-            resp = urlopen(req, context=SSL_CTX, timeout=1800)
+            resp = urlopen(req, context=SSL_CTX, timeout=3600)
         except URLError as e:
             log(f"restream upstream error: {e}")
             self.send_error(502, str(e))
@@ -119,9 +119,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
+        self.close_connection = True
 
         tool_calls = {}
         finish_reason = None
@@ -296,15 +297,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
 def main():
     global LOG_FILE
     parser = argparse.ArgumentParser(description="Re-streaming proxy")
-    parser.add_argument("--port", type=int, default=8001)
-    parser.add_argument("--upstream", default="https://inference.local")
+    parser.add_argument("--port", type=int, default=8199)
+    parser.add_argument("--upstream", default="http://host.openshell.internal:8000")
     parser.add_argument("--log", default="/sandbox/.nemoclaw/restream-proxy.log")
     args = parser.parse_args()
 
     LOG_FILE = args.log
     ProxyHandler.upstream = args.upstream.rstrip("/")
 
-    server = HTTPServer(("127.0.0.1", args.port), ProxyHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), ProxyHandler)
     log(f"listening on 127.0.0.1:{args.port} -> {args.upstream}")
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)

@@ -620,6 +620,15 @@ sync_sandbox_runtime_config() {
         return 1
     fi
 
+    # Upload restream proxy source to sandbox before config sync.
+    # The proxy is started by the Python heredoc below.
+    local _lib_dir
+    _lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    docker exec -i "${cluster_container}" \
+        kubectl -n openshell exec -i "${sandbox_name}" -- \
+        sh -c 'mkdir -p /sandbox/.nemoclaw && cat > /sandbox/.nemoclaw/restream-proxy.py && chmod 755 /sandbox/.nemoclaw/restream-proxy.py' \
+        < "${_lib_dir}/restream-proxy.py"
+
     docker exec \
         -i \
         -e THOR_SANDBOX_NAME="${sandbox_name}" \
@@ -637,7 +646,7 @@ sync_sandbox_runtime_config() {
         sh <<'SH'
 set -euo pipefail
 
-kubectl -n openshell exec "${THOR_SANDBOX_NAME}" -- env \
+kubectl -n openshell exec -i "${THOR_SANDBOX_NAME}" -- env \
     THOR_MODEL_ID="${THOR_MODEL_ID}" \
     THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
     THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
@@ -648,8 +657,7 @@ kubectl -n openshell exec "${THOR_SANDBOX_NAME}" -- env \
     THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}" \
     THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH}" \
     THOR_OPENCLAW_TOOLS_DENY_JSON="${THOR_OPENCLAW_TOOLS_DENY_JSON}" \
-    sh -lc '
-python3 - <<'"'"'PY'"'"'
+    python3 - <<'PY'
 import json
 import os
 import pwd
@@ -722,6 +730,7 @@ with openclaw_path.open(encoding="utf-8") as f:
 agents_defaults = openclaw_cfg.setdefault("agents", {}).setdefault("defaults", {})
 agents_defaults.setdefault("model", {})["primary"] = primary_model
 agents_defaults["maxConcurrent"] = main_max_concurrent
+agents_defaults["timeoutSeconds"] = 1800
 agents_defaults.setdefault("models", {})[primary_model] = {
     "params": {
         "parallel_tool_calls": False,
@@ -807,118 +816,51 @@ with openclaw_path.open("w", encoding="utf-8") as f:
 os.chmod(openclaw_path, 0o444)
 
 # ---------------------------------------------------------------------------
-# Deploy non-streaming-to-SSE proxy.
+# Start re-streaming proxy.
 #
 # The qwen3_coder streaming tool_call_parser in vLLM corrupts large tool-call
-# arguments (IndexError / empty arguments).  The nonstream proxy sends
-# stream:false to vLLM, waits for the complete response, then converts it to
-# chunked SSE that OpenClaw expects.  Tool calls arrive intact regardless of
-# size.  Also injects chat_template_kwargs to disable thinking mode.
+# arguments (IndexError / empty arguments).  The restream proxy keeps
+# stream:true end-to-end, forwarding content/reasoning deltas immediately,
+# but buffers tool-call argument fragments and re-emits them as complete
+# chunks.  This avoids the timeout problems of the old nonstream proxy while
+# fixing the parser bug.
+#
+# The proxy source was uploaded to /sandbox/.nemoclaw/restream-proxy.py by the
+# shell wrapper before this Python heredoc runs.
 #
 # The baseUrl in openclaw.json is set to http://127.0.0.1:8199/v1 so OpenClaw
 # talks to the proxy directly — no JS patching needed.
 # ---------------------------------------------------------------------------
-import base64, subprocess, time, socket
-_proxy_src = Path("/sandbox/.nemoclaw/nonstream-proxy.py")
-_proxy_src.parent.mkdir(parents=True, exist_ok=True)
-# Read proxy source from lib/nonstream-proxy.py baked into the sandbox image,
-# or fall back to inline base64 if running outside the image build path.
-_proxy_inline = (
-    "#!/usr/bin/env python3\n"
-    "import http.server, json, urllib.request, urllib.error, sys, uuid, time\n"
-    "UPSTREAM = 'http://host.openshell.internal:8000'\n"
-    "PORT = 8199\n"
-    "class H(http.server.BaseHTTPRequestHandler):\n"
-    "    def do_GET(self):\n"
-    "        url = UPSTREAM + self.path\n"
-    "        try:\n"
-    "            resp = urllib.request.urlopen(url, timeout=30)\n"
-    "            body = resp.read()\n"
-    "            self.send_response(resp.status)\n"
-    "            for k, v in resp.getheaders():\n"
-    "                if k.lower() not in ('transfer-encoding',): self.send_header(k, v)\n"
-    "            self.send_header('Content-Length', str(len(body)))\n"
-    "            self.end_headers(); self.wfile.write(body)\n"
-    "        except Exception as e:\n"
-    "            self.send_response(502); err = str(e).encode()\n"
-    "            self.send_header('Content-Length', str(len(err)))\n"
-    "            self.end_headers(); self.wfile.write(err)\n"
-    "    def do_POST(self):\n"
-    "        cl = int(self.headers.get('Content-Length', 0))\n"
-    "        body = self.rfile.read(cl); url = UPSTREAM + self.path\n"
-    "        d = json.loads(body)\n"
-    "        d['chat_template_kwargs'] = {'enable_thinking': False}\n"
-    "        d['stream'] = False\n"
-    "        body = json.dumps(d).encode()\n"
-    "        req = urllib.request.Request(url, data=body,\n"
-    "            headers={'Content-Type': 'application/json', 'Content-Length': str(len(body))},\n"
-    "            method='POST')\n"
-    "        try:\n"
-    "            resp = urllib.request.urlopen(req, timeout=600)\n"
-    "            full = json.loads(resp.read())\n"
-    "            cid = full.get('id', 'chatcmpl-' + uuid.uuid4().hex[:16])\n"
-    "            self.send_response(200)\n"
-    "            self.send_header('Content-Type', 'text/event-stream')\n"
-    "            self.send_header('Transfer-Encoding', 'chunked')\n"
-    "            self.end_headers()\n"
-    "            for choice in full.get('choices', []):\n"
-    "                msg = choice.get('message', {})\n"
-    "                chunk = {'id': cid, 'object': 'chat.completion.chunk',\n"
-    "                         'choices': [{'index': 0,\n"
-    "                                      'delta': {'role': msg.get('role', 'assistant')},\n"
-    "                                      'finish_reason': None}]}\n"
-    "                self._send_sse(chunk)\n"
-    "                if msg.get('content'):\n"
-    "                    chunk['choices'][0]['delta'] = {'content': msg['content']}\n"
-    "                    self._send_sse(chunk)\n"
-    "                for tc in msg.get('tool_calls', []):\n"
-    "                    chunk['choices'][0]['delta'] = {'tool_calls': [tc]}\n"
-    "                    self._send_sse(chunk)\n"
-    "                chunk['choices'][0] = {'index': 0, 'delta': {},\n"
-    "                    'finish_reason': choice.get('finish_reason', 'stop')}\n"
-    "                if 'usage' in full: chunk['usage'] = full['usage']\n"
-    "                self._send_sse(chunk)\n"
-    "            self._send_chunk(b'data: [DONE]\\n\\n')\n"
-    "            self.wfile.write(b'0\\r\\n\\r\\n'); self.wfile.flush()\n"
-    "        except urllib.error.HTTPError as e:\n"
-    "            rb = e.read(); self.send_response(e.code)\n"
-    "            self.send_header('Content-Length', str(len(rb)))\n"
-    "            self.end_headers(); self.wfile.write(rb)\n"
-    "    def _send_sse(self, obj):\n"
-    "        self._send_chunk(('data: ' + json.dumps(obj) + '\\n\\n').encode())\n"
-    "    def _send_chunk(self, data):\n"
-    "        self.wfile.write(f'{len(data):x}\\r\\n'.encode())\n"
-    "        self.wfile.write(data); self.wfile.write(b'\\r\\n'); self.wfile.flush()\n"
-    "    def log_message(self, fmt, *args):\n"
-    "        sys.stderr.write(f'[proxy] {fmt % args}\\n'); sys.stderr.flush()\n"
-    "if __name__ == '__main__':\n"
-    "    s = http.server.HTTPServer(('127.0.0.1', PORT), H)\n"
-    "    print(f'nothink-proxy on 127.0.0.1:{PORT}', flush=True)\n"
-    "    s.serve_forever()\n"
-)
-_proxy_src.write_text(_proxy_inline, encoding="utf-8")
-_proxy_src.chmod(0o755)
-
-# Kill any existing proxy (old restream or new nonstream) and start fresh
-subprocess.run(["pkill", "-f", "restream-proxy"], capture_output=True)
-subprocess.run(["pkill", "-f", "nonstream-proxy"], capture_output=True)
-subprocess.Popen(
-    ["python3", str(_proxy_src)],
-    stdout=open("/sandbox/.nemoclaw/nonstream-proxy.log", "w"),
-    stderr=subprocess.STDOUT,
-    start_new_session=True,
-)
-time.sleep(0.5)
-# Verify proxy started
-_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-try:
-    _sock.connect(("127.0.0.1", 8199))
-    print("nonstream-proxy: listening on :8199", flush=True)
-except ConnectionRefusedError:
-    print("WARNING: nonstream-proxy failed to start on :8199", flush=True)
-finally:
-    _sock.close()
+import subprocess, time, socket
+_proxy_src = Path("/sandbox/.nemoclaw/restream-proxy.py")
+if not _proxy_src.exists():
+    print("ERROR: restream-proxy.py not found at " + str(_proxy_src), flush=True)
+    print("  sync_sandbox_runtime_config should have uploaded it", flush=True)
+else:
+    # Kill any existing proxy (old restream, nonstream, or nothink) and start fresh
+    subprocess.run(["pkill", "-f", "restream-proxy"], capture_output=True)
+    subprocess.run(["pkill", "-f", "nonstream-proxy"], capture_output=True)
+    subprocess.run(["pkill", "-f", "nothink-proxy"], capture_output=True)
+    time.sleep(0.3)
+    subprocess.Popen(
+        ["python3", str(_proxy_src),
+         "--port", "8199",
+         "--upstream", "http://host.openshell.internal:8000",
+         "--log", "/sandbox/.nemoclaw/restream-proxy.log"],
+        stdout=open("/sandbox/.nemoclaw/restream-proxy-stdout.log", "w"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    time.sleep(0.5)
+    # Verify proxy started
+    _sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _sock.connect(("127.0.0.1", 8199))
+        print("restream-proxy: listening on :8199", flush=True)
+    except ConnectionRefusedError:
+        print("WARNING: restream-proxy failed to start on :8199", flush=True)
+    finally:
+        _sock.close()
 PY
-'
 SH
 }
