@@ -1161,6 +1161,380 @@ bypass the parser bug entirely. While simpler, it caused:
 The nonstream proxy code is retained in the repo for reference but is no longer
 deployed by `sync_sandbox_runtime_config()`.
 
+## ManyForge Agent Orchestration Workflow (Complete Reference)
+
+This is the end-to-end workflow for dispatching coding/testing tasks to the
+local Qwen agent on the NemoClaw sandbox. Claude Code (Opus) acts as supervisor:
+sets up the workspace, writes the prompt, dispatches, monitors, quality-gates,
+and merges. The agent does the implementation.
+
+**Validated 2026-03-31:** Session 5 round 2 used this exact workflow to fix 2
+bugs and expand test coverage from 16 to 43 tests in ~14 minutes, fully
+autonomous (main agent + 2 subagents).
+
+### Prerequisites
+
+```bash
+# Store the cluster container name (used in all commands below)
+CLUSTER=$(docker ps --format '{{.Names}}' | grep openshell-cluster)
+
+# Verify the sandbox is running
+docker exec "$CLUSTER" kubectl -n openshell get pods
+
+# Verify vLLM is healthy
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  curl -s http://host.openshell.internal:8000/health
+
+# Verify restream proxy is running
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  ps aux | grep restream-proxy
+
+# If proxy is not running, re-deploy it:
+# cd ~/workspaces/nemoclaw/src/NemoClaw-Thor && ./configure-local-provider.sh <profile>
+```
+
+### Step 1: Prepare the workspace
+
+Create the task workspace in the sandbox. For Python tasks, upload the
+dependency packages alongside the task package.
+
+```bash
+# Create workspace directory
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  mkdir -p /sandbox/work/<task-id>/
+
+# Upload dependency packages (e.g. manyforge_behavior for Session 5)
+# Use openshell sandbox upload OR pipe through kubectl exec:
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  sh -c 'cat > /tmp/upload.tar' < /tmp/local-archive.tar
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  sh -c 'cd /sandbox/work/<task-id>/ && tar xf /tmp/upload.tar'
+
+# Alternative: openshell sandbox upload (simpler for directories)
+openshell sandbox upload thor-assistant ./local-dir/ /sandbox/work/<task-id>/dir/
+```
+
+### Step 2: Write and upload the task prompt
+
+Write a TASK.md file locally, then upload it. The prompt should contain:
+
+- **Task description**: What the agent should build/fix
+- **Interface/spec excerpts**: Frozen contracts the code must implement
+- **Build & test commands**: Exact commands including PYTHONPATH or cmake flags
+- **File boundaries**: Which files may be created/modified
+- **Conventions**: Naming, error handling, test organization
+- **Subagent hints** (optional): How to split work across subagents
+- **Output requirements**: RESULT.md, FILES.txt, TEST_LOG.txt
+
+**Example TASK.md structure** (from Session 5 round 2):
+
+```markdown
+# Task: Fix bugs and expand test coverage for manyforge_planning
+
+## Workspace
+All code is in `/sandbox/work/s5-planning/manyforge_planning/`.
+
+## Bugs to fix
+### Bug 1: <title>
+<Description of the bug, where it is, what the fix should achieve>
+
+### Bug 2: <title>
+<Description>
+
+## Missing test coverage
+### <Category>
+- <Test scenario description> → <expected behavior>
+
+## How to organize work
+You have access to subagents. Consider splitting:
+- One subagent for bug fixes
+- Others for new tests
+
+## Build and test
+\```bash
+cd /sandbox/work/s5-planning
+PYTHONPATH="..." python -m pytest manyforge_planning/tests/ -v --tb=short
+\```
+
+Iterate until ALL tests pass. Target: at least 30 tests.
+
+## Rules
+- Do not modify <frozen files>
+- Keep test files organized: <list>
+```
+
+Upload the prompt:
+
+```bash
+# Write TASK.md locally first, then upload
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  sh -c 'cat > /sandbox/work/<task-id>/TASK.md' < /tmp/my-task-prompt.md
+```
+
+### Step 3: Clean session state
+
+**Always clean between tasks.** OpenClaw reuses session state even with
+different `--session-id` values.
+
+```bash
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.jsonl && \
+         echo "{}" > /sandbox/.openclaw-data/agents/main/sessions/sessions.json'
+
+# Also clean auto-generated files from workspace
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  sh -c 'cd /sandbox/work/<task-id> && rm -f SOUL.md TOOLS.md AGENT.md AGENTS.md 2>/dev/null; true'
+```
+
+### Step 4: Dispatch the agent
+
+```bash
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  env HOME=/sandbox \
+  openclaw agent --agent main --local --json \
+    --session-id <task-id> \
+    --timeout 1800 \
+    -m "Read /sandbox/work/<task-id>/TASK.md and complete the task. \
+You should use subagents to parallelize the work. \
+Coordinate them, verify their work, and run the final test suite. \
+Report TASK COMPLETE when done."
+```
+
+Key flags:
+- `--timeout 1800` — 30 min session wall-clock (sufficient for most tasks)
+- `--json` — structured output (useful for automated parsing)
+- `--local` — runs the embedded agent, not through the gateway
+- Short `-m` message referencing TASK.md avoids shell quoting issues
+
+For background dispatch from Claude Code, pipe to tee:
+
+```bash
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  env HOME=/sandbox \
+  openclaw agent --agent main --local --json \
+    --session-id <task-id> \
+    --timeout 1800 \
+    -m "Read /sandbox/work/<task-id>/TASK.md and complete the task." \
+  2>&1 | tee /tmp/<task-id>-output.json
+```
+
+### Step 5: Monitor progress
+
+Monitor every 2-3 minutes while the agent runs. Check these signals:
+
+**Proxy log** — shows tool calls in real time:
+```bash
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  tail -20 /sandbox/.nemoclaw/restream-proxy.log
+```
+
+What to look for:
+- `tool_call: read` — agent reading files (normal early in session)
+- `tool_call: edit args_len=NNNN` — agent editing code (good sign)
+- `tool_call: exec` — agent running commands (builds/tests)
+- `tool_call: sessions_spawn args_len=~1000` — agent spawning subagents
+- **No new entries for >5 min** — agent may be stuck or vLLM stalled
+
+**Agent process** — verify it's still running:
+```bash
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  ps aux | grep openclaw-agent
+```
+
+**Run tests from outside** — check current state without disturbing agent:
+```bash
+# For Python packages:
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  sh -c 'cd /sandbox/work/<task-id> && \
+  PYTHONPATH="/sandbox/work/<task-id>/dep1:/sandbox/work/<task-id>/dep2:$PYTHONPATH" \
+  /sandbox/pyenv/bin/python -m pytest <package>/tests/ -v --tb=short 2>&1 | tail -50'
+
+# For C++ packages:
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  sh -c 'cd /sandbox/work/<task-id>/build && ctest --output-on-failure 2>&1'
+```
+
+**Session file size** — rough progress indicator (~10KB/min):
+```bash
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  ls -la /sandbox/.openclaw-data/agents/main/sessions/<task-id>.jsonl
+```
+
+**Modified files** — what has the agent changed:
+```bash
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  find /sandbox/work/<task-id>/<package>/ -name "*.py" -newer /sandbox/work/<task-id>/TASK.md -type f
+```
+
+**Stuck detection heuristics:**
+- No proxy log entries for >5 minutes → check if openclaw-agent is alive
+- openclaw-agent gone but no output → session completed or crashed
+- Session file not growing → agent likely idle or stuck in a loop
+- Same `tool_call: exec` repeated 3+ times → agent looping on a build error
+
+### Step 6: Download results
+
+After the agent process exits, download the modified files:
+
+```bash
+# Download the entire workspace
+mkdir -p /tmp/<task-id>-results/
+for f in <list of files to download>; do
+  docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+    cat /sandbox/work/<task-id>/$f > /tmp/<task-id>-results/$(basename $f)
+done
+
+# Or download the entire package directory (tar method):
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  sh -c 'cd /sandbox/work/<task-id> && tar cf - <package>/' | \
+  tar xf - -C /tmp/<task-id>-results/
+
+# Also grab the agent's report files:
+for f in RESULT.md FILES.txt TEST_LOG.txt; do
+  docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+    cat /sandbox/work/<task-id>/$f > /tmp/<task-id>-results/$f 2>/dev/null
+done
+```
+
+### Step 7: Quality gate
+
+Review the output before merging. This is the most important step.
+
+**7a. Diff against baseline:**
+```bash
+# If you saved a baseline before dispatch:
+diff -r /tmp/<task-id>-baseline/ /tmp/<task-id>-results/
+
+# Or diff individual files:
+diff /tmp/<task-id>-baseline/file.py /tmp/<task-id>-results/file.py
+```
+
+**7b. Review the diff for:**
+- Bug fixes are correct and minimal (no unrelated changes)
+- New code follows project conventions
+- Tests cover the right scenarios
+- No security issues (hardcoded secrets, injection vectors)
+- Frozen interfaces untouched
+- Mock changes minimal (if any)
+
+**7c. Run tests independently** (from sandbox or host):
+```bash
+# Python:
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  sh -c 'cd /sandbox/work/<task-id> && \
+  PYTHONPATH="..." /sandbox/pyenv/bin/python -m pytest <package>/tests/ -v --tb=short'
+
+# C++:
+cd /path/to/host/repo && mkdir -p build && cd build && \
+  cmake .. -DBUILD_TESTING=ON && make -j$(nproc) && ctest --output-on-failure
+```
+
+**7d. Check file scope** — verify only expected files were modified:
+```bash
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  cat /sandbox/work/<task-id>/FILES.txt
+```
+
+**Quality gate checklist:**
+- [ ] Diff reviewed — changes match task description
+- [ ] File scope respected — no unexpected files modified
+- [ ] Frozen interfaces untouched
+- [ ] All tests pass
+- [ ] No forbidden patterns (ROS headers in core, hardcoded secrets, etc.)
+
+### Step 8: Merge to host repo
+
+After quality gate passes, copy the results to the host repo and commit.
+
+```bash
+# Copy package to host repo
+cp -r /tmp/<task-id>-results/<package>/ ~/workspaces/dev_ws/src/manyforge/<package>/
+
+# Verify on host
+cd ~/workspaces/dev_ws/src/manyforge/
+# For Python: run pytest with appropriate PYTHONPATH
+# For C++: cmake build + ctest
+
+# Commit
+cd ~/workspaces/dev_ws/src/manyforge/
+git add <package>/
+git commit -m "Session <N>: <description>
+
+<N> tests passing. Agent-produced, supervisor quality-gated.
+
+Co-authored-by: Qwen3.5-27B-Claude-Distilled <local@thor>"
+```
+
+### Step 9: If quality gate fails — revision round
+
+If the quality gate finds issues, start a new agent session with fix instructions:
+
+```bash
+# Write a fix prompt referencing specific errors
+cat > /tmp/<task-id>-fix-prompt.md << 'EOF'
+# Task: Fix issues found in quality gate
+
+## Issues to fix
+1. <specific error with file:line reference>
+2. <specific error>
+
+## Build and test
+<same commands as original>
+
+## Rules
+<same rules as original>
+EOF
+
+# Upload and dispatch (reuse workspace, new session-id)
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  sh -c 'cat > /sandbox/work/<task-id>/TASK.md' < /tmp/<task-id>-fix-prompt.md
+
+# Clean session state
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.jsonl && \
+         echo "{}" > /sandbox/.openclaw-data/agents/main/sessions/sessions.json'
+
+# Dispatch
+docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
+  env HOME=/sandbox \
+  openclaw agent --agent main --local --json \
+    --session-id <task-id>-fix \
+    --timeout 1800 \
+    -m "Read /sandbox/work/<task-id>/TASK.md and fix the issues."
+```
+
+Max 2 revision rounds. If still failing after round 2, supervisor edits code
+directly on host (direct intervention).
+
+### Worked Example: Session 5 Round 2 (2026-03-31)
+
+**Task:** Fix 2 bugs in manyforge_planning, expand tests from 16 to 30+.
+
+**Workspace setup:**
+- `/sandbox/work/s5-planning/manyforge_behavior/` — dependency (KernelClient interface)
+- `/sandbox/work/s5-planning/manyforge_planning/` — the package under development
+- `/sandbox/work/s5-planning/TASK.md` — 93-line prompt describing bugs and test gaps
+
+**Prompt style:** Hint-driven. Described what each bug was and what test scenarios
+to cover, without providing implementation code. The agent figured out the fixes
+and test implementations autonomously.
+
+**Timeline:**
+- 0:00 — Agent starts, reads 5 files (roboplan_client.py, test files, conftest.py)
+- 1:30 — Runs existing tests (16 pass)
+- 3:00 — Spawns 2 subagents via `sessions_spawn`
+- 5:00 — First edit to roboplan_client.py (3683 bytes — bug fixes)
+- 6:00 — Second edit to roboplan_client.py (3110 bytes — quaternion conversion)
+- 7:00 — Tests: 37 collected, 36 pass, 1 fail (invalid frame test)
+- 9:00 — Edits roboplan_mock.py (2-line fix for frame validation)
+- 10:00 — Creates test_validation.py (10KB exec — 18 new tests)
+- 12:00 — Tests: 43 collected, 43 pass
+- 14:00 — Session complete. 138KB session file.
+
+**Quality gate result:** PASS. Both bugs correctly fixed (quaternion extraction,
+"universe" parent frame). 27 new tests covering all requested scenarios. Mock
+change was minimal (2 lines). No frozen interfaces touched.
+
 ## Validated Agent Run (Run 4, 2026-03-30)
 
 Model: `Qwen3.5-27B-Claude-Distilled-NVFP4` on Jetson AGX Thor
