@@ -45,6 +45,100 @@ Specific upstream areas that have broken or changed between versions:
 When updating, change one component at a time and verify with `./status.sh`
 after each change.
 
+## ★ ManyForge Development — Quick Navigation
+
+If you're here to run ManyForge agent sessions, go directly to these sections:
+
+1. **[Programmatic Agent Access From Host](#programmatic-agent-access-from-host)** — kubectl exec, session cleanup, SSH
+2. **[Re-Streaming Proxy](#re-streaming-proxy-recommended-since-2026-03-31)** — proxy setup, timeout chain
+3. **[ManyForge Agent Orchestration Workflow](#manyforge-agent-orchestration-workflow-complete-reference)** — full 9-step workflow with exact commands
+4. **[Sandbox Environment Requirements](#sandbox-environment-requirements-for-manyforge-v00)** — complete toolchain needed
+
+## Sandbox Environment Requirements for ManyForge v0.0
+
+The sandbox must contain **all** toolchain and library dependencies for the
+entire v0.0 walking skeleton. Running different components in different
+environments makes end-to-end testing impossible — which is a primary v0.0 goal.
+
+**Principle: one sandbox image, one build/test environment for everything.**
+
+### Required toolchain
+
+| Category | Package | Why |
+|----------|---------|-----|
+| **C++ build** | `build-essential`, `cmake`, `libgtest-dev` | manyforge_core (C++ DTOs, kernel, SM, policies, cache) |
+| **C++ extras** | `libfmt-dev` (if used), `clang-format` | Formatting, diagnostics |
+| **Python** | `python3`, `python3-pip`, `python3-venv` | manyforge_behavior, manyforge_planning |
+| **Python packages** | `pytest`, `numpy`, `py_trees`, `pybind11` | Testing, behavior trees, C++/Python bridge |
+| **Python bindings** | `nanobind`, `scikit-build-core` | RoboPlan's binding system (nanobind, not pybind11) |
+| **Pinocchio** | `pip install pin==3.7.0` (pre-built aarch64 wheel) | Robot kinematics/dynamics/collision (RoboPlan dep) |
+| **RoboPlan** | Built from source (`github.com/open-planning/roboplan`) | Planning backend (IK, RRT, TOPPRA, collision) |
+| **Viser** | `pip install viser>=1.0.1` | Visualization (HMI/Composer reference, v0.0 UI) |
+| **General** | `curl`, `git`, `ca-certificates` | Tooling |
+
+### Not required in v0.0 sandbox
+
+| Package | Why deferred |
+|---------|-------------|
+| ROS 2 Jazzy | ROS wrapper nodes are post-v0.0 |
+| MoveIt 2 | Alternative planner backend, not reference |
+| Node.js/React | HMI uses Viser-only in v0.0; React shell deferred to v0.1+ |
+| Docker-in-Docker | No container orchestration in sandbox |
+
+### How to add to sandbox image
+
+RoboPlan is not on PyPI — it must be built from source inside the Dockerfile.
+Pinocchio has pre-built aarch64 wheels. The build sequence is:
+
+```bash
+# In Dockerfile, after the existing apt-get block:
+
+# 1. System deps for RoboPlan
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libeigen3-dev libyaml-cpp-dev liburdfdom-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Python packages (Pinocchio wheel is ~18MB pre-built for aarch64)
+RUN pip3 install --break-system-packages \
+        pytest numpy py_trees pybind11 \
+        nanobind scikit-build-core \
+        pin==3.7.0 \
+        "viser>=1.0.1"
+
+# 3. RoboPlan from source (C++ build + Python bindings)
+RUN git clone --recursive https://github.com/open-planning/roboplan.git /tmp/roboplan \
+    && cd /tmp/roboplan \
+    && ./scripts/build_cmake.bash \
+    && cd bindings && pip3 install --break-system-packages --no-build-isolation -v . \
+    && rm -rf /tmp/roboplan
+```
+
+After modifying the Dockerfile:
+
+```bash
+cd ~/workspaces/nemoclaw/src/NemoClaw
+export NVIDIA_API_KEY=nvapi-<key>
+./scripts/setup.sh thor-assistant
+# Then restore provider config:
+cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
+./configure-local-provider.sh qwen3.5-35b-a3b-fp8
+```
+
+**Important:** Rebuilding the sandbox destroys all state. Download any in-progress
+work before rebuilding. Verify all packages are installed before dispatching agents.
+
+### Verification after rebuild
+
+```bash
+CLUSTER=$(docker ps --format '{{.Names}}' | grep openshell-cluster)
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- sh -c '
+  echo "=== C++ ===" && g++ --version && cmake --version &&
+  echo "=== Python ===" && python3 --version &&
+  echo "=== Python packages ===" && pip3 list 2>/dev/null | grep -iE "pytest|numpy|py.trees|pybind11|viser|roboplan" &&
+  echo "=== Node.js ===" && node --version && npm --version
+'
+```
+
 ## Validated State
 
 ### 2026-03-23 — qwen3.5-35b-a3b-fp8 (multimodal)
