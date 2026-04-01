@@ -129,6 +129,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         last_chunk_base = None
         events_forwarded = 0
         events_buffered = 0
+        client_gone = False
 
         try:
             buf = b""
@@ -220,15 +221,32 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         self.wfile.flush()
                         events_forwarded += 1
 
+        except BrokenPipeError:
+            client_gone = True
+            log(f"restream: client disconnected (BrokenPipeError). "
+                f"forwarded={events_forwarded} buffered={events_buffered}")
         except Exception as e:
             log(f"restream error: {type(e).__name__}: {e}")
+        finally:
+            # Always close the upstream response to free the vLLM KV cache slot.
+            try:
+                resp.close()
+            except Exception:
+                pass
 
-        if tool_calls:
-            self._flush_tool_calls(tool_calls, finish_reason, last_chunk_base)
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
-        log(f"restream: ended (loop exit). forwarded={events_forwarded} "
-            f"buffered={events_buffered}")
+        if client_gone:
+            return
+
+        try:
+            if tool_calls:
+                self._flush_tool_calls(tool_calls, finish_reason, last_chunk_base)
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            log(f"restream: ended (loop exit). forwarded={events_forwarded} "
+                f"buffered={events_buffered}")
+        except BrokenPipeError:
+            log(f"restream: client gone during cleanup. "
+                f"forwarded={events_forwarded} buffered={events_buffered}")
 
     def _flush_tool_calls(self, tool_calls, finish_reason, base_chunk):
         """Emit buffered tool calls in incremental format matching the OpenAI

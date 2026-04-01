@@ -51,8 +51,9 @@ If you're here to run ManyForge agent sessions, go directly to these sections:
 
 1. **[Programmatic Agent Access From Host](#programmatic-agent-access-from-host)** — kubectl exec, session cleanup, SSH
 2. **[Re-Streaming Proxy](#re-streaming-proxy-recommended-since-2026-03-31)** — proxy setup, timeout chain
-3. **[ManyForge Agent Orchestration Workflow](#manyforge-agent-orchestration-workflow-complete-reference)** — full 9-step workflow with exact commands
-4. **[Sandbox Environment Requirements](#sandbox-environment-requirements-for-manyforge-v00)** — complete toolchain needed
+3. **[ManyForge Development Rules](#manyforge-development-rules)** — supervisor/agent behavioral contracts, contract freeze
+4. **[ManyForge Agent Orchestration Workflow](#manyforge-agent-orchestration-workflow-complete-reference)** — full 9-step workflow with exact commands
+5. **[Sandbox Environment Requirements](#sandbox-environment-requirements-for-manyforge-v00)** — complete toolchain needed
 
 ## Sandbox Environment Requirements for ManyForge v0.0
 
@@ -85,43 +86,30 @@ environments makes end-to-end testing impossible — which is a primary v0.0 goa
 | Node.js/React | HMI uses Viser-only in v0.0; React shell deferred to v0.1+ |
 | Docker-in-Docker | No container orchestration in sandbox |
 
-### How to add to sandbox image
+### How to rebuild the sandbox image
 
 RoboPlan is not on PyPI — it must be built from source inside the Dockerfile.
-Pinocchio has pre-built aarch64 wheels. The build sequence is:
+Pinocchio has pre-built aarch64 wheels. See `MANYFORGE_STARTUP.md` for the
+full step-by-step process.
+
+**Key gotchas:**
+1. RoboPlan must be pre-cloned on the host (`git clone --recursive` fails inside Docker)
+2. Strip `.git` directories from the clone before copying to build context
+   (OpenShell tar has a 100-char path limit)
+3. Copy as `rp/` (short name) — the Dockerfile `COPY rp/ /tmp/roboplan/` restores
+   the canonical name inside the container
+4. Pinocchio (cmeel package) installs cmake files and shared libs under
+   `/usr/local/lib/python3.11/dist-packages/cmeel.prefix/` — the Dockerfile
+   discovers this at build time and sets `CMAKE_PREFIX_PATH` and `LD_LIBRARY_PATH`
+5. RoboPlan's tests require GMock — install `libgmock-dev` and build from
+   `/usr/src/googletest` (not `/usr/src/gtest`)
+
+After rebuilding, restore provider config:
 
 ```bash
-# In Dockerfile, after the existing apt-get block:
-
-# 1. System deps for RoboPlan
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libeigen3-dev libyaml-cpp-dev liburdfdom-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# 2. Python packages (Pinocchio wheel is ~18MB pre-built for aarch64)
-RUN pip3 install --break-system-packages \
-        pytest numpy py_trees pybind11 \
-        nanobind scikit-build-core \
-        pin==3.7.0 \
-        "viser>=1.0.1"
-
-# 3. RoboPlan from source (C++ build + Python bindings)
-RUN git clone --recursive https://github.com/open-planning/roboplan.git /tmp/roboplan \
-    && cd /tmp/roboplan \
-    && ./scripts/build_cmake.bash \
-    && cd bindings && pip3 install --break-system-packages --no-build-isolation -v . \
-    && rm -rf /tmp/roboplan
-```
-
-After modifying the Dockerfile:
-
-```bash
-cd ~/workspaces/nemoclaw/src/NemoClaw
-export NVIDIA_API_KEY=nvapi-<key>
-./scripts/setup.sh thor-assistant
-# Then restore provider config:
 cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
-./configure-local-provider.sh qwen3.5-35b-a3b-fp8
+./configure-local-provider.sh qwen3.5-27b-fp8
+./status.sh qwen3.5-27b-fp8
 ```
 
 **Important:** Rebuilding the sandbox destroys all state. Download any in-progress
@@ -1147,8 +1135,8 @@ session state contaminates new tasks. **Clear between tasks:**
 ```bash
 docker exec -i "$CLUSTER" \
   kubectl -n openshell exec thor-assistant -- \
-    sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.jsonl && \
-           echo "{}" > /sandbox/.openclaw-data/agents/main/sessions/sessions.json'
+    sh -c 'rm -f /sandbox/.openclaw/agents/main/sessions/*.jsonl && \
+           echo "{}" > /sandbox/.openclaw/agents/main/sessions/sessions.json'
 ```
 
 ### Workspace file cleanup
@@ -1254,6 +1242,56 @@ bypass the parser bug entirely. While simpler, it caused:
 
 The nonstream proxy code is retained in the repo for reference but is no longer
 deployed by `sync_sandbox_runtime_config()`.
+
+## ManyForge Development Rules
+
+### Supervisor (Claude Code / Opus) rules
+
+**ALLOWED:**
+- Assess agent output quality (diff review, test results, file boundaries)
+- Run build/test commands on host for final verification
+- Write and upload TASK.md prompts
+- Delete stale files from sandbox before new sessions
+- Direct intervention (write code) ONLY after 2 failed agent rounds
+
+**NOT ALLOWED:**
+- Write implementation code in rounds 1-2 (send errors back to the agent)
+- Modify agent-produced code (send errors back, never edit model output)
+- Manage individual coding tasks (describe what to fix, not how)
+- Skip quality gates to save time
+
+### Agent rules
+
+**MUST:**
+- Work only within declared file boundaries (listed in TASK.md)
+- Run build + test and iterate until all tests pass
+- Report "TASK COMPLETE" with RESULT.md, FILES.txt, TEST_LOG.txt
+- Report "STUCK: <description>" after 3 failed attempts on the same error
+
+**MUST NOT:**
+- Modify frozen contract headers (types/, ports/, time/iclock.hpp, time/ischeduler.hpp)
+- Invent new interfaces, DTOs, or port abstractions not in the specs
+- Include ROS headers in manyforge_core
+
+### Contract freeze rules
+
+Once frozen contracts are committed (Phase 0.5):
+- No agent may modify any file under `include/manyforge_core/types/`,
+  `include/manyforge_core/ports/`, or the IClock/IScheduler interfaces
+- If a contract bug is found, supervisor pauses all affected tasks, fixes
+  the contract on host, re-uploads to all active workers, then resumes
+- Contract headers are uploaded to `/sandbox/contracts/` AND included in
+  each worker's repo copy
+
+### Pre-clean before sessions
+
+Before dispatching any agent session, delete stale files from previous sessions
+to prevent agents from reading old code:
+
+```bash
+docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
+  rm -rf /sandbox/work/<task-id>/
+```
 
 ## ManyForge Agent Orchestration Workflow (Complete Reference)
 
@@ -1372,8 +1410,8 @@ different `--session-id` values.
 
 ```bash
 docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
-  sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.jsonl && \
-         echo "{}" > /sandbox/.openclaw-data/agents/main/sessions/sessions.json'
+  sh -c 'rm -f /sandbox/.openclaw/agents/main/sessions/*.jsonl && \
+         echo "{}" > /sandbox/.openclaw/agents/main/sessions/sessions.json'
 
 # Also clean auto-generated files from workspace
 docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
@@ -1451,7 +1489,7 @@ docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
 **Session file size** — rough progress indicator (~10KB/min):
 ```bash
 docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
-  ls -la /sandbox/.openclaw-data/agents/main/sessions/<task-id>.jsonl
+  ls -la /sandbox/.openclaw/agents/main/sessions/<task-id>.jsonl
 ```
 
 **Modified files** — what has the agent changed:
@@ -1585,8 +1623,8 @@ docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
 
 # Clean session state
 docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
-  sh -c 'rm -f /sandbox/.openclaw-data/agents/main/sessions/*.jsonl && \
-         echo "{}" > /sandbox/.openclaw-data/agents/main/sessions/sessions.json'
+  sh -c 'rm -f /sandbox/.openclaw/agents/main/sessions/*.jsonl && \
+         echo "{}" > /sandbox/.openclaw/agents/main/sessions/sessions.json'
 
 # Dispatch
 docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
