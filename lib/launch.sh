@@ -159,6 +159,28 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "qwen3_coder"
             )
             ;;
+        gemma4-31b-it-q4)
+            # llama.cpp profile — launches llama-server in the NVIDIA Gemma 4 container.
+            # Gemma 4 31B Q4_K_M with optional E4B draft model for speculative decoding.
+            # Reasoning via --reasoning-format deepseek (emits reasoning_content).
+            # Hybrid SWA/global attention with fused Gated Delta Net kernels.
+            THOR_LAUNCH_BACKEND="llamacpp"
+            THOR_LAUNCH_MODEL_SOURCE="llama-server (llama.cpp)"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="n/a"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
+            THOR_DOCKER_ENV_ARGS=()
+            THOR_VLLM_ARGS=()
+
+            THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:gemma4-jetson-thor}"
+            THOR_LLAMACPP_MODEL_PATH="${THOR_LLAMACPP_MODEL_PATH:-${THOR_HF_CACHE_DIR}/gemma-4-31B-it-GGUF/gemma-4-31B-it-Q4_K_M.gguf}"
+            THOR_LLAMACPP_DRAFT_PATH="${THOR_LLAMACPP_DRAFT_PATH:-${THOR_HF_CACHE_DIR}/gemma-4-E4B-it-GGUF/gemma-4-e4b-it-Q4_K_M.gguf}"
+            THOR_LLAMACPP_DRAFT_N="${THOR_LLAMACPP_DRAFT_N:-4}"
+            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-1048576}"
+            THOR_LLAMACPP_PARALLEL="${THOR_LLAMACPP_PARALLEL:-${THOR_TARGET_MAX_NUM_SEQS}}"
+            THOR_LLAMACPP_CACHE_TYPE_K="${THOR_LLAMACPP_CACHE_TYPE_K:-q8_0}"
+            THOR_LLAMACPP_CACHE_TYPE_V="${THOR_LLAMACPP_CACHE_TYPE_V:-q8_0}"
+            ;;
         *)
             fail "Unsupported model profile: ${profile}"
             print_supported_model_profiles
@@ -222,30 +244,58 @@ check_thor_launch_prereqs() {
         return 1
     fi
 
+    if [[ "${THOR_LAUNCH_BACKEND:-vllm}" == "llamacpp" ]]; then
+        if [[ ! -f "${THOR_LLAMACPP_MODEL_PATH:-}" ]]; then
+            fail "Model file not found: ${THOR_LLAMACPP_MODEL_PATH:-<not set>}"
+            fix "Download the GGUF model first."
+            return 1
+        fi
+        if [[ -n "${THOR_LLAMACPP_DRAFT_PATH:-}" && ! -f "${THOR_LLAMACPP_DRAFT_PATH}" ]]; then
+            warn "Draft model not found: ${THOR_LLAMACPP_DRAFT_PATH}"
+            info "Speculative decoding will be disabled. Download the draft model to enable it."
+        fi
+    fi
+
     mkdir -p "${THOR_HF_CACHE_DIR}" "${THOR_VLLM_CACHE_DIR}" "${THOR_TORCH_CACHE_DIR}" "${THOR_FLASHINFER_CACHE_DIR}"
     return 0
 }
 
 print_thor_launch_summary() {
-    echo "  Image:              ${THOR_VLLM_IMAGE}"
     echo "  Profile:            ${THOR_MODEL_PROFILE}"
     echo "  Source:             ${THOR_LAUNCH_MODEL_SOURCE}"
     echo "  Served model id:    ${THOR_MODEL_ID}"
     echo "  Bind:               ${THOR_VLLM_BIND_HOST}:${THOR_VLLM_PORT}"
     echo "  Max context:        ${THOR_LAUNCH_MAX_MODEL_LEN}"
-    echo "  KV cache dtype:     ${THOR_LAUNCH_KV_CACHE_DTYPE}"
     echo "  Max num seqs:       ${THOR_LAUNCH_MAX_NUM_SEQS}"
-    echo "  GPU mem util:       ${THOR_LAUNCH_GPU_MEMORY_UTILIZATION}"
-    if [[ -n "${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}" ]]; then
-        echo "  Max batched tokens: ${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}"
+
+    if [[ "${THOR_LAUNCH_BACKEND:-vllm}" == "llamacpp" ]]; then
+        echo "  Backend:            llama.cpp (llama-server)"
+        echo "  Image:              ${THOR_LLAMACPP_IMAGE}"
+        echo "  Model:              ${THOR_LLAMACPP_MODEL_PATH}"
+        if [[ -f "${THOR_LLAMACPP_DRAFT_PATH:-}" ]]; then
+            echo "  Draft model:        ${THOR_LLAMACPP_DRAFT_PATH}"
+            echo "  Draft tokens:       ${THOR_LLAMACPP_DRAFT_N}"
+        else
+            echo "  Draft model:        (none)"
+        fi
+        echo "  Context (total):    ${THOR_LLAMACPP_CTX}"
+        echo "  Parallel slots:     ${THOR_LLAMACPP_PARALLEL}"
+        echo "  KV cache type:      K=${THOR_LLAMACPP_CACHE_TYPE_K} V=${THOR_LLAMACPP_CACHE_TYPE_V}"
+    else
+        echo "  Image:              ${THOR_VLLM_IMAGE}"
+        echo "  KV cache dtype:     ${THOR_LAUNCH_KV_CACHE_DTYPE}"
+        echo "  GPU mem util:       ${THOR_LAUNCH_GPU_MEMORY_UTILIZATION}"
+        if [[ -n "${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}" ]]; then
+            echo "  Max batched tokens: ${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}"
+        fi
+        if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}" ]]; then
+            echo "  Chat template:      ${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}"
+        fi
+        echo "  HF cache:           ${THOR_HF_CACHE_DIR}"
+        echo "  vLLM cache:         ${THOR_VLLM_CACHE_DIR}"
+        echo "  Torch cache:        ${THOR_TORCH_CACHE_DIR}"
+        echo "  FlashInfer cache:   ${THOR_FLASHINFER_CACHE_DIR}"
     fi
-    if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}" ]]; then
-        echo "  Chat template:      ${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}"
-    fi
-    echo "  HF cache:           ${THOR_HF_CACHE_DIR}"
-    echo "  vLLM cache:         ${THOR_VLLM_CACHE_DIR}"
-    echo "  Torch cache:        ${THOR_TORCH_CACHE_DIR}"
-    echo "  FlashInfer cache:   ${THOR_FLASHINFER_CACHE_DIR}"
 }
 
 run_thor_vllm_container() {
@@ -277,4 +327,38 @@ run_thor_vllm_container() {
         "${THOR_DOCKER_ENV_ARGS[@]}" \
         "${THOR_VLLM_IMAGE}" \
         vllm serve "${THOR_LAUNCH_MODEL_SOURCE}" "${THOR_VLLM_ARGS[@]}"
+}
+
+run_thor_llamacpp_container() {
+    local docker_tty_args=()
+
+    if [[ -t 0 && -t 1 ]]; then
+        docker_tty_args=(-i -t)
+    fi
+
+    # Map host paths under THOR_HF_CACHE_DIR to /data/models inside the container.
+    local model_container_path="/data/models/${THOR_LLAMACPP_MODEL_PATH#"${THOR_HF_CACHE_DIR}/"}"
+
+    local draft_args=()
+    if [[ -f "${THOR_LLAMACPP_DRAFT_PATH:-}" ]]; then
+        local draft_container_path="/data/models/${THOR_LLAMACPP_DRAFT_PATH#"${THOR_HF_CACHE_DIR}/"}"
+        draft_args=(-md "${draft_container_path}" --draft "${THOR_LLAMACPP_DRAFT_N}")
+    fi
+
+    docker run --rm \
+        "${docker_tty_args[@]}" \
+        --runtime nvidia --network host \
+        -v "${THOR_HF_CACHE_DIR}:/data/models" \
+        "${THOR_LLAMACPP_IMAGE}" \
+        llama-server \
+            -m "${model_container_path}" \
+            "${draft_args[@]}" \
+            --host "${THOR_VLLM_BIND_HOST}" \
+            --port "${THOR_VLLM_PORT}" \
+            -np "${THOR_LLAMACPP_PARALLEL}" \
+            -c "${THOR_LLAMACPP_CTX}" \
+            --cache-type-k "${THOR_LLAMACPP_CACHE_TYPE_K}" \
+            --cache-type-v "${THOR_LLAMACPP_CACHE_TYPE_V}" \
+            --reasoning-format deepseek \
+            --reasoning auto
 }

@@ -155,6 +155,7 @@ Supported model profiles:
   qwen3.5-27b              (BF16, no quantization)
   qwen3.5-35b-a3b-fp8
   qwen3.5-35b-a3b-nvfp4
+  gemma4-31b-it-q4          (external llama-server, Q4_K_M)
 EOF
 }
 
@@ -218,6 +219,15 @@ resolve_model_profile() {
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="20"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        gemma4-31b-it-q4)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="gemma-4-31B-it-Q4_K_M.gguf"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="auto"
+            THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
