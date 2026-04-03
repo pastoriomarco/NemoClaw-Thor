@@ -180,6 +180,7 @@ prepare_thor_launch_profile() {
             THOR_LLAMACPP_PARALLEL="${THOR_LLAMACPP_PARALLEL:-${THOR_TARGET_MAX_NUM_SEQS}}"
             THOR_LLAMACPP_CACHE_TYPE_K="${THOR_LLAMACPP_CACHE_TYPE_K:-q8_0}"
             THOR_LLAMACPP_CACHE_TYPE_V="${THOR_LLAMACPP_CACHE_TYPE_V:-q8_0}"
+            THOR_LLAMACPP_CACHE_RAM="${THOR_LLAMACPP_CACHE_RAM:-2048}"
             ;;
         *)
             fail "Unsupported model profile: ${profile}"
@@ -359,6 +360,7 @@ run_thor_llamacpp_container() {
             -c "${THOR_LLAMACPP_CTX}" \
             --cache-type-k "${THOR_LLAMACPP_CACHE_TYPE_K}" \
             --cache-type-v "${THOR_LLAMACPP_CACHE_TYPE_V}" \
+            --cache-ram "${THOR_LLAMACPP_CACHE_RAM}" \
             --reasoning-format deepseek \
             --reasoning auto
 }
