@@ -227,7 +227,7 @@ resolve_model_profile() {
             THOR_MODEL_ID_DEFAULT="gemma-4-31B-it-Q4_K_M.gguf"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="auto"
-            THOR_TARGET_MAX_NUM_SEQS="3"
+            THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
