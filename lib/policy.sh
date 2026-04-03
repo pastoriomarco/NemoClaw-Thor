@@ -16,6 +16,7 @@ print_supported_policy_profiles() {
     cat <<'EOF'
 Supported static policy profiles:
   strict-local
+  strict-local-inference
   local-hardened
 EOF
 }
@@ -35,7 +36,7 @@ resolve_policy_profile() {
     local requested
     requested="$(normalize_policy_profile "${1:-${THOR_POLICY_PROFILE:-strict-local}}")"
     case "${requested}" in
-        strict-local|local-hardened)
+        strict-local|strict-local-inference|local-hardened)
             THOR_POLICY_PROFILE="${requested}"
             ;;
         *)

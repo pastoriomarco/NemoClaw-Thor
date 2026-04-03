@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/checks.sh"
 source "${SCRIPT_DIR}/lib/config.sh"
 source "${SCRIPT_DIR}/lib/sandbox-runtime.sh"
+source "${SCRIPT_DIR}/lib/egress-firewall.sh"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     echo "Usage: ./configure-local-provider.sh [model-profile]"
@@ -156,6 +157,13 @@ sys.exit(0 if content.strip() else 1)
     else
         warn "Warmup request did not return a reply — first interaction may be slow"
     fi
+fi
+
+cluster_container="$(thor_openshell_cluster_container_name 2>/dev/null || true)"
+if [[ -n "${cluster_container}" && -n "${sandbox_name}" ]]; then
+    info "Enforcing egress firewall on sandbox ${sandbox_name}..."
+    enforce_sandbox_egress_firewall "${cluster_container}" "${sandbox_name}" || \
+        warn "Could not apply egress firewall — sandbox may have unrestricted internet"
 fi
 
 echo ""
