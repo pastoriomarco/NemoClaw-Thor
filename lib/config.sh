@@ -151,11 +151,12 @@ print_supported_model_profiles() {
 Supported model profiles:
   qwen3.5-122b-a10b-nvfp4-resharded
   qwen3.5-27b-claude-distilled-nvfp4  (DeltaNet hybrid, reasoning-distilled)
+  qwopus3.5-27b-nvfp4       (DeltaNet hybrid, Opus-distilled NVFP4)
   qwen3.5-27b-fp8
-  qwen3.5-27b              (BF16, no quantization)
   qwen3.5-35b-a3b-fp8
   qwen3.5-35b-a3b-nvfp4
-  gemma4-31b-it-q4          (external llama-server, Q4_K_M)
+  gemma4-31b-it-nvfp4       (vLLM, NVFP4 quantized, vision+text+tools)
+  gemma4-26b-a4b-it         (vLLM, BF16 MoE 128E/8A, vision+text+tools)
 EOF
 }
 
@@ -186,21 +187,21 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
+        qwopus3.5-27b-nvfp4)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwopus3.5-27B-v3-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
         qwen3.5-27b-fp8)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-FP8"
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="7"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.5-27b)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-27B"
-            THOR_TARGET_MAX_MODEL_LEN="32768"
-            THOR_TARGET_KV_CACHE_DTYPE="auto"
-            THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
@@ -222,14 +223,27 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
-        gemma4-31b-it-q4)
+        gemma4-31b-it-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="gemma-4-31B-it-Q4_K_M.gguf"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="auto"
+            THOR_MODEL_ID_DEFAULT="Gemma-4-31B-IT-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_TOOL_CALL_PARSER="gemma4"
+            THOR_TARGET_QUANTIZATION="modelopt"
+            ;;
+        gemma4-26b-a4b-it)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="gemma-4-26B-A4B-it"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_TOOL_CALL_PARSER="gemma4"
+            THOR_TARGET_QUANTIZATION=""
             ;;
         *)
             echo "Unsupported model profile: ${requested}" >&2

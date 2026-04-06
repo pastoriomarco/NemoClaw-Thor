@@ -27,6 +27,7 @@ prepare_thor_launch_profile() {
     THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
     THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
     THOR_CHAT_TEMPLATE_HOST_DIR="${THOR_CHAT_TEMPLATE_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/templates}"
+    THOR_MODS_HOST_DIR="${THOR_MODS_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../docker/mods" && pwd)}"
 
     THOR_DOCKER_ENV_ARGS=()
     THOR_VLLM_ARGS=()
@@ -118,6 +119,31 @@ prepare_thor_launch_profile() {
                 "--max-num-batched-tokens" "4096"
             )
             ;;
+        qwopus3.5-27b-nvfp4)
+            # Qwen3.5-27B DeltaNet hybrid: 48 linear_attention + 16 full_attention layers.
+            # Mixed NVFP4 (W4A4 for gate/up/o_proj) + FP8 (down_proj, QKV) + BF16 (lm_head).
+            # Only the 16 full_attention layers use KV cache — much smaller KV footprint than pure dense.
+            # FlashInfer v0.6.7 FMHA works on SM110 (+38% vs triton_attn, verified).
+            # No MoE — VLLM_USE_FLASHINFER_MOE_FP4 not applicable.
+            # linear_attention layers handled by GatedDeltaNetAttention (vllm built-in).
+            THOR_LAUNCH_MODEL_SOURCE="ShinePixelOrg/Qwopus3.5-27B-v3-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--language-model-only"
+                "--reasoning-parser" "qwen3"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
+                "--enable-prefix-caching"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
+            )
+            ;;
         qwen3.5-27b-claude-distilled-nvfp4)
             # Qwen3.5-27B DeltaNet hybrid: 48 linear_attention + 16 full_attention layers.
             # Mixed NVFP4 (W4A4 for gate/up/o_proj) + FP8 (down_proj, QKV) + BF16 (lm_head).
@@ -143,44 +169,54 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
             ;;
-        qwen3.5-27b)
-            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.5-27B"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.7}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--tensor-parallel-size" "1"
-                "--attention-backend" "flashinfer"
-                "--language-model-only"
-                "--enforce-eager"
-                "--reasoning-parser" "qwen3"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_coder"
-            )
-            ;;
-        gemma4-31b-it-q4)
-            # llama.cpp profile — launches llama-server in the NVIDIA Gemma 4 container.
-            # Gemma 4 31B Q4_K_M with optional E4B draft model for speculative decoding.
-            # Reasoning via --reasoning-format deepseek (emits reasoning_content).
-            # Hybrid SWA/global attention with fused Gated Delta Net kernels.
-            THOR_LAUNCH_BACKEND="llamacpp"
-            THOR_LAUNCH_MODEL_SOURCE="llama-server (llama.cpp)"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="n/a"
+        gemma4-31b-it-nvfp4)
+            # Gemma 4 31B IT NVFP4 — dense model, ~17 GB in VRAM.
+            # Vision enabled (SigLIP2 ~550M params), tool calling via gemma4 parser.
+            # Thinking mode via reasoning-parser deepseek_r1 (<|think|> tokens).
+            # --attention-backend triton_attn: FlashInfer kernels crash on head_dim=512
+            # (Gemma 4 global attention layers). FlashInfer JIT generates invalid MMA
+            # tiling for dim>256. triton_attn handles arbitrary head sizes.
+            # See vllm-project/vllm#38887. NVFP4 GEMM still uses flashinfer-cutlass.
+            # --mm-encoder-attn-backend TORCH_SDPA: workaround for #38411 — ViT FA2
+            # PTX crash on SM110 with CUDA 13.0 host driver.
+            THOR_LAUNCH_MODEL_SOURCE="nvidia/Gemma-4-31B-IT-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
-            THOR_DOCKER_ENV_ARGS=()
-            THOR_VLLM_ARGS=()
-
-            THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:gemma4-jetson-thor}"
-            THOR_LLAMACPP_MODEL_PATH="${THOR_LLAMACPP_MODEL_PATH:-${THOR_HF_CACHE_DIR}/gemma-4-31B-it-GGUF/gemma-4-31B-it-Q4_K_M.gguf}"
-            THOR_LLAMACPP_DRAFT_PATH="${THOR_LLAMACPP_DRAFT_PATH:-}"
-            THOR_LLAMACPP_DRAFT_N="${THOR_LLAMACPP_DRAFT_N:-4}"
-            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-1048576}"
-            THOR_LLAMACPP_PARALLEL="${THOR_LLAMACPP_PARALLEL:-${THOR_TARGET_MAX_NUM_SEQS}}"
-            THOR_LLAMACPP_CACHE_TYPE_K="${THOR_LLAMACPP_CACHE_TYPE_K:-q8_0}"
-            THOR_LLAMACPP_CACHE_TYPE_V="${THOR_LLAMACPP_CACHE_TYPE_V:-q8_0}"
-            THOR_LLAMACPP_CACHE_RAM="${THOR_LLAMACPP_CACHE_RAM:-2048}"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "triton_attn"
+                "--quantization" "modelopt"
+                "--reasoning-parser" "gemma4"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "gemma4"
+                "--enable-prefix-caching"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+            )
+            ;;
+        gemma4-26b-a4b-it)
+            # Gemma 4 26B-A4B IT — MoE (128 total, 8 active, 1 shared), ~52 GB BF16.
+            # 3.8B active params per token — inference speed comparable to 4B dense.
+            # Vision enabled, tool calling via gemma4 parser, thinking via <|think|>.
+            # KV cache is small: hybrid SWA (1024 window) + 5 global attention layers.
+            # No NVFP4 quant available — runs at BF16, needs careful memory budgeting.
+            # triton_attn: same head_dim=512 FlashInfer limitation as 31B.
+            THOR_LAUNCH_MODEL_SOURCE="google/gemma-4-26B-A4B-it"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "triton_attn"
+                "--reasoning-parser" "gemma4"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "gemma4"
+                "--enable-prefix-caching"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+            )
             ;;
         *)
             fail "Unsupported model profile: ${profile}"
@@ -309,6 +345,11 @@ run_thor_vllm_container() {
 
     if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}" ]]; then
         docker_mount_args=(-v "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}:${THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH}:ro")
+    fi
+
+    # Mount host mods directory so new/updated mods are available without rebuild
+    if [[ -d "${THOR_MODS_HOST_DIR}" ]]; then
+        docker_mount_args+=(-v "${THOR_MODS_HOST_DIR}:/workspace/mods:ro")
     fi
 
     docker run --rm \

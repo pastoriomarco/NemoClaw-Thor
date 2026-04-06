@@ -3,7 +3,7 @@
 #
 # Strict local-only baseline with inference endpoint.
 # No external egress at creation time. Only the local inference
-# proxy is permitted (restream proxy → host vLLM).
+# endpoint is permitted (OpenShell provider route → host vLLM).
 #
 # Note: OpenShell policy enforcement is application-level only.
 # Kernel-level enforcement requires the iptables egress firewall

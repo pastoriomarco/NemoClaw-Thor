@@ -59,7 +59,7 @@ case "${ACTION}" in
         enforce_sandbox_egress_firewall "${cluster_container}" "${sandbox_name}"
         echo ""
         echo -e "${GREEN}${BOLD}  Sandbox internet access is now blocked.${NC}"
-        echo "  Only local inference (via restream proxy) is permitted."
+        echo "  Only local inference (via OpenShell provider route) is permitted."
         ;;
     remove)
         remove_sandbox_egress_firewall "${cluster_container}" "${sandbox_name}"

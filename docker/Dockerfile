@@ -189,78 +189,32 @@ RUN for p in /tmp/patches/vllm_*.patch; do \
         patch -p1 < "$p" || echo "Patch $(basename $p) not applicable, skipping"; \
     done
 
-# SM110 (Thor) CUTLASS arch fix:
-# Step 1: Strip 11.0f from all SM100 CUTLASS arch lists (SCALED_MM, MLA, MoE, etc.)
-#         CUTLASS sm100 kernels use enable_sm100f_only which rejects SM110 at runtime
-#         with illegal-instruction crashes. The targeted patch above handles the known
-#         blocks; this sed catches any remaining occurrences in newer vLLM versions.
-# Step 2: Restore 11.0f for two specific arch groups:
-#   - FP4_ARCHS: NVFP4 quantization kernels — safe on SM110, no enable_sm100f_only.
-#     PR #38126 (merged 2026-03-27) fixes cuda_archs_loose_intersection cross-suffix
-#     matching so "11.0f" correctly produces SM110a kernels with CUDA_ARCH=11.0a.
-#   - MoE SCALED_MM_ARCHS (controls grouped_mm_c3x_sm100.cu compilation):
-#     vLLM reuses SCALED_MM_ARCHS for both non-MoE scaled_mm and MoE grouped_mm.
-#     The non-MoE SCALED_MM_ARCHS stays stripped (enable_sm100f_only crashes SM110).
-#     The MoE SCALED_MM_ARCHS must include 11.0f so grouped_mm_c3x_sm100.cu is
-#     compiled and its symbol exists; vLLM dev209+ references it unconditionally
-#     at _C.abi3.so load time. Kernel is never dispatched — FlashInfer MoE is used
-#     (VLLM_USE_FLASHINFER_MOE_FP4=1 + VLLM_FLASHINFER_MOE_BACKEND=throughput).
-RUN echo "Step 1: Strip 11.0f from all SM100 CUTLASS arch lists..." && \
-    sed -i 's/;11\.0f//g; s/11\.0f;//g; s/"11\.0f"/""/g' CMakeLists.txt && \
-    echo "  Stripped. Remaining 11.0f count: $(grep -c '11\.0f' CMakeLists.txt || true)"
+# SM110 (Thor) CUTLASS arch fix for vLLM 0.19:
+#
+# vLLM 0.19 CMakeLists.txt natively includes "11.0f" in FP4_ARCHS, SCALED_MM_ARCHS,
+# MLA_ARCHS, and MoE arch lists when CUDA >= 13.0. This is a major improvement over
+# 0.18 where we had to strip-and-restore 11.0f manually.
+#
+# Remaining issue: CUTLASS sm100 scaled_mm kernels (non-MoE) still use
+# enable_sm100f_only which rejects SM110 at runtime. The runtime fallback mod
+# (fix-sm110-cutlass) handles this by routing to PyTorch native _scaled_mm.
+#
+# Verify the upstream arch lists are intact (no stripping needed):
+RUN echo "Verifying SM110 arch inclusion in CMakeLists.txt..." && \
+    echo "  FP4_ARCHS 11.0f count: $(grep -c 'FP4_ARCHS.*11\.0f' CMakeLists.txt || echo 0)" && \
+    echo "  SCALED_MM_ARCHS 11.0f count: $(grep -c 'SCALED_MM_ARCHS.*11\.0f' CMakeLists.txt || echo 0)" && \
+    echo "  MLA_ARCHS 11.0f count: $(grep -c 'MLA_ARCHS.*11\.0f' CMakeLists.txt || echo 0)" && \
+    echo "  Total 11.0f: $(grep -c '11\.0f' CMakeLists.txt || echo 0)"
 
-RUN python3 - <<'CMAKEPYEOF'
-import pathlib
-
-text = pathlib.Path("CMakeLists.txt").read_text()
-
-# Restore 11.0f in FP4_ARCHS (NVFP4 quant kernels — safe on SM110, no enable_sm100f_only)
-n_fp4 = text.count('cuda_archs_loose_intersection(FP4_ARCHS "10.0f"')
-text = text.replace(
-    'cuda_archs_loose_intersection(FP4_ARCHS "10.0f"',
-    'cuda_archs_loose_intersection(FP4_ARCHS "10.0f;11.0f"')
-print(f"PATCHED {n_fp4} FP4_ARCHS occurrences with 11.0f")
-
-# Restore 11.0f in ALL SCALED_MM_ARCHS "10.0f" occurrences:
-#   - Non-MoE SM100 (scaled_mm_c3x_sm100.cu): safe — disabled via VLLM_DISABLED_KERNELS
-#   - MoE SM100 (grouped_mm_c3x_sm100.cu): REQUIRED — symbol referenced unconditionally
-#     at _C.abi3.so load time by vLLM dev209+; kernel never dispatched (FlashInfer MoE used)
-# NOTE: the backward-search heuristic fails because the else-branch "10.0a;10.1a;10.3a"
-# is closer to the 12.8 guard than the if-branch "10.0f", causing a premature break.
-# Direct str.replace is simpler and correct.
-n_scaled = text.count('cuda_archs_loose_intersection(SCALED_MM_ARCHS "10.0f"')
-text = text.replace(
-    'cuda_archs_loose_intersection(SCALED_MM_ARCHS "10.0f"',
-    'cuda_archs_loose_intersection(SCALED_MM_ARCHS "10.0f;11.0f"')
-print(f"PATCHED {n_scaled} SCALED_MM_ARCHS occurrences with 11.0f")
-
-# Restore 11.0f in CUTLASS_MOE_DATA_ARCHS (moe_data.cu — symbols referenced unconditionally
-# at _C.abi3.so load time: get_cutlass_moe_mm_data_caller, get_cutlass_batched_moe_mm_data_caller,
-# get_cutlass_moe_mm_problem_sizes_from_expert_offsets_caller).
-# Kernel never dispatched on SM110 — FlashInfer MoE used (VLLM_USE_FLASHINFER_MOE_FP4=1).
-n_moe_data = text.count('cuda_archs_loose_intersection(CUTLASS_MOE_DATA_ARCHS "9.0a;10.0f;12.0f"')
-text = text.replace(
-    'cuda_archs_loose_intersection(CUTLASS_MOE_DATA_ARCHS "9.0a;10.0f;12.0f"',
-    'cuda_archs_loose_intersection(CUTLASS_MOE_DATA_ARCHS "9.0a;10.0f;11.0f;12.0f"')
-print(f"PATCHED {n_moe_data} CUTLASS_MOE_DATA_ARCHS occurrences with 11.0f")
-
-pathlib.Path("CMakeLists.txt").write_text(text)
-print(f"Final 11.0f count: {text.count('11.0f')}")
-CMAKEPYEOF
-
-# SM110 MoE kernel selection: add is_device_capability_family(110)/(120) checks so
-# NVFP4 CUTLASS MoE kernels are preferred over Marlin on SM110.
-# flashinfer_cutlass_moe.py: fixed upstream in PR #33417 (no-op if already present).
-# flashinfer_trtllm_moe.py: still unfixed upstream as of vLLM 0.18.x.
+# SM110 MoE kernel selection:
+# flashinfer_cutlass_moe.py: FIXED upstream in 0.19 — includes SM110 check.
+# flashinfer_trtllm_moe.py: still only checks family(100) as of 0.19.0.
 RUN python3 - <<'PYEOF'
 import pathlib
 
 PATCHES = [
     ("vllm/model_executor/layers/fused_moe/flashinfer_cutlass_moe.py", [
-        (
-            "p.is_device_capability_family(100)\n        )\n        and has_flashinfer_cutlass_fused_moe",
-            "p.is_device_capability_family(100)\n            or p.is_device_capability_family(110)\n            or p.is_device_capability_family(120)\n        )\n        and has_flashinfer_cutlass_fused_moe",
-        ),
+        # Verify upstream fix is present (no-op)
     ]),
     ("vllm/model_executor/layers/fused_moe/flashinfer_trtllm_moe.py", [
         (
@@ -276,6 +230,12 @@ for fname, replacements in PATCHES:
         print(f"SKIP {fname}: not found")
         continue
     text = p.read_text()
+    if not replacements:
+        if "is_device_capability_family(110)" in text:
+            print(f"VERIFIED {fname}: SM110 support present upstream")
+        else:
+            print(f"WARNING {fname}: SM110 support NOT found upstream — manual patch may be needed")
+        continue
     changed = False
     for old, new in replacements:
         if old in text:
@@ -362,16 +322,18 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # FLASHINFER_CUDA_ARCH_LIST=11.0a and contain valid sm_110a code.
 # This enables the FlashInfer attention backend on Thor.
 # With --tf5 (PRE_TRANSFORMERS=1, the default): override vLLM's and compressed-tensors'
-# transformers<5 constraint, then explicitly install transformers==5.4.0.
+# transformers<5 constraint, then explicitly install transformers==5.5.0.
 # transformers 5.2.0: first native Qwen3.5 support.
 # transformers 5.3.0: NVFP4 Blackwell quantization integration, Qwen3.5 bug fixes.
 # transformers 5.4.0: Qwen3.5 classification, FP8 grouped matmul speedup.
+# transformers 5.5.0: Gemma 4 model class (Gemma4ForConditionalGeneration),
+#   Gemma4Config, Gemma4VisionConfig, Gemma4AudioConfig, Gemma4Processor.
 RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
     --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     if [ "$PRE_TRANSFORMERS" = "1" ]; then \
         echo "transformers>=5.0.0" > /tmp/tf-override.txt && \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin) --override /tmp/tf-override.txt && \
-        uv pip install "transformers==5.4.0" --override /tmp/tf-override.txt; \
+        uv pip install "transformers==5.5.0" --override /tmp/tf-override.txt; \
     else \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin); \
     fi

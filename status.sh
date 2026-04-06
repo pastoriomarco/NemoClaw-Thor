@@ -88,12 +88,14 @@ header "OpenShell Sandbox"
 echo ""
 
 sandbox_name=""
+cluster_container=""
 if ! command -v openshell &>/dev/null; then
     fail "openshell not found — cannot check sandbox status"
     record 1
 else
     sandbox_list=$(openshell sandbox list 2>/dev/null || echo "")
     sandbox_name=$(resolve_thor_sandbox_name 2>/dev/null || echo "")
+    cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || echo "")
     sandbox_phase=""
     if [[ -n "${sandbox_name}" ]]; then
         sandbox_phase=$(echo "${sandbox_list}" \

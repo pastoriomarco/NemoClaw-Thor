@@ -1,21 +1,22 @@
-# User Quickstart Manual
+# User Quickstart Manual — NemoClaw-Thor v4
 
-This manual is the operator path for `NemoClaw-Thor` on a Thor that already has
-OpenShell installed and the Thor host fixes applied.
+Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor with NemoClaw v0.0.6+
+and OpenShell v0.0.22.
 
 Validated baseline:
 
-- gateway: `nemoclaw`
-- sandbox: `thor-assistant`
-- provider: `vllm-local`
-- policy: `strict-local`
+- NemoClaw: v0.0.6+
+- OpenShell: v0.0.22
+- vLLM: v0.19.0 (custom SM110 image)
+- Gateway: `nemoclaw`
+- Sandbox: `thor-v4`
+- Provider: `vllm-local`
 
 Important rule:
 
 - `./start-model.sh <profile>` only starts vLLM.
-- `./configure-local-provider.sh <profile>` binds NemoClaw/OpenShell to the
-  running model, ensures the gateway is up, and repairs native
-  `nemoclaw thor-assistant connect` if the OpenShell SSH handshake state drifted.
+- `./configure-local-provider.sh [profile]` binds OpenShell to the running
+  model, patches openclaw.json inside the sandbox, and sends a warmup request.
 
 ## 1. Shell Prep
 
@@ -28,135 +29,125 @@ nvm use 22
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-## 2. Clean Install From Scratch
+## 2. First-Time Setup (After Fresh NemoClaw Install)
 
-Use this on a fresh Thor install or after a full uninstall.
+Use this on a fresh Thor or after a full reinstall.
 
-1. Apply the Thor host fixes once:
+1. Install NemoClaw and OpenShell upstream (if not done):
 
 ```bash
-./apply-host-fixes.sh
+cd ~/NemoClaw && git pull origin main && npm install && npm link
 ```
 
-2. Start the model server and leave it running in that terminal:
+2. Run the NemoClaw onboard wizard:
 
 ```bash
-./start-model.sh qwen3.5-35b-a3b-fp8
+nemoclaw onboard
 ```
 
-3. In a second terminal, run the installer:
+This creates the sandbox (e.g. `thor-v4`), the OpenShell gateway, and bakes a
+base config into the sandbox image. Some onboard defaults are wrong for local
+models (see "Known onboard issues" below) — `configure-local-provider.sh`
+fixes them.
+
+3. Start the model server and leave it running in that terminal:
 
 ```bash
-./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+./start-model.sh qwopus3.5-27b-nvfp4
 ```
 
-4. Verify and connect:
+4. In a second terminal, configure and verify:
 
 ```bash
-./status.sh qwen3.5-35b-a3b-fp8
-nemoclaw thor-assistant connect
+./configure-local-provider.sh
+./status.sh
+nemoclaw thor-v4 connect
 ```
 
-Notes:
+### Known onboard issues
 
-- `install.sh` now ensures the `nemoclaw` OpenShell gateway is running before it
-  continues.
-- If `~/NemoClaw` already exists, this is no longer a clean install. Either use
-  `./uninstall.sh` first or switch to the reconfigure/start paths below.
+`nemoclaw onboard` bakes these defaults that break local model inference:
 
-## 3. Start An Existing Install
+| Setting | Onboard default | Required value | Fixed by |
+|---------|----------------|----------------|----------|
+| `inference.api` | `openai-responses` | `openai-completions` | `configure-local-provider.sh` |
+| `reasoning` | `false` | `true` | `configure-local-provider.sh` |
+| `maxTokens` | `4096` | `16384` | `configure-local-provider.sh` |
+| `baseUrl` | (cloud endpoint) | `https://inference.local/v1` | `configure-local-provider.sh` |
 
-Use this when the repo is already installed and you only need to bring the stack
- back up.
+The `openai-responses` API bypasses vLLM's `--tool-call-parser` and breaks tool
+calling for all local models. See NemoClaw issue #976.
 
-1. Start the model server and leave it running:
+## 3. Start After Reboot
+
+Same sequence every time — no special reboot handling needed:
+
+1. Start the model server:
 
 ```bash
-./start-model.sh qwen3.5-35b-a3b-fp8
+./start-model.sh qwopus3.5-27b-nvfp4
 ```
 
-2. Rebind the local provider and repair the sandbox runtime state if needed:
+2. Rebind the provider and patch the sandbox:
 
 ```bash
-./configure-local-provider.sh qwen3.5-35b-a3b-fp8
+./configure-local-provider.sh
 ```
 
 3. Verify and connect:
 
 ```bash
-./status.sh qwen3.5-35b-a3b-fp8
-nemoclaw thor-assistant connect
+./status.sh
+nemoclaw thor-v4 connect
 ```
 
-This is also the clean reboot path. After a reboot, do the same 3 steps above.
+If `./status.sh` says the sandbox is missing, re-run `nemoclaw onboard`.
 
-If `./status.sh` still says the sandbox is missing, recreate it with:
+## 4. Switch Model
+
+Stop vLLM (Ctrl-C in the model terminal), drop caches, start the new model,
+reconfigure:
 
 ```bash
-./install.sh qwen3.5-35b-a3b-fp8 --policy-profile strict-local
+sudo sync && sudo sysctl -w vm.drop_caches=3
+./start-model.sh qwen3.5-35b-a3b-nvfp4
+./configure-local-provider.sh qwen3.5-35b-a3b-nvfp4
 ```
 
-## 4. Reconfigure An Existing Install
+Always drop caches between model switches — Thor's unified memory is not
+automatically freed.
 
-### Switch NemoClaw to a different running model
+## 5. Model Profiles
 
-Start the new model first, then rebind the provider:
+| Profile | Model | Notes |
+|---------|-------|-------|
+| `qwen3.5-122b-a10b-nvfp4-resharded` | 122B MoE | Most capable, local resharded weights |
+| `qwopus3.5-27b-nvfp4` | 27B DeltaNet | Opus-distilled, NVFP4 |
+| `qwen3.5-27b-claude-distilled-nvfp4` | 27B DeltaNet | Claude-distilled, NVFP4 |
+| `qwen3.5-27b-fp8` | 27B dense | MTP speculative decoding |
+| `qwen3.5-35b-a3b-fp8` | 35B MoE | Fastest Qwen, MTP spec |
+| `qwen3.5-35b-a3b-nvfp4` | 35B MoE | NVFP4 quantized |
+| `gemma4-31b-it-nvfp4` | 31B dense | Vision+text, NVFP4 |
+| `gemma4-26b-a4b-it` | 26B MoE | Vision+text, BF16 |
 
-```bash
-./configure-local-provider.sh <profile>
-./status.sh <profile>
-nemoclaw thor-assistant connect
-```
+### Launcher overrides
 
-Examples:
-
-```bash
-./configure-local-provider.sh qwen3.5-27b-fp8
-./configure-local-provider.sh qwen3.5-35b-a3b-fp8
-./configure-local-provider.sh qwen3.5-122b-a10b-nvfp4-resharded
-```
-
-### Reset stale local session history
-
-If a prior local run left the embedded session store in a bad state:
-
-```bash
-./reset-sandbox-session-state.sh <profile>
-```
-
-### Launcher knobs
-
-The most relevant per-run overrides for `./start-model.sh` are:
+The most relevant per-run overrides for `./start-model.sh`:
 
 - `THOR_MAX_MODEL_LEN`
 - `THOR_KV_CACHE_DTYPE`
 - `THOR_MAX_NUM_SEQS`
-- `THOR_OPENCLAW_MAIN_MAX_CONCURRENT`
 - `THOR_GPU_MEMORY_UTILIZATION`
 - `THOR_MAX_NUM_BATCHED_TOKENS`
 
-Example for `35B-A3B-FP8`:
+Example:
 
 ```bash
 THOR_MAX_MODEL_LEN=65536 \
 THOR_KV_CACHE_DTYPE=fp8 \
 THOR_MAX_NUM_SEQS=20 \
-THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1 \
 THOR_GPU_MEMORY_UTILIZATION=0.80 \
-THOR_MAX_NUM_BATCHED_TOKENS=8192 \
-./start-model.sh qwen3.5-35b-a3b-fp8
-```
-
-Example for `122B-A10B-NVFP4-resharded`:
-
-```bash
-THOR_MAX_MODEL_LEN=65536 \
-THOR_KV_CACHE_DTYPE=fp8 \
-THOR_MAX_NUM_SEQS=6 \
-THOR_OPENCLAW_MAIN_MAX_CONCURRENT=1 \
-THOR_GPU_MEMORY_UTILIZATION=0.80 \
-THOR_MAX_NUM_BATCHED_TOKENS=8192 \
-./start-model.sh qwen3.5-122b-a10b-nvfp4-resharded
+./start-model.sh qwen3.5-35b-a3b-nvfp4
 ```
 
 Persistent defaults are saved in:
@@ -165,12 +156,12 @@ Persistent defaults are saved in:
 ~/.config/nemoclaw-thor/config.env
 ```
 
-## 5. Use The Installed Sandbox
+## 6. Use The Sandbox
 
 Connect:
 
 ```bash
-nemoclaw thor-assistant connect
+nemoclaw thor-v4 connect
 ```
 
 Inside the sandbox, the main interactive UI is:
@@ -187,34 +178,18 @@ HOME=/sandbox openclaw gateway run &
 openclaw tui
 ```
 
-Quick smoke test inside the sandbox:
-
-```bash
-openclaw agent --agent main --local --thinking off \
-  -m "Reply with one word: working" --session-id test
-```
-
-Tool-use smoke test inside the sandbox:
-
-```bash
-openclaw agent --agent main --local --thinking off \
-  -m "Run uname -a and python3 --version, write both to /sandbox/smoke.txt, then reply done." \
-  --session-id smoke-tools
-cat /sandbox/smoke.txt
-```
-
 ### Work on a repo copy inside the sandbox
 
 Upload a repo into `/sandbox`:
 
 ```bash
-openshell sandbox upload thor-assistant /path/to/repo /sandbox/myrepo
+openshell sandbox upload thor-v4 /path/to/repo /sandbox/myrepo
 ```
 
 Then connect and work in the copy:
 
 ```bash
-nemoclaw thor-assistant connect
+nemoclaw thor-v4 connect
 cd /sandbox/myrepo
 openclaw tui
 ```
@@ -228,7 +203,7 @@ Important:
 Copy the repo back out:
 
 ```bash
-openshell sandbox download thor-assistant /sandbox/myrepo /path/to/output-copy
+openshell sandbox download thor-v4 /sandbox/myrepo /path/to/output-copy
 ```
 
 Or copy out only a patch:
@@ -242,38 +217,12 @@ git diff > /sandbox/myrepo.patch
 Then on the host:
 
 ```bash
-openshell sandbox download thor-assistant /sandbox/myrepo.patch .
+openshell sandbox download thor-v4 /sandbox/myrepo.patch .
 ```
 
-### Dashboard
+## 7. Stop Without Uninstalling
 
-The dashboard is optional.
-
-- Use `openclaw tui` for real prompting.
-- The dashboard is still useful for visibility, but browser-originated prompts
-  are not fully reliable on this Thor setup.
-
-If you still want the dashboard:
-
-1. Inside the sandbox, make sure the OpenClaw gateway is running (see above).
-
-2. On the host, start the access helper:
-
-```bash
-./start-dashboard-access.sh
-```
-
-3. Open the tokenized URL printed by the helper in Firefox.
-
-To print the token URL again inside the sandbox:
-
-```bash
-HOME=/sandbox openclaw dashboard --no-open
-```
-
-## 6. Stop Without Uninstalling
-
-### Leave only the current shell
+### Leave the sandbox shell
 
 ```bash
 exit
@@ -292,72 +241,42 @@ docker ps --format '{{.ID}}\t{{.Command}}' | grep 'vllm serve'
 docker stop <container-id>
 ```
 
-After stopping vLLM, reclaim memory before starting another model:
+After stopping vLLM, always reclaim memory before starting another model:
 
 ```bash
-sudo sync
-sudo sysctl -w vm.drop_caches=3
+sudo sync && sudo sysctl -w vm.drop_caches=3
 ```
 
 ### Stop the OpenShell gateway
 
 ```bash
-openshell gateway stop
+nemoclaw stop
 ```
 
-### Stop the dashboard path
-
-If you started the browser dashboard helper:
-
-```bash
-./stop-dashboard-access.sh
-```
-
-Then stop the sandbox-side `openclaw gateway run` process with `Ctrl-C`.
-
-## 7. Uninstall Cleanly
-
-1. Stop the model server and drop caches:
-
-```bash
-docker ps --format '{{.ID}}\t{{.Command}}' | grep 'vllm serve'
-docker stop <container-id>
-sudo sync
-sudo sysctl -w vm.drop_caches=3
-```
-
-2. Stop the OpenShell gateway:
+Or directly:
 
 ```bash
 openshell gateway stop
 ```
-
-3. Remove the NemoClaw-Thor tracked install:
-
-```bash
-./uninstall.sh
-```
-
-4. If you also want to revert the saved Thor host changes:
-
-```bash
-./restore-host-state.sh
-```
-
-Notes:
-
-- `./uninstall.sh` removes the tracked sandbox, tracked providers, the
-  `nemoclaw` CLI, `~/NemoClaw`, and the Thor runtime config.
-- It does not remove OpenShell itself, Docker, Node.js, or local model weights.
-- It asks whether to remove `~/.nemoclaw`.
 
 ## 8. Practical Rules
 
-- Use `nemoclaw thor-assistant connect` as the normal shell entrypoint.
+- Use `nemoclaw thor-v4 connect` as the normal shell entrypoint.
 - Use `openclaw tui` as the normal prompt UI.
 - If the TUI shows "gateway disconnected": `HOME=/sandbox openclaw gateway run &`
 - After any model change, run `./configure-local-provider.sh <profile>`.
-- After a reboot, use the same path as any normal restart:
-  `./start-model.sh`, then `./configure-local-provider.sh`, then `./status.sh`.
-- If you stop vLLM, always run `sudo sysctl -w vm.drop_caches=3` before loading
-  another model.
+- After a reboot: `./start-model.sh`, `./configure-local-provider.sh`,
+  `./status.sh`, `nemoclaw thor-v4 connect`.
+- If you stop vLLM, always run `sudo sync && sudo sysctl -w vm.drop_caches=3`
+  before loading another model.
+
+## Key Differences From v3
+
+| Aspect | v3 | v4 |
+|--------|----|----|
+| Setup | `./install.sh` + `./apply-host-fixes.sh` | `nemoclaw onboard` + `configure-local-provider.sh` |
+| Sandbox | `thor-assistant` | `thor-v4` |
+| Inference | Restream proxy (port 8199) → host vLLM | OpenShell provider route → host vLLM |
+| Tool streaming | Proxy buffered tool-call fragments | vLLM 0.19 native fix (PR #35615) |
+| Scripts | 25+ scripts | 4 scripts + 5 libs |
+| Teardown | `./uninstall.sh` + `./restore-host-state.sh` | `nemoclaw stop` + remove sandbox manually |
