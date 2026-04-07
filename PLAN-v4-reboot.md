@@ -1,7 +1,8 @@
 # NemoClaw-Thor v4 — Full Stack Upgrade & Agentic Workflow Reboot
 
 **Created**: 2026-04-04
-**Status**: Planning (not yet started)
+**Updated**: 2026-04-07
+**Status**: Phases A-E mostly complete; D and F remaining
 **Prerequisite**: No active agentic sessions running on Thor
 
 ---
@@ -138,23 +139,48 @@ the old session. Needs verification.
 
 ---
 
-### Phase D — OpenClaw Upgrade — NOT STARTED
+### Phase D — OpenClaw Upgrade — DEFERRED (2026-04-07)
 
-OpenClaw in the sandbox is still 2026.3.11 (baked into base image). Latest
-is 2026.4.5. Not yet upgraded — the v4 session focused on the outer stack.
+OpenClaw in the sandbox is 2026.3.11 (pinned in `Dockerfile.base` line 122).
+Latest available is 2026.4.5 (11 releases behind).
 
-- [ ] Determine how OpenClaw is installed (base image vs runtime install)
-- [ ] Update to v2026.4.5
-- [ ] Test tool-call repair (the original restream proxy justification)
-- [ ] Test subagent spawning and concurrency
-- [ ] Audit config schema changes
+#### Decision: Do not upgrade now
+
+**Investigated**: Full changelog review of 2026.3.12 → 2026.4.5.
+
+**Relevant fixes in newer versions**:
+- Tool call ID deduplication for OpenAI-compatible backends (3.24, 4.5)
+- Omit `strict` fields for non-native providers like vLLM (3.24, 4.5)
+- Tool-call argument repair on streamed deltas (4.5)
+- Sandbox `write` creating empty files fix (3.13)
+- Subagent stability: timeout recheck, workspace resolution, scope fixes (multiple)
+- Per-agent thinking/reasoning defaults (3.28)
+- `agents.defaults.params` for global provider params (4.1)
+
+**Why not upgrade**:
+1. **Provider-plugin refactor (3.12)**: Ollama/vLLM/SGLang moved to plugin
+   architecture with provider-owned onboarding, discovery, model-picker hooks.
+   NemoClaw's `registerProvider()` shape may be incompatible — untested.
+2. **Plugin SDK restructure (3.22)**: `openclaw/extension-api` removed entirely.
+   NemoClaw uses runtime-injected stubs so this may not break, but is unverified.
+3. **NemoClaw upstream still pins 2026.3.11**: No commits in ~/NemoClaw bump
+   the OpenClaw version. NVIDIA hasn't validated the upgrade path.
+4. **npm install -g won't work**: `/usr/local/lib/node_modules` is read-only
+   per sandbox Landlock policy. Only path is re-onboard with new Dockerfile.base.
+5. **vLLM 0.19 already has the streaming fix** (PR #35615 merged 2026-03-03).
+   The tool call fixes we most need are already in the inference layer.
+
+**When to revisit**:
+- When NemoClaw upstream bumps their OpenClaw pin (watch `Dockerfile.base`)
+- If Phase F testing reveals tool call or subagent bugs traceable to OpenClaw
+- If a critical security fix in OpenClaw affects sandbox operation
 
 ---
 
-### Phase E — NemoClaw-Thor Script Refactoring ✓ COMPLETE (2026-04-06)
+### Phase E — NemoClaw-Thor Script Refactoring ✓ MOSTLY COMPLETE (2026-04-06/07)
 
 Scripts were stripped to proven-necessary only. Deleted files are recoverable
-from git history.
+from git history. Config and concurrency tuning completed 2026-04-07.
 
 #### E.1: Legacy launcher cleanup ✓
 
@@ -191,87 +217,198 @@ Remaining scripts (4 + 5 libs):
 - `enforce-egress-firewall.sh` — standalone iptables control
 - `lib/checks.sh`, `lib/config.sh`, `lib/launch.sh`, `lib/sandbox-runtime.sh`, `lib/egress-firewall.sh`
 
-#### E.4: configure-local-provider.sh — PARTIAL
+#### E.4: configure-local-provider.sh — MOSTLY COMPLETE (2026-04-07)
 
-Active: provider create/update, inference route, vLLM model check, warmup,
-openclaw.json 4-field patch (api, reasoning, maxTokens, baseUrl).
+Active (uncommented and working):
+- Provider create/update, inference route, vLLM model check, warmup
+- openclaw.json 4-field patch (api, reasoning, maxTokens, baseUrl)
+- **Model identity update** — sets `model["id"]` and `model["name"]` so
+  model switching works without re-onboarding
+- **Onboard config rewrite** — writes correct model ID/provider to
+  `/sandbox/.nemoclaw/config.json`
+- **Agent behavior** — sets `agents.defaults.model.primary`,
+  `maxConcurrent`, `timeoutSeconds=1800`
+- **Subagent concurrency** — sets `maxConcurrent`, `maxChildrenPerAgent`,
+  `maxSpawnDepth` from env vars computed by `resolve_thor_openclaw_concurrency_targets()`
 
-Commented out (with detailed explanations in code):
+Deliberately removed (with code comments explaining why):
+- `temperature` — vLLM auto-loads from model's `generation_config.json`.
+  Qwen 3.5 model card: "DO NOT use greedy decoding." Gemma 4 ships with 1.0.
+- `parallel_tool_calls=False` — OpenAI API default is `true`, which is correct.
+  v3 disabled it due to streaming parser bugs fixed in vLLM 0.19.
+
+Still commented out (need individual validation):
 - SSH handshake reconciliation
 - NemoClaw registry update
 - OpenClaw gateway lifecycle + device pre-pairing
-- Subagent concurrency config
-- Agent behavior (temperature, parallel_tool_calls, timeout)
 - Gateway auth bypass
 - Tool deny list
 - Directory/permission setup
 - Egress firewall
 
-Each block needs individual testing to determine if v4 stack makes it
-unnecessary.
+#### E.5: status.sh ✓ COMPLETE (2026-04-07)
 
-#### E.5: status.sh ✓
+Fixed bugs:
+- `cluster_container` was never defined — egress firewall check was
+  silently skipped. Now resolves alongside `sandbox_name`.
+- `parallel_tool_calls` check: changed from "warn if not false" to
+  info-only display (setting was intentionally removed).
+- Temperature check: changed from "warn if not 0" to "info: model
+  default via vLLM" (setting was intentionally removed).
+- Egress firewall grep: `grep -c "DROP" || echo "0"` produced `0\n0`
+  (grep returns exit 1 on no match, triggering the fallback). Fixed
+  with `|| true`.
 
-Fixed bug: `cluster_container` was never defined — egress firewall check
-was silently skipped. Now resolves alongside `sandbox_name`.
+#### E.6: KV cache budget & concurrency tuning ✓ COMPLETE (2026-04-07)
+
+All 8 model profiles recalculated from actual KV cache architecture:
+- `max_model_len` → 262144 (256K) for all profiles
+- `max_num_seqs` derived from per-model KV/seq at 256K (see KV-CACHE-BUDGET.md)
+- `gpu_memory_utilization` → 0.80 for all except 122B (0.85)
+- `THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT` added per profile
+- `resolve_thor_openclaw_concurrency_targets()` rewritten with fair
+  children distribution: `min(4, ceil(subagent_slots / main_agents))`
+
+Key insight: Qwen 3.5 DeltaNet hybrids only cache 25% of layers (every
+4th layer uses KV, rest use O(1) recurrent state). Gemma 4 SWA layers
+cache only 1024 tokens. Naive `max_model_len * max_num_seqs` dramatically
+overestimates memory needs.
+
+Reference: `KV-CACHE-BUDGET.md` (new) — full derivation, per-model math,
+calibration section for actual vLLM log values.
 
 ---
 
-### Phase F — Agentic Workflow End-to-End Validation
+### Phase F — Agentic Workflow End-to-End Validation — IN PROGRESS (2026-04-07)
 
 Full validation of the complete agent pipeline on the new stack.
+Recommended model for ManyForge dev: Qwen 3.5 35B-A3B (NVFP4 or FP8) —
+best agentic benchmarks (Tau2: 81.2), FlashInfer attention, most sequence
+slots (22-26), mature tool parser.
 
-#### F.1: Basic agent session
+#### E.7: Tool call parser fix ✓ COMPLETE (2026-04-07)
 
-- [ ] Start model via `start-model.sh qwen3.5-35b-a3b-nvfp4`
-- [ ] Configure provider via `configure-local-provider.sh`
-- [ ] Connect to sandbox via `nemoclaw <name> connect`
-- [ ] Run a simple coding task (create a file, run tests)
-- [ ] Verify thinking/reasoning works (reasoning_content in stream)
-- [ ] Verify tool calls work (file write, file read, bash execution)
+**Problem**: `qwen3_coder` streaming parser drops `content` argument on large
+tool calls — model sends `{"file_path":"fibonacci.py"}` with no content.
+This was the original v3 restream proxy motivator. vLLM 0.19's PR #35615
+fix did NOT resolve it for the qwen3_coder parser.
 
-#### F.2: Multi-agent session
+**Root cause**: `qwen3_coder` uses regex-based streaming that can't reliably
+reassemble large `<parameter>` values fragmented across SSE chunks.
 
-- [ ] Start main agent with subagent config (maxConcurrent=3)
-- [ ] Trigger a task that spawns subagents
-- [ ] Verify subagents execute concurrently
-- [ ] Verify subagent tool access restrictions work
-- [ ] Monitor vLLM KV cache usage under concurrent load
+**Fix**: Switched all 6 Qwen profiles from `--tool-call-parser qwen3_coder`
+to `--tool-call-parser qwen3_xml` in `lib/launch.sh`. The `qwen3_xml` parser
+(new in vLLM 0.19) uses Python's expat XML parser with deferred parsing mode
+— it buffers large parameter values until the closing `</parameter>` tag
+arrives, architecturally solving the fragmentation problem.
 
-#### F.3: Large tool call stress test
+**Verified**: Qwopus 27B NVFP4 with `qwen3_xml` successfully wrote a 378-line,
+9,927-char Python file via streaming tool call. Gemma 4 profiles were already
+using the `gemma4` parser, which works correctly for large writes.
 
-The original motivator for the restream proxy — large `write` tool calls with
-hundreds of lines of code.
+#### F.1: Basic agent session ✓ PASSED (2026-04-07)
 
-- [ ] Generate a task that produces 500+ line file writes
-- [ ] Verify arguments arrive complete
-- [ ] Test with and without restream proxy to confirm OpenClaw repair works
+Tested with Qwopus 3.5-27B NVFP4 + `qwen3_xml` parser via OpenClaw TUI.
+
+- [x] Start model via `start-model.sh qwopus3.5-27b-nvfp4`
+- [x] Configure provider via `configure-local-provider.sh qwopus3.5-27b-nvfp4`
+- [x] Connect to sandbox via `nemoclaw thor-v4 connect`
+- [x] Simple coding task: created fibonacci.py, 3 modes (recursive, iterative,
+      memoized), argparse CLI, error handling. All outputs match (F(30)=832040).
+- [x] Thinking/reasoning: enabled, model used reasoning to plan refactor
+- [x] Tool calls: Write, Read, Exec all working
+- [x] Self-recovery: model noticed truncated write, read partial file, fixed it
+
+Also tested with Gemma 4 31B IT NVFP4:
+- [x] Tool calls work (gemma4 parser delivers content correctly)
+- [x] BUT: 6.7 tok/s too slow for multi-step agentic work (15+ min for
+      fibonacci refactor task). Reasoning eats into maxTokens budget causing
+      repeated truncated writes (different from qwen3_coder empty-content bug —
+      content is present but cut short by token limit exhaustion).
+
+#### F.2: Multi-agent concurrency ✓ PASSED (2026-04-07)
+
+Tested via direct vLLM API (bypassing OpenClaw) with concurrent curl requests
+to validate the inference layer handles multi-agent load correctly.
+
+**3 concurrent requests** (simulating main + 2 subagents):
+- All completed in 39s, correct outputs, diverse tasks (prime check,
+  linked list reversal, binary search)
+
+**6 concurrent requests** (simulating 3 main + 3 subagents):
+- All 6 completed in 21s
+- Aggregate throughput: **73.1 tok/s** (vs ~9.3 tok/s single-request)
+- vLLM confirmed: `Running: 6 reqs`, generation throughput **77.0 tok/s**
+- KV cache usage: **3.2%** (massive headroom for longer contexts)
+- Prefix cache hit rate: **81.9%**
+- MTP spec decode acceptance: **71-93%** (avg ~82%)
+
+**Confirms bandwidth-bound scaling**: 6 concurrent sequences yield ~8x
+single-request throughput. Per-agent throughput stays constant. Filling
+sequence slots is free performance, as documented in KV-CACHE-BUDGET.md.
+
+Note: This tests vLLM concurrency, not OpenClaw subagent spawning (which
+requires a real agentic session that triggers `/subagents`). OpenClaw-level
+subagent testing deferred to a live ManyForge session.
+
+#### F.3: Large tool call stress test ✓ PASSED (2026-04-07)
+
+Tested via direct vLLM API with `qwen3_xml` parser, streaming enabled.
+
+- [x] Requested 15+ utility functions with type hints and docstrings
+- [x] Model produced **378-line, 9,927-char** Python file in a single write
+- [x] JSON arguments: **valid**, both `file_path` and `content` present
+- [x] `finish_reason: tool_calls` (not `length` — fit in token budget)
+- [x] No proxy needed — direct vLLM streaming works with `qwen3_xml`
+
+**Previous failure mode (qwen3_coder)**: Model would send `{"file_path":
+"fibonacci.py"}` with no content, loop retrying the same broken call 15+
+times. Switching to `qwen3_xml` completely resolved this.
 
 #### F.4: Long session stability
 
 - [ ] Run a 30+ minute agentic session
-- [ ] Monitor VRAM usage for leaks (the prompt cache issue with llama.cpp,
-      and potential vLLM KV cache growth)
+- [ ] Monitor VRAM usage for leaks (unified memory on Thor)
 - [ ] Verify `sync && echo 3 > /proc/sys/vm/drop_caches` reclaims memory
       after vLLM restart
 
-#### F.5: Gemma 4 on vLLM (if supported)
+#### F.5: Gemma 4 validation — MOSTLY DONE (2026-04-07)
 
-- [ ] Test Gemma 4 31B IT via vLLM 0.19 with transformers 5.5
-- [ ] Compare throughput vs llama.cpp GGUF Q4_K_M
-- [ ] Test thinking mode (`<|think|>` / reasoning_content)
-- [ ] Test tool calling (Gemma 4 tool parser in vLLM)
+- [x] Gemma 4 31B IT NVFP4 on vLLM — verified (6.7 tok/s, triton_attn)
+- [x] Gemma 4 26B-A4B IT on vLLM — verified (20.9 tok/s, triton_attn)
+- [x] Model switching via `configure-local-provider.sh` — verified
+      (gemma4-26b-a4b-it successfully configured, openclaw.json updated)
+- [x] Tool calling (Gemma 4 tool parser) — verified in TUI agent session.
+      Write tool delivers content correctly (no parser bug like qwen3_coder).
+- [x] Reasoning enabled — model uses thinking but consumes too many tokens,
+      causing repeated truncated writes (maxTokens exhaustion, not parser bug).
+- [ ] Long agentic session — impractical at 6.7 tok/s (15+ min for simple
+      multi-step task). Not recommended for ManyForge development.
+- Note: Gemma 4 is triton_attn-only (head_dim=512 breaks FlashInfer),
+  needs `--mm-encoder-attn-backend TORCH_SDPA` on SM110.
+- Note: Model weights 31 GiB (not estimated 21 GiB) due to SigLIP vision
+  encoder. Available KV: 64.21 GiB. See KV-CACHE-BUDGET.md calibration.
 
 #### F.6: Model switching
 
-- [ ] Stop Qwen model, start Gemma 4 (llama.cpp), reconfigure provider
-- [ ] Stop Gemma 4, start Qwen 122B, reconfigure provider
-- [ ] Verify each switch is clean (no stale processes, no VRAM leaks)
+- [x] configure-local-provider.sh now updates model ID/name in openclaw.json
+      without re-onboarding (model identity update in sandbox-runtime.sh)
+- [ ] Full cycle test: Qwen → Gemma → Qwen, verify clean switching
+- [ ] Verify no stale processes, no VRAM leaks between switches
 - [ ] Run `sync && echo 3 > /proc/sys/vm/drop_caches` between switches
 
 ---
 
-## 3. Risk Register
+## 3. Git History
+
+Commits on branch `v4-reboot`:
+1. `37c4b21` — v4 reboot: proxy removal, script cleanup, docs rewrite
+2. `b2acf9c` — model switching, KV-based concurrency, correct sampling defaults
+3. (pending) — qwen3_xml parser fix, KV calibration data, F.1-F.3 test results
+
+---
+
+## 4. Risk Register
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
@@ -285,7 +422,7 @@ hundreds of lines of code.
 
 ---
 
-## 4. Rollback Plan
+## 5. Rollback Plan
 
 Keep the v3 image tagged and available:
 ```
@@ -300,23 +437,26 @@ If v4 has issues:
 
 ---
 
-## 5. Estimated Effort
+## 6. Remaining Effort
 
-| Phase | Effort | Blocking |
-|-------|--------|----------|
-| A — vLLM image build | 4-6 hours (build time) + 2h patch review | Nothing |
-| B — NemoClaw upgrade | 30 min | Phase A (need new image for testing) |
-| C — OpenShell upgrade | 30 min | Phase B |
-| D — OpenClaw upgrade | 1-2 hours | Phase C |
-| E — Script refactoring | 3-4 hours | Phase A, B, C, D |
-| F — E2E validation | 2-3 hours | Phase E |
+| Phase | Item | Status |
+|-------|------|--------|
+| ~~F.1~~ | ~~Basic agent session~~ | **PASSED** — qwopus + qwen3_xml |
+| ~~F.2~~ | ~~Multi-agent concurrency~~ | **PASSED** — 6 concurrent, 77 tok/s aggregate |
+| ~~F.3~~ | ~~Large tool call stress test~~ | **PASSED** — 378 lines, 9.9K chars, valid JSON |
+| B.3 | Sandbox survival (restart gateway, verify persistence) | 10 min |
+| B.4 | Security hardening (auth, secret redaction, device pairing) | 15 min |
+| C.2 | OpenShell compat (SSH handshake, sandbox_ssh_command) | 15 min |
+| E.4 | Remaining commented blocks (7 items, case-by-case) | 1-2 hours |
+| F.4 | Long session stability / memory monitoring | 1 hour |
+| F.6 | Full model switching cycle | 30 min |
+| D | OpenClaw upgrade — **DEFERRED** (see Phase D notes) | — |
 
-**Total**: ~12-16 hours elapsed, ~8-10 hours active work.
-The image build (Phase A) dominates wall-clock time and can run unattended.
+**Recommended order**: B.3/B.4/C.2 → E.4 remaining → F.4/F.6
 
 ---
 
-## 6. Future Considerations (Not In Scope)
+## 7. Future Considerations (Not In Scope)
 
 - **TurboQuant**: Upstream PR #38280 is broken (0.27x throughput, OOM, hybrid model
   incompatible). pastoriomarco fork is triton_attn-only. Revisit when upstream stabilizes.

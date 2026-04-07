@@ -58,7 +58,7 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_coder"
+                "--tool-call-parser" "qwen3_xml"
                 "--enable-prefix-caching"
             )
             ;;
@@ -75,7 +75,7 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_coder"
+                "--tool-call-parser" "qwen3_xml"
                 "--speculative-config" "${THOR_LAUNCH_SPECULATIVE_CONFIG}"
             )
             ;;
@@ -92,7 +92,7 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_coder"
+                "--tool-call-parser" "qwen3_xml"
                 "--speculative-config" "${THOR_LAUNCH_SPECULATIVE_CONFIG}"
             )
             ;;
@@ -114,7 +114,7 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_coder"
+                "--tool-call-parser" "qwen3_xml"
                 "--enable-prefix-caching"
                 "--max-num-batched-tokens" "4096"
             )
@@ -139,7 +139,7 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_coder"
+                "--tool-call-parser" "qwen3_xml"
                 "--enable-prefix-caching"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
@@ -164,7 +164,7 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_coder"
+                "--tool-call-parser" "qwen3_xml"
                 "--enable-prefix-caching"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )

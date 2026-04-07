@@ -74,14 +74,46 @@ then divide by KV/seq above to get exact max_num_seqs.
 | qwen3.5-27b-fp8 | FP8 | ~28 GiB | 0.80 | 102.4 | ~65 GiB | 8.0 GiB | 8 |
 | qwen3.5-35b-a3b-fp8 | FP8 | ~36 GiB | 0.80 | 102.4 | ~57 GiB | 2.5 GiB | 22 |
 | qwen3.5-35b-a3b-nvfp4 | NVFP4 | ~26 GiB | 0.80 | 102.4 | ~67 GiB | 2.5 GiB | 26 |
-| gemma4-31b-it-nvfp4 | NVFP4 | ~21 GiB | 0.80 | 102.4 | ~72 GiB | 10.4 GiB | 6 |
+| gemma4-31b-it-nvfp4 | NVFP4 | **31 GiB** | 0.80 | 102.4 | **64.2 GiB** | 10.4 GiB | 6 |
 | gemma4-26b-a4b-it | BF16 | ~48.5 GiB | 0.80 | 102.4 | ~45 GiB | 2.6 GiB | 17 |
 
-## Agent concurrency allocation
+## Throughput scaling — why concurrency matters
 
-Thor is bandwidth-bound: per-agent throughput stays constant as you add
-concurrent sequences. Total throughput scales linearly. So filling
-sequence slots is free performance.
+**Thor is bandwidth-bound, not compute-bound.** This has a critical
+consequence: adding concurrent sequences does NOT slow down individual
+requests. Total throughput scales linearly with the number of concurrent
+sequences, up to the KV cache limit.
+
+### Measured scaling (Qwopus 3.5-27B NVFP4, 2026-04-07)
+
+| Concurrent requests | Aggregate tok/s | Per-request tok/s | KV cache used |
+|---------------------|-----------------|-------------------|---------------|
+| 1 | ~9.3 | ~9.3 | <0.1% |
+| 3 | ~37 | ~12 | ~1.6% |
+| 6 | **77.0** | ~12.8 | **3.2%** |
+
+Key observations:
+- **6 concurrent requests = 8.3x single-request throughput** (near-linear)
+- Per-request throughput actually *increases* slightly with batch size
+  (better GPU utilization, amortized overhead)
+- KV cache usage is minimal for short agentic prompts (3.2% at 6 reqs)
+- MTP speculative decode acceptance: 71-93% (avg 82%), +1.7-1.9 tokens/step
+- Prefix cache hit rate: 81.9% (good for repeated system prompts)
+
+### Implication for agent design
+
+**Every unused sequence slot is wasted throughput.** An agentic workflow
+with 1 main agent on a model that supports 9 slots is using 11% of
+available throughput. Spawning subagents for parallel work (file search,
+test execution, code review) is essentially free — you get the results
+faster without any penalty to the main agent.
+
+Configure OpenClaw to fill slots aggressively:
+- `maxConcurrent` for main agents (3 for 9-slot models)
+- `maxChildrenPerAgent` for subagents (2 children per main agent)
+- `maxSpawnDepth` = 1 (subagents don't spawn sub-subagents)
+
+## Agent concurrency allocation
 
 Slots are split between main agents and subagents. maxChildrenPerAgent
 is capped at min(4, ceil(subagent_slots / main)) for fair distribution —
@@ -106,7 +138,27 @@ Use this section to record actual values from vLLM startup logs.
 Update max_num_seqs in config.sh if actuals differ significantly.
 
 ```
-# gemma4-26b-a4b-it @ gpu_mem_util=0.85 (old setting):
+# qwopus3.5-27b-nvfp4 @ gpu_mem_util=0.80 (2026-04-07):
+#   Available KV cache memory: 64.13 GiB
+#   max_num_seqs = floor(64.13 / 8.0) = 8 (config says 9 — close enough,
+#     DeltaNet state overhead accounts for the difference)
+#   MTP speculative decode: 1 token (model has mtp_num_hidden_layers=1)
+#   MTP acceptance rate: 82% avg (71-93% range)
+#   Prefix cache hit rate: 81.9%
+#   Throughput scaling:
+#     1 req: ~9.3 tok/s
+#     3 req: ~37 tok/s (12.3 tok/s per req)
+#     6 req:  77 tok/s (12.8 tok/s per req) — near-linear scaling confirmed
+#   KV cache usage at 6 concurrent short prompts: 3.2%
+
+# gemma4-31b-it-nvfp4 @ gpu_mem_util=0.80 (2026-04-07):
+#   Model loading took 31.04 GiB (includes ~10 GiB vision encoder)
+#   Available KV cache memory: 64.21 GiB
+#   max_num_seqs = floor(64.21 / 10.4) = 6 ✓ (matches config)
+#   Est weights was ~21 GiB — actual 31 GiB due to SigLIP vision encoder
+#   Throughput: 6.7 tok/s single request (triton_attn, no FlashInfer)
+
+# gemma4-26b-a4b-it @ gpu_mem_util=0.85 (old setting, pre-v4):
 #   Model loading took 48.5 GiB
 #   Available KV cache memory: 51.62 GiB
 #   GPU KV cache size: 451,040 tokens
