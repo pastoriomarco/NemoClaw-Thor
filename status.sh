@@ -295,22 +295,26 @@ print("" if value is None else value)
             record 2
         fi
 
-        if [[ "${openclaw_parallel_tool_calls}" == "false" ]]; then
-            pass "Sandbox parallel tool calls disabled"
+        # parallel_tool_calls is NOT set by configure-local-provider.sh — the
+        # OpenAI API default (true) is used. v3 disabled it due to streaming
+        # parser bugs; vLLM 0.19 fixes those. Only report current value.
+        if [[ "${openclaw_parallel_tool_calls}" == "true" || -z "${openclaw_parallel_tool_calls}" || "${openclaw_parallel_tool_calls}" == "null" ]]; then
+            info "Sandbox parallel tool calls: ${openclaw_parallel_tool_calls:-default} (API default)"
             record 0
         else
-            warn "Sandbox parallel tool calls setting is '${openclaw_parallel_tool_calls:-unknown}' — expected 'false'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
-            record 2
+            info "Sandbox parallel tool calls: ${openclaw_parallel_tool_calls}"
+            record 0
         fi
 
-        if [[ "${openclaw_temperature}" == "0" ]]; then
-            pass "Sandbox temperature: ${openclaw_temperature}"
+        # Temperature is NOT set by configure-local-provider.sh — vLLM auto-loads
+        # model-specific defaults from generation_config.json (e.g. 1.0 for Gemma 4,
+        # 0.6 for Qwen 3.5 coding). Any non-null value is fine; only warn if missing.
+        if [[ -n "${openclaw_temperature}" && "${openclaw_temperature}" != "null" ]]; then
+            info "Sandbox temperature: ${openclaw_temperature} (model default via vLLM)"
             record 0
         else
-            warn "Sandbox temperature is '${openclaw_temperature:-unknown}' — expected '0'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
-            record 2
+            info "Sandbox temperature: not set (vLLM will use model's generation_config.json)"
+            record 0
         fi
 
         if [[ "${openclaw_main_max_concurrent}" == "${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}" ]]; then
@@ -407,9 +411,12 @@ fi
 
 # ── Egress firewall ──────────────────────────────────────────
 if [[ -n "${cluster_container}" && -n "${sandbox_name}" ]]; then
+    # grep -c prints "0" and returns exit code 1 when no matches — use || true
+    # to prevent set -e from aborting, then default empty result to 0.
     fw_drop_count=$(docker exec "${cluster_container}" \
         iptables -L "${EGRESS_FW_CHAIN}" -n 2>/dev/null \
-        | grep -c "DROP" || echo "0")
+        | grep -c "DROP" || true)
+    fw_drop_count="${fw_drop_count:-0}"
     if [[ "${fw_drop_count}" -gt 0 ]]; then
         pass "Egress firewall active — sandbox internet access blocked"
         record 0

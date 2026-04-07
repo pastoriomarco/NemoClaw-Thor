@@ -672,92 +672,81 @@ inference = (
 inference["api"] = "openai-completions"
 inference["baseUrl"] = "https://inference.local/v1"
 
+# --- Model identity: update model ID and name in the provider model list ---
+# Required for model switching without re-onboarding. Onboard bakes the
+# original model's ID/name into the models array; this overwrites them
+# with the currently served model.
 for model in inference.get("models", []):
     if isinstance(model, dict):
+        model["id"] = model_id
+        model["name"] = f"inference/{model_id}"
         model["reasoning"] = os.environ.get("THOR_TARGET_MODEL_REASONING", "false").lower() == "true"
         model["maxTokens"] = int(os.environ.get("THOR_TARGET_MAX_TOKENS") or "16384")
         model["contextWindow"] = context_window
 
-# --- Not yet proven necessary with v4 stack ---
-# Uncomment individually as testing reveals they're needed.
+# --- Onboard config rewrite (/sandbox/.nemoclaw/config.json) ---
+# Required for model switching. Onboard writes the original model's name
+# here; NemoClaw reads it on startup to determine which provider/model
+# to use for agent dispatch. Without this, `nemoclaw agent` routes to a
+# stale model ID after switching.
+from datetime import datetime, timezone
+provider_name = os.environ["THOR_LOCAL_PROVIDER_NAME"]
+provider_label = "Local vLLM" if provider_name == "vllm-local" else provider_name
+onboard_path = Path("/sandbox/.nemoclaw/config.json")
+if onboard_path.exists():
+    with onboard_path.open(encoding="utf-8") as f:
+        onboard_cfg = json.load(f)
+else:
+    onboard_cfg = {}
+onboard_cfg.update({
+    "endpointType": "custom",
+    "endpointUrl": "https://inference.local/v1",
+    "ncpPartner": None,
+    "model": model_id,
+    "profile": "inference-local",
+    "credentialEnv": "OPENAI_API_KEY",
+    "provider": provider_name,
+    "providerLabel": provider_label,
+    "onboardedAt": datetime.now(timezone.utc).isoformat(),
+})
+onboard_path.parent.mkdir(parents=True, exist_ok=True)
+with onboard_path.open("w", encoding="utf-8") as f:
+    json.dump(onboard_cfg, f, indent=2)
+    f.write("\n")
 
-# # --- Onboard config rewrite (/sandbox/.nemoclaw/config.json) ---
-# # What: overwrites NemoClaw's own config file inside the sandbox with our
-# #   provider name, model id, endpoint URL, and a fresh onboardedAt timestamp.
-# # Why it existed: when switching models (e.g. qwopus → gemma4), the onboard
-# #   config still referenced the old model. NemoClaw reads this on startup to
-# #   determine which provider/model to use for `nemoclaw agent` dispatch.
-# # Why it may not be needed: we only use one model profile at a time now, and
-# #   onboard already wrote the correct values. Only matters if model switching
-# #   without re-onboarding is needed.
-# #
-# import pwd
-# from datetime import datetime, timezone
-# provider_name = os.environ["THOR_LOCAL_PROVIDER_NAME"]
-# provider_label = "Local vLLM" if provider_name == "vllm-local" else provider_name
-# onboard_path = Path("/sandbox/.nemoclaw/config.json")
-# if onboard_path.exists():
-#     with onboard_path.open(encoding="utf-8") as f:
-#         onboard_cfg = json.load(f)
-# else:
-#     onboard_cfg = {}
-# onboard_cfg.update({
-#     "endpointType": "custom",
-#     "endpointUrl": "https://inference.local/v1",
-#     "ncpPartner": None,
-#     "model": model_id,
-#     "profile": "inference-local",
-#     "credentialEnv": "OPENAI_API_KEY",
-#     "provider": provider_name,
-#     "providerLabel": provider_label,
-#     "onboardedAt": datetime.now(timezone.utc).isoformat(),
-# })
-# onboard_path.parent.mkdir(parents=True, exist_ok=True)
-# with onboard_path.open("w", encoding="utf-8") as f:
-#     json.dump(onboard_cfg, f, indent=2)
-#     f.write("\n")
+# --- Agent behavior: primary model ref, concurrency, timeout ---
+# Sets the primary model reference so OpenClaw routes to the correct model.
+# Sets timeoutSeconds=1800 (30min) to prevent long reasoning sessions from
+# being killed by a short default timeout.
+# NOTE: temperature is NOT set here. vLLM auto-loads the correct sampling
+# defaults from each model's generation_config.json (e.g. temperature=1.0
+# for Gemma 4, temperature=0.6 for Qwen 3.5 coding). Hardcoding temperature
+# here would override those model-specific defaults.
+# NOTE: parallel_tool_calls is NOT set here. The OpenAI API default is true.
+# v3 disabled it because older models produced broken multi-tool responses
+# through the restream proxy. With vLLM 0.19 native tool streaming, this
+# restriction may no longer be needed. If parallel tool calls cause issues,
+# add: agents_defaults.setdefault("models", {})[primary_model] = {
+#     "params": {"parallel_tool_calls": False}}
+primary_model = f"inference/{model_id}"
+agents_defaults = openclaw_cfg.setdefault("agents", {}).setdefault("defaults", {})
+agents_defaults.setdefault("model", {})["primary"] = primary_model
+agents_defaults["maxConcurrent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT") or "1")
+agents_defaults["timeoutSeconds"] = 1800
 
-# # --- Agent behavior (primary model, temperature, parallel tool calls, timeout) ---
-# # What: sets the primary model reference (inference/<model_id>), forces
-# #   temperature=0 for deterministic output, disables parallel_tool_calls,
-# #   sets maxConcurrent=1 for the main agent, and timeoutSeconds=1800.
-# # Why it existed: local models produce garbage when attempting multiple tool
-# #   calls in one turn (parallel_tool_calls). temperature=0 prevents random
-# #   variation in code generation. timeoutSeconds=1800 (30min) prevents long
-# #   reasoning sessions from being killed by a short default timeout.
-# #   maxConcurrent=1 ensures only one main agent turn runs at a time.
-# # Why it may not be needed: OpenClaw may have sane defaults for these now.
-# #   The onboard wizard may set them. Test: run an agent session and check
-# #   if tool calls work, if output is deterministic, and if long tasks timeout.
-# #
-# primary_model = f"inference/{model_id}"
-# agents_defaults = openclaw_cfg.setdefault("agents", {}).setdefault("defaults", {})
-# agents_defaults.setdefault("model", {})["primary"] = primary_model
-# agents_defaults["maxConcurrent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT") or "1")
-# agents_defaults["timeoutSeconds"] = 1800
-# agents_defaults.setdefault("models", {})[primary_model] = {
-#     "params": {
-#         "parallel_tool_calls": False,
-#         "temperature": 0,
-#     }
-# }
-
-# # --- Subagent concurrency ---
-# # What: configures how many subagents OpenClaw can spawn concurrently, how
-# #   many children each agent can have, and max spawn depth. Values are
-# #   calculated from max_num_seqs minus 1 (reserve 1 slot for main agent).
-# #   For qwopus3.5-27b-nvfp4 (max_num_seqs=4): 3 subagent slots.
-# # Why it existed: without this, OpenClaw uses its own defaults which may
-# #   spawn more concurrent agents than vLLM can serve, causing queuing and
-# #   timeouts. Each active agent consumes a vLLM sequence slot.
-# # Why it may not be needed: if only running single-agent sessions (no
-# #   subagent spawning), this has no effect. Only matters for multi-agent
-# #   ManyForge orchestration sessions.
-# #
-# subagents_cfg = agents_defaults.setdefault("subagents", {})
-# subagents_cfg["maxConcurrent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT") or "1")
-# subagents_cfg["maxChildrenPerAgent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN") or "1")
-# subagents_cfg["maxSpawnDepth"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH") or "1")
+# --- Subagent concurrency ---
+# Configures how many subagents OpenClaw can spawn concurrently, how many
+# children each agent can have, and max spawn depth. Values are calculated
+# by resolve_thor_openclaw_concurrency_targets() in config.sh:
+#   subagent_slots = max_num_seqs - effective_main
+#   children_per_agent = min(4, ceil(subagent_slots / effective_main))
+# This ensures fair distribution — no single agent can hog all slots.
+# Thor's bandwidth-bound architecture means concurrent agents scale linearly
+# in throughput, so filling slots is free performance.
+subagents_cfg = agents_defaults.setdefault("subagents", {})
+subagents_cfg["maxConcurrent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT") or "1")
+subagents_cfg["maxChildrenPerAgent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN") or "1")
+subagents_cfg["maxSpawnDepth"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH") or "1")
 
 # # --- Gateway auth bypass ---
 # # What: sets gateway.mode=local, disables device auth, allows insecure auth,

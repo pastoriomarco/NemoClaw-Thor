@@ -180,7 +180,7 @@ prepare_thor_launch_profile() {
             # --mm-encoder-attn-backend TORCH_SDPA: workaround for #38411 — ViT FA2
             # PTX crash on SM110 with CUDA 13.0 host driver.
             THOR_LAUNCH_MODEL_SOURCE="nvidia/Gemma-4-31B-IT-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.80}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
             THOR_DOCKER_ENV_ARGS+=(
@@ -205,7 +205,7 @@ prepare_thor_launch_profile() {
             # No NVFP4 quant available — runs at BF16, needs careful memory budgeting.
             # triton_attn: same head_dim=512 FlashInfer limitation as 31B.
             THOR_LAUNCH_MODEL_SOURCE="google/gemma-4-26B-A4B-it"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.80}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
             THOR_VLLM_ARGS+=(

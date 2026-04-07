@@ -172,63 +172,70 @@ resolve_model_profile() {
         qwen3.5-122b-a10b-nvfp4-resharded)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-122B-A10B-NVFP4-resharded"
-            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="6"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwen3.5-27b-claude-distilled-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_MAX_NUM_SEQS="9"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwopus3.5-27b-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwopus3.5-27B-v3-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_MAX_NUM_SEQS="9"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwen3.5-27b-fp8)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-FP8"
-            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="7"
+            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwen3.5-35b-a3b-fp8)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-35B-A3B-FP8"
-            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="20"
+            THOR_TARGET_MAX_NUM_SEQS="22"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="5"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwen3.5-35b-a3b-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-35B-A3B-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="20"
+            THOR_TARGET_MAX_NUM_SEQS="26"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="6"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
         gemma4-31b-it-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Gemma-4-31B-IT-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_MAX_NUM_SEQS="6"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="gemma4"
@@ -237,9 +244,10 @@ resolve_model_profile() {
         gemma4-26b-a4b-it)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="gemma-4-26B-A4B-it"
-            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_MAX_NUM_SEQS="17"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="4"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="gemma4"
@@ -269,6 +277,7 @@ resolve_thor_openclaw_concurrency_targets() {
 
     resolved=$(python3 - "${THOR_TARGET_MAX_NUM_SEQS:-}" "${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT:-1}" <<'PYEOF'
 import sys
+import math
 
 def parse_positive_int(value, default):
     try:
@@ -282,18 +291,22 @@ requested_main = parse_positive_int(sys.argv[2], 1)
 
 if max_num_seqs > 1:
     effective_main = min(requested_main, max_num_seqs - 1)
-    subagents = max_num_seqs - effective_main
+    subagent_slots = max_num_seqs - effective_main
+    # Fair share: each main agent can spawn up to ceil(slots / mains) children,
+    # capped at 4 to prevent one agent from dominating on high-slot models.
+    children_per_agent = min(4, max(1, math.ceil(subagent_slots / effective_main)))
 else:
     effective_main = 1
-    subagents = 1
+    subagent_slots = 1
+    children_per_agent = 1
 
 print("\t".join(
     str(value)
     for value in (
         requested_main,
         effective_main,
-        subagents,
-        subagents,
+        subagent_slots,
+        children_per_agent,
         1,
     )
 ))
