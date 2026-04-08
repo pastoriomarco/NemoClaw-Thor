@@ -169,6 +169,16 @@ resolve_model_profile() {
     requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.5-27b-fp8}}")
 
     case "${requested}" in
+        qwen3.5-122b-a10b-nvfp4)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Sehyo/Qwen3.5-122B-A10B-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="4"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
         qwen3.5-122b-a10b-nvfp4-resharded)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-122B-A10B-NVFP4-resharded"

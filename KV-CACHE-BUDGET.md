@@ -68,7 +68,7 @@ then divide by KV/seq above to get exact max_num_seqs.
 
 | Profile | Quant | Est weights | gpu_mem_util | Usable GiB | Est KV avail | KV/seq @256K | max_num_seqs |
 |---------|-------|-------------|--------------|------------|--------------|--------------|--------------|
-| qwen3.5-122b-a10b-nvfp4 | NVFP4 | ~85 GiB | 0.85 | 108.8 | ~15 GiB | 3.0 GiB | 4 |
+| qwen3.5-122b-a10b-nvfp4 | NVFP4 | **75.2 GiB** (incl MTP) | 0.85 | 104.4 | **24.05 GiB** | 3.0 GiB | 8 |
 | qwopus3.5-27b-nvfp4 | NVFP4 | ~20 GiB | 0.80 | 102.4 | ~73 GiB | 8.0 GiB | 9 |
 | qwen3.5-27b-claude-nvfp4 | NVFP4 | ~20 GiB | 0.80 | 102.4 | ~73 GiB | 8.0 GiB | 9 |
 | qwen3.5-27b-fp8 | FP8 | ~28 GiB | 0.80 | 102.4 | ~65 GiB | 8.0 GiB | 8 |
@@ -121,7 +121,7 @@ no single agent can hog all subagent slots.
 
 | Profile | Slots | Main agents | Subagent slots | Children/agent | Depth |
 |---------|-------|-------------|----------------|----------------|-------|
-| qwen3.5-122b-a10b | 4 | 1 | 3 | 3 | 1 |
+| qwen3.5-122b-a10b | 8 | 8 | 0 | — | — |
 | qwen3.5-27b-fp8 | 8 | 2 | 6 | 3 | 1 |
 | qwen3.5-27b NVFP4 variants | 9 | 3 | 6 | 2 | 1 |
 | gemma4-31b-nvfp4 | 6 | 2 | 4 | 2 | 1 |
@@ -150,6 +150,25 @@ Update max_num_seqs in config.sh if actuals differ significantly.
 #     3 req: ~37 tok/s (12.3 tok/s per req)
 #     6 req:  77 tok/s (12.8 tok/s per req) — near-linear scaling confirmed
 #   KV cache usage at 6 concurrent short prompts: 3.2%
+
+# qwen3.5-122b-a10b-nvfp4 (Sehyo) @ gpu_mem_util=0.85 + MTP (2026-04-08):
+#   Model loading took 75.17 GiB (includes MTP drafter, shared embed+lm_head)
+#   Available KV cache memory: 24.05 GiB
+#   GPU KV cache size: 482,080 tokens
+#   Maximum concurrency for 262,144 tokens per request: 6.42x
+#   max_num_seqs = floor(24.05 / 3.0) = 8 ✓ (config set to 8)
+#   MTP speculative decode: 1 token (model has mtp_num_hidden_layers=1)
+#   Architecture: Qwen3_5MoeMTP, FlashInfer CUTLASS MoE + FlashInfer attention
+#   Drafter loaded in 43s, target in 193s, total warmup ~10 min
+#   Note: 8 slots all as main agents (Claude Code orchestration, no subagents)
+
+# qwen3.5-122b-a10b-nvfp4-resharded @ gpu_mem_util=0.85 (2026-04-08):
+#   Model loading took 70.47 GiB (no MTP drafter)
+#   Available KV cache memory: 21.43 GiB
+#   GPU KV cache size: 467,712 tokens
+#   Maximum concurrency for 131,072 tokens per request: 11.79x
+#   max_num_seqs = floor(21.43 / 3.0) = 7 (config set to 8 — safe, agentic
+#     sessions rarely hit full 262K context)
 
 # gemma4-31b-it-nvfp4 @ gpu_mem_util=0.80 (2026-04-07):
 #   Model loading took 31.04 GiB (includes ~10 GiB vision encoder)

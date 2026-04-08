@@ -126,8 +126,8 @@ pass "Saved runtime config to ${THOR_CONFIG_FILE}"
 #   handle gateway startup natively in v0.0.6+. Needs testing — if connect
 #   works without this, the entire 200-line function is dead code.
 #
-# info "Ensuring OpenClaw gateway is running inside the sandbox..."
-# ensure_sandbox_gateway_running "${sandbox_name}" || true
+info "Ensuring OpenClaw gateway is running inside the sandbox..."
+ensure_sandbox_gateway_running "${sandbox_name}" || true
 echo ""
 
 vllm_response=$(curl -s --max-time 5 \

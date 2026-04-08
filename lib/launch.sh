@@ -39,6 +39,31 @@ prepare_thor_launch_profile() {
     )
 
     case "${profile}" in
+        qwen3.5-122b-a10b-nvfp4)
+            THOR_LAUNCH_MODEL_SOURCE="/data/models/huggingface/hub/models--Sehyo--Qwen3.5-122B-A10B-NVFP4"
+            THOR_LAUNCH_HOST_MODEL_PATH="${THOR_HF_CACHE_DIR}/hub/models--Sehyo--Qwen3.5-122B-A10B-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS="${THOR_MAX_NUM_BATCHED_TOKENS:-8192}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
+            # SM110 NVFP4: FlashInfer CUTLASS for GEMM + MoE, FlashInfer for attention.
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
+            )
+            # MTP speculative decoding: model has mtp_num_hidden_layers=1.
+            # HackMD Spark guide uses num_speculative_tokens=3; start with 1 (safe).
+            THOR_VLLM_ARGS+=(
+                "--attention-backend" "flashinfer"
+                "--language-model-only"
+                "--reasoning-parser" "qwen3"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--enable-prefix-caching"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
+            )
+            ;;
         qwen3.5-122b-a10b-nvfp4-resharded)
             THOR_LAUNCH_MODEL_SOURCE="/data/models/huggingface/hub/qwen-3.5-122b-a10b-nvfp4-resharded/resharded"
             THOR_LAUNCH_HOST_MODEL_PATH="${THOR_HF_CACHE_DIR}/hub/qwen-3.5-122b-a10b-nvfp4-resharded/resharded"
@@ -47,7 +72,6 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
             # SM110 NVFP4: FlashInfer CUTLASS for GEMM + MoE, FlashInfer for attention.
-            # FlashInfer v0.6.7 FMHA works on SM110 (verified on 27B distilled, +38% vs triton_attn).
             THOR_DOCKER_ENV_ARGS+=(
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"

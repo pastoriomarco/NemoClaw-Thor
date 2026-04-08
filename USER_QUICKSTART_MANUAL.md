@@ -29,7 +29,53 @@ nvm use 22
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-## 2. First-Time Setup (After Fresh NemoClaw Install)
+## 2. Swap Configuration
+
+Jetson AGX Thor uses unified memory (128 GiB shared between CPU and GPU).
+Large models need swap space to survive transient memory spikes during
+startup — particularly FlashInfer CUTLASS kernel compilation and CUDA graph
+capture. Without swap, these spikes cause hard system crashes (device
+reboots, no kernel OOM log).
+
+**Requirement: 32 GiB swap file.** This is needed for models ≥70 GiB
+(the 122B profile), and recommended for all profiles as a safety margin.
+
+### Create swap (one-time)
+
+```bash
+sudo fallocate -l 32G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+# Make persistent across reboots
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+### Verify
+
+```bash
+swapon --show
+# Should show: /swapfile file 32G 0B -2
+free -h
+# Swap line should show 32Gi total
+```
+
+### Why 32 GiB
+
+The 122B NVFP4 model loads 70.47 GiB of weights. On first launch, vLLM
+also JIT-compiles FlashInfer CUTLASS MoE GEMM kernels for SM110a (266
+build targets via ninja), which temporarily requires significant additional
+memory for nvcc processes running in parallel. The model weights + KV cache
+allocation + compiler processes exceed 128 GiB physical RAM. Swap absorbs
+the overflow — once compilation finishes and caches, memory drops back to
+normal operating levels.
+
+Smaller models (27B, 35B) may not strictly need swap, but a 32 GiB swap
+file costs nothing at rest and prevents hard crashes if memory spikes occur
+during torch.compile or CUDA graph capture.
+
+## 3. First-Time Setup (After Fresh NemoClaw Install)
 
 Use this on a fresh Thor or after a full reinstall.
 
@@ -78,7 +124,7 @@ nemoclaw thor-v4 connect
 The `openai-responses` API bypasses vLLM's `--tool-call-parser` and breaks tool
 calling for all local models. See NemoClaw issue #976.
 
-## 3. Start After Reboot
+## 4. Start After Reboot
 
 Same sequence every time — no special reboot handling needed:
 
@@ -103,7 +149,7 @@ nemoclaw thor-v4 connect
 
 If `./status.sh` says the sandbox is missing, re-run `nemoclaw onboard`.
 
-## 4. Switch Model
+## 5. Switch Model
 
 Stop vLLM (Ctrl-C in the model terminal), drop caches, start the new model,
 reconfigure:
@@ -117,7 +163,7 @@ sudo sync && sudo sysctl -w vm.drop_caches=3
 Always drop caches between model switches — Thor's unified memory is not
 automatically freed.
 
-## 5. Model Profiles
+## 6. Model Profiles
 
 | Profile | Model | Notes |
 |---------|-------|-------|
@@ -156,7 +202,49 @@ Persistent defaults are saved in:
 ~/.config/nemoclaw-thor/config.env
 ```
 
-## 6. Use The Sandbox
+## 7. First Launch — FlashInfer JIT Compilation
+
+The first time a model profile is launched on a fresh install, vLLM
+JIT-compiles FlashInfer CUTLASS kernels for SM110a (Blackwell/Thor).
+This is a one-time process — compiled kernels are cached at
+`/root/.cache/flashinfer/` inside the vLLM container.
+
+**What to expect on first launch:**
+
+| Phase | Duration (approx) | Notes |
+|-------|-------------------|-------|
+| Weight loading | 2-3 min | 8 safetensor shards for 122B |
+| torch.compile | 2-10 min | Cached after first run |
+| FlashInfer CUTLASS MoE GEMM compilation | 15-45 min | 266 ninja build targets, `nvcc -j14` |
+| CUDA graph capture | 2-5 min | Batch sizes [1, 2, 4] |
+| **Total first launch** | **20-60 min** | Depends on model size |
+| **Subsequent launches** | **3-8 min** | All compilation cached |
+
+During FlashInfer compilation, you will see no new vLLM log output for
+an extended period — the process is running nvcc in the background. Check
+with:
+
+```bash
+docker top <container> | grep nvcc
+```
+
+**Cache volumes must persist** for compilation results to survive across
+container recreations. The `start-model.sh` script bind-mounts host
+directories into the container:
+
+| Container path | Host path | Contents |
+|----------------|-----------|----------|
+| `/root/.cache/flashinfer` | `~/thor-flashinfer-cache` | CUTLASS MoE GEMM `.so` files |
+| `/root/.cache/vllm` | `~/thor-vllm-cache` | torch.compile AOT artifacts |
+| `/root/.cache/torch` | `~/thor-torch-cache` | Triton kernel cache |
+
+If any of these host directories are deleted, the next launch repeats
+the corresponding compilation step.
+
+Memory usage during compilation peaks significantly above normal operating
+levels. This is the primary reason swap is required (see Section 2).
+
+## 8. Use The Sandbox
 
 Connect:
 
@@ -220,7 +308,7 @@ Then on the host:
 openshell sandbox download thor-v4 /sandbox/myrepo.patch .
 ```
 
-## 7. Stop Without Uninstalling
+## 9. Stop Without Uninstalling
 
 ### Leave the sandbox shell
 
@@ -259,16 +347,20 @@ Or directly:
 openshell gateway stop
 ```
 
-## 8. Practical Rules
+## 10. Practical Rules
 
+- **Swap must be active** before starting any model (see Section 2).
+  Verify with `swapon --show` before launching `start-model.sh`.
 - Use `nemoclaw thor-v4 connect` as the normal shell entrypoint.
 - Use `openclaw tui` as the normal prompt UI.
 - If the TUI shows "gateway disconnected": `HOME=/sandbox openclaw gateway run &`
 - After any model change, run `./configure-local-provider.sh <profile>`.
-- After a reboot: `./start-model.sh`, `./configure-local-provider.sh`,
-  `./status.sh`, `nemoclaw thor-v4 connect`.
+- After a reboot: verify swap (`swapon --show`), then `./start-model.sh`,
+  `./configure-local-provider.sh`, `./status.sh`, `nemoclaw thor-v4 connect`.
 - If you stop vLLM, always run `sudo sync && sudo sysctl -w vm.drop_caches=3`
   before loading another model.
+- First launch of a new model profile takes 20-60 min for kernel compilation
+  (see Section 7). Subsequent launches take 3-8 min.
 
 ## Key Differences From v3
 
