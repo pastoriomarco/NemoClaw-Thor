@@ -1,9 +1,26 @@
-# Agent Notes
+# Agent Notes (v4)
 
 This file is a session handoff and operational note for future work on this
 repository. It is intentionally more explicit and more candid than the README.
 
 For the operator-facing usage guide, see `USER_QUICKSTART_MANUAL.md`.
+
+## v4 Changes From v3
+
+- **vLLM 0.19** — native Gemma 4 support, streaming tool-call fix (PR #35615),
+  9.9% MoE throughput improvement, async speculative decoding
+- **Restream proxy eliminated** — vLLM 0.19 fixes the qwen3_coder streaming
+  parser bug that required the restream proxy. OpenClaw now connects directly
+  to vLLM via the OpenShell provider path
+- **OpenClaw v2026.4.1** — tool-call repair, subagent validation, legacy
+  config aliases removed
+- **OpenShell v0.0.22** — 10 CVEs fixed, seccomp hardening
+- **Gemma 4 model profiles** — `gemma4-31b-it-nvfp4` and `gemma4-26b-a4b-it`
+  added alongside existing Qwen profiles
+- **Codex review integration** — quality gate now includes an optional
+  independent review from OpenAI Codex via the `codex-plugin-cc` Claude Code
+  plugin, providing a second-opinion pass before accepting agent output
+- **transformers 5.5** — required for Gemma 4 model class support
 
 ## What This Repo Is
 
@@ -50,9 +67,9 @@ after each change.
 If you're here to run ManyForge agent sessions, go directly to these sections:
 
 1. **[Programmatic Agent Access From Host](#programmatic-agent-access-from-host)** — kubectl exec, session cleanup, SSH
-2. **[Re-Streaming Proxy](#re-streaming-proxy-recommended-since-2026-03-31)** — proxy setup, timeout chain
-3. **[ManyForge Development Rules](#manyforge-development-rules)** — supervisor/agent behavioral contracts, contract freeze
-4. **[ManyForge Agent Orchestration Workflow](#manyforge-agent-orchestration-workflow-complete-reference)** — full 9-step workflow with exact commands
+2. **[ManyForge Development Rules](#manyforge-development-rules)** — supervisor/agent behavioral contracts, contract freeze
+3. **[ManyForge Agent Orchestration Workflow](#manyforge-agent-orchestration-workflow-complete-reference)** — full 9-step workflow with exact commands
+4. **[Codex Review Integration](#codex-review-integration)** — dual-reviewer quality gate with OpenAI Codex
 5. **[Sandbox Environment Requirements](#sandbox-environment-requirements-for-manyforge-v00)** — complete toolchain needed
 
 ## Sandbox Environment Requirements for ManyForge v0.0
@@ -448,9 +465,13 @@ From `lib/config.sh` and `lib/launch.sh`:
 - default model profile: `qwen3.5-27b-fp8`
 - supported profiles:
   - `qwen3.5-122b-a10b-nvfp4-resharded`
+  - `qwen3.5-27b-claude-distilled-nvfp4`
+  - `qwopus3.5-27b-nvfp4`
   - `qwen3.5-27b-fp8`
   - `qwen3.5-35b-a3b-fp8`
   - `qwen3.5-35b-a3b-nvfp4`
+  - `gemma4-31b-it-nvfp4`
+  - `gemma4-26b-a4b-it`
 - default policy profile: `strict-local`
 - default provider name: `vllm-local`
 - default local provider URL inside OpenShell:
@@ -1174,74 +1195,36 @@ Key points:
 - The `sandbox_ssh_command` helper in `lib/sandbox-runtime.sh` wraps the SSH
   proxy setup
 
-## Re-Streaming Proxy (recommended since 2026-03-31)
+## Re-Streaming Proxy (deprecated in v4)
 
-The restream proxy (`lib/restream-proxy.py`) is the key enabler for reliable
-tool calls with vLLM's qwen3_coder tool_call_parser.
+**v4 status:** The restream proxy is no longer needed. vLLM 0.19 fixes the
+qwen3_coder streaming parser bug (PR #35615) that required the proxy.
+Additionally, OpenClaw v2026.4.1 has built-in tool-call repair that
+reconstructs partial tool arguments on streamed calls.
 
-**Problem:** vLLM's streaming `qwen3_coder` parser has an IndexError bug that
-corrupts large tool-call arguments across SSE chunks. This causes empty
-`arguments` fields and broken file writes — the dominant failure mode in agent
-runs. (Documented upstream: vllm-project/vllm#29192, #19056, #21544.)
+The v4 inference path is: OpenClaw → inference.local → OpenShell provider → vLLM.
+No proxy in the data path.
 
-**Solution:** The restream proxy sits inside the sandbox pod on `127.0.0.1:8199`:
-1. Receives streaming requests from OpenClaw (`stream: true`)
-2. Forwards them to vLLM as streaming (`stream: true`)
-3. Passes content and reasoning deltas through immediately (keeps SSE alive)
-4. Buffers only tool-call argument fragments, reassembles them as complete chunks
-5. Emits tool calls in canonical OpenAI streaming format when the stream ends
+The proxy code (`lib/restream-proxy.py`) is retained in the repo for reference.
 
-**Advantages over the previous nonstream proxy:**
-- **No timeout wall** — continuous streaming keeps the connection alive. The old
-  nonstream proxy waited for the *entire* response before sending anything,
-  hitting OpenClaw's per-request timeout on complex tasks (5-10+ minutes).
-- **Lower KV cache pressure** — vLLM can start freeing KV cache as tokens are
-  consumed, rather than holding the full sequence until completion.
-- **Thinking mode preserved** — the restream proxy does NOT inject
-  `enable_thinking: false`. Reasoning-distilled models (Qwen3.5-Claude-Distilled)
-  can use their full reasoning capability. The old proxy suppressed thinking,
-  which was cargo-culted from Nemotron3 latency optimization and actively hurt
-  code quality on reasoning-trained models.
-- **Reasoning traces forwarded** — `reasoning_content` deltas are forwarded
-  immediately alongside regular content.
+### Timeout chain (v4)
 
-**Critical implementation details:**
-- Uses `Connection: close` (not `keep-alive`) — without this, SSE clients hang
-  forever waiting for the TCP connection to close. HTTP/1.1 without Content-Length
-  requires connection close to signal response completion.
-- Uses `ThreadingHTTPServer` (not `HTTPServer`) — prevents deadlock from abandoned
-  connections blocking subsequent requests.
-- Does NOT modify request bodies — no `stream: false`, no `enable_thinking: false`.
-
-**Deployed by:** `sync_sandbox_runtime_config()` in `lib/sandbox-runtime.sh`.
-The proxy source is uploaded from `lib/restream-proxy.py` and started as a
-background process.
-
-### Timeout chain
-
-All timeouts must be coherent: `session >= per_request < proxy_socket`.
+With the proxy removed, the timeout chain simplifies:
 
 | Layer | Value | Controls |
 |-------|-------|----------|
 | `--timeout` (agent dispatch) | 1800s | Total session wall-clock time |
 | `timeoutSeconds` (openclaw.json) | 1800s | Per-LLM-request timeout (SSE keeps alive) |
-| Proxy → vLLM `urlopen` | 3600s | Socket timeout between SSE events |
 
-With streaming, the per-request timeout (layer 2) rarely triggers because SSE
-events flow continuously. The proxy socket timeout (layer 3) only triggers if
-vLLM completely stalls. The session timeout (layer 1) is the actual wall-clock
-limit — set it to at least 1800s for coding tasks.
+Set both to at least 1800s for coding tasks.
 
-### Previous approach: nonstream proxy (deprecated)
+### Historical context (v3)
 
-The old nonstream proxy (`lib/nonstream-proxy.py`) used `stream: false` to
-bypass the parser bug entirely. While simpler, it caused:
-- Timeout failures on complex tasks (single blocking HTTP request)
-- Forced thinking disabled (cargo-culted from Nemotron3)
-- Higher memory pressure (full response buffered)
-
-The nonstream proxy code is retained in the repo for reference but is no longer
-deployed by `sync_sandbox_runtime_config()`.
+In v3, the restream proxy (`lib/restream-proxy.py`) sat inside the sandbox pod
+on `127.0.0.1:8199` and buffered tool-call argument fragments to work around
+vLLM's streaming parser bug. Before that, the nonstream proxy used
+`stream: false` which caused timeouts and suppressed thinking mode. Both
+approaches are superseded by vLLM 0.19's native fix.
 
 ## ManyForge Development Rules
 
@@ -1252,6 +1235,7 @@ deployed by `sync_sandbox_runtime_config()`.
 - Run build/test commands on host for final verification
 - Write and upload TASK.md prompts
 - Delete stale files from sandbox before new sessions
+- Call `/codex:review` for independent second opinion on agent output
 - Direct intervention (write code) ONLY after 2 failed agent rounds
 
 **NOT ALLOWED:**
@@ -1317,12 +1301,9 @@ docker exec "$CLUSTER" kubectl -n openshell get pods
 docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
   curl -s http://host.openshell.internal:8000/health
 
-# Verify restream proxy is running
+# Verify OpenClaw agent is reachable
 docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
-  ps aux | grep restream-proxy
-
-# If proxy is not running, re-deploy it:
-# cd ~/workspaces/nemoclaw/src/NemoClaw-Thor && ./configure-local-provider.sh <profile>
+  openclaw version
 ```
 
 ### Step 1: Prepare the workspace
@@ -1454,19 +1435,6 @@ docker exec -i "$CLUSTER" kubectl -n openshell exec -i thor-assistant -- \
 
 Monitor every 2-3 minutes while the agent runs. Check these signals:
 
-**Proxy log** — shows tool calls in real time:
-```bash
-docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
-  tail -20 /sandbox/.nemoclaw/restream-proxy.log
-```
-
-What to look for:
-- `tool_call: read` — agent reading files (normal early in session)
-- `tool_call: edit args_len=NNNN` — agent editing code (good sign)
-- `tool_call: exec` — agent running commands (builds/tests)
-- `tool_call: sessions_spawn args_len=~1000` — agent spawning subagents
-- **No new entries for >5 min** — agent may be stuck or vLLM stalled
-
 **Agent process** — verify it's still running:
 ```bash
 docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
@@ -1567,12 +1535,30 @@ docker exec "$CLUSTER" kubectl -n openshell exec thor-assistant -- \
   cat /sandbox/work/<task-id>/FILES.txt
 ```
 
+**7e. Codex review (optional but recommended):**
+
+Request an independent second opinion from OpenAI Codex on the agent's output.
+This catches issues that the supervisor's own review may miss — different model,
+different biases, different blind spots.
+
+```
+/codex:review
+```
+
+Codex reviews the current working tree diff and returns structured feedback.
+Use this after steps 7a–7d pass — Codex review is a second-opinion layer, not
+a replacement for the supervisor's own diff review and test verification.
+
+If Codex flags issues: treat them as quality gate failures and proceed to Step 9
+(revision round) with the Codex feedback included in the fix prompt.
+
 **Quality gate checklist:**
 - [ ] Diff reviewed — changes match task description
 - [ ] File scope respected — no unexpected files modified
 - [ ] Frozen interfaces untouched
 - [ ] All tests pass
 - [ ] No forbidden patterns (ROS headers in core, hardcoded secrets, etc.)
+- [ ] Codex review passed (if run) — no blocking issues flagged
 
 ### Step 8: Merge to host repo
 
@@ -1603,12 +1589,14 @@ If the quality gate finds issues, start a new agent session with fix instruction
 
 ```bash
 # Write a fix prompt referencing specific errors
+# Include Codex feedback if /codex:review was run in Step 7e
 cat > /tmp/<task-id>-fix-prompt.md << 'EOF'
 # Task: Fix issues found in quality gate
 
 ## Issues to fix
 1. <specific error with file:line reference>
 2. <specific error>
+3. <Codex review finding, if applicable>
 
 ## Build and test
 <same commands as original>
@@ -1667,12 +1655,88 @@ and test implementations autonomously.
 "universe" parent frame). 27 new tests covering all requested scenarios. Mock
 change was minimal (2 lines). No frozen interfaces touched.
 
+## Codex Review Integration
+
+The v4 workflow adds an optional dual-reviewer quality gate using the
+`codex-plugin-cc` Claude Code plugin. This provides an independent second
+opinion from OpenAI Codex on agent-produced code.
+
+### How it works
+
+1. **Local agent produces code** — Qwen model on NemoClaw sandbox, dispatched
+   via kubectl exec as described in the orchestration workflow above.
+2. **Supervisor reviews** — Claude Code (Opus) reviews the diff, runs tests,
+   checks file scope (Steps 7a–7d).
+3. **Codex reviews** — Supervisor calls `/codex:review` to get an independent
+   assessment from a different model with different training biases.
+4. **Supervisor synthesizes** — Claude Code evaluates both its own review and
+   Codex's feedback, decides whether the quality gate passes or fails.
+5. **Iterate if needed** — If issues are found, the supervisor writes a fix
+   prompt incorporating feedback from both reviews and dispatches a revision
+   round (Step 9).
+
+### Available commands
+
+| Command | Purpose | When to use |
+|---------|---------|-------------|
+| `/codex:review` | Review working tree changes | Per-task quality gate (Step 7e) |
+| `/codex:adversarial-review` | Red-team review: challenges design choices, assumptions, failure modes | Once at the end of a major implementation or refactor phase |
+| `/codex:rescue` | Delegate investigation or fix to Codex (write-capable) | Emergency only — when neither agents nor supervisor can solve it |
+| `/codex:task <prompt>` | Run an arbitrary Codex task | Ad-hoc deeper analysis |
+| `/codex:status` | Check status of running Codex tasks | — |
+| `/codex:cancel <id>` | Cancel a running Codex task | — |
+
+### When to use each review level
+
+- **`/codex:review`** (standard) — per-task second opinion during Step 7e.
+  Recommended for tasks touching frozen interfaces, security-sensitive code, or
+  complex logic. Optional for straightforward bug fixes or test additions.
+- **`/codex:adversarial-review`** — full red-team pass that tries to break
+  confidence in the implementation. Run once at the end of a major phase (e.g.,
+  after completing all sessions in a ManyForge phase), not on individual tasks.
+  Focuses on auth/trust boundaries, data loss, race conditions, rollback safety,
+  migration hazards, and observability gaps.
+- **`/codex:rescue`** — last resort. Only use when the local agent has failed
+  its revision rounds AND the supervisor cannot diagnose or fix the issue. Codex
+  gets write access and can edit files directly. Do not use as a convenience
+  shortcut for work that agents or the supervisor should handle.
+
+### When NOT to use Codex
+
+- Do not use any Codex command as a replacement for the supervisor's own diff
+  review and test runs. Codex is a second-opinion layer, not a substitute for
+  Steps 7a–7d.
+- Do not call `/codex:review` on every minor iteration within a revision round —
+  reserve it for the final output of each round.
+- Do not call `/codex:adversarial-review` on individual tasks — save it for
+  phase-level validation.
+- Do not reach for `/codex:rescue` before exhausting the agent's 2 revision
+  rounds and the supervisor's own direct intervention option.
+
+### Requirements
+
+- `codex-plugin-cc` installed in Claude Code (`npm install -g @openai/codex`)
+- Codex authenticated (`codex login` via ChatGPT or API key)
+- Claude Code running as CLI or desktop app (not VSCode extension — the extension
+  does not support plugin hooks)
+
+### Review gate (optional)
+
+The plugin supports a stop-review gate that can block session stops until Codex
+approves. This is disabled by default and is **not recommended** for the
+ManyForge workflow — it fires on every session stop, which is too frequent for
+iterative agent dispatching. Instead, call `/codex:review` manually at the
+supervisor's discretion during Step 7e.
+
+To enable if desired: `/codex:setup --enable-review-gate`
+
 ## Validated Agent Run (Run 4, 2026-03-30)
 
 Model: `Qwen3.5-27B-Claude-Distilled-NVFP4` on Jetson AGX Thor
 
-Infrastructure: kubectl exec + nonstream proxy + session cleanup between tasks
-(Run 4 used nonstream proxy; runs after 2026-03-31 use restream proxy)
+Infrastructure: kubectl exec + session cleanup between tasks
+(Run 4 used nonstream proxy; runs after 2026-03-31 used restream proxy;
+v4 connects directly to vLLM — proxy eliminated)
 
 Results (manyforge_core Phase 1, 5 tasks):
 - 450 implementation lines, 45 Phase 1 test cases, 52 total tests
@@ -1714,25 +1778,31 @@ Components that can update independently:
 
 This repo is validated end-to-end on Jetson AGX Thor with `qwen3.5-27b-fp8`,
 `qwen3.5-27b-claude-distilled-nvfp4`, and `qwen3.5-35b-a3b-fp8` profiles.
+Gemma 4 profiles (`gemma4-31b-it-nvfp4`, `gemma4-26b-a4b-it`) are added but
+not yet validated in full agent orchestration sessions.
+
 The full reboot recovery cycle works: reboot the device, run
 `./configure-local-provider.sh`, and the TUI connects with working inference.
 
 The integration layer handles several non-obvious issues that arise from
 running NemoClaw/OpenShell on Jetson Thor with local inference: SSH handshake
 secret rotation, network namespace isolation for the OpenClaw gateway, device
-pairing persistence across pod restarts, accurate health checking, and vLLM
-streaming tool_call_parser bugs (fixed by the restream proxy).
+pairing persistence across pod restarts, and accurate health checking. The v3
+restream proxy (which worked around vLLM streaming tool_call_parser bugs) has
+been eliminated — vLLM 0.19 fixes the underlying issue natively.
 
 What is ready for use:
 
 - local-first inference with hardened sandbox policy
 - automated reboot recovery
 - programmatic agent access from the host (kubectl exec preferred, SSH for TUI)
-- re-streaming proxy for reliable tool calls with thinking mode preserved
+- direct vLLM tool calls with thinking mode (no proxy needed in v4)
 - autonomous agent tasks via kubectl exec with zero-touch per task
 - multimodal inference (Qwen3.5 vision encoder active on 35B profile)
+- dual-reviewer quality gate via Codex plugin (optional)
 
 What is not yet built:
 
 - automated upstream update testing
 - persistent workspace volumes across pod restarts
+- Gemma 4 profile validation in full agent sessions
