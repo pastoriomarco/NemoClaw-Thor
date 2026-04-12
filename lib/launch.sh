@@ -193,6 +193,27 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
             ;;
+        qwen3.5-27b-claude-distilled-v2-nvfp4)
+            # Qwen3.5-27B DeltaNet hybrid: same architecture as v1.
+            # v2 distillation from mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-NVFP4.
+            THOR_LAUNCH_MODEL_SOURCE="mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--language-model-only"
+                "--reasoning-parser" "qwen3"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--enable-prefix-caching"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
+            )
+            ;;
         gemma4-31b-it-nvfp4)
             # Gemma 4 31B IT NVFP4 — dense model, ~17 GB in VRAM.
             # Vision enabled (SigLIP2 ~550M params), tool calling via gemma4 parser.
@@ -385,6 +406,7 @@ run_thor_vllm_container() {
         -e HF_HUB_CACHE=/data/models/huggingface/hub \
         -e TRANSFORMERS_CACHE=/data/models/huggingface/hub \
         -e TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 \
+        -e TORCHINDUCTOR_CACHE_DIR=/root/.cache/torch/inductor \
         -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface" \
         -v "${THOR_VLLM_CACHE_DIR}:/root/.cache/vllm" \
         -v "${THOR_TORCH_CACHE_DIR}:/root/.cache/torch" \

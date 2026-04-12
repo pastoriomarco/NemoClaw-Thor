@@ -1,15 +1,16 @@
-# User Quickstart Manual — NemoClaw-Thor v4
+# User Quickstart Manual — NemoClaw-Thor v5
 
-Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor with NemoClaw v0.0.6+
-and OpenShell v0.0.22.
+Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor with NemoClaw v0.0.13+
+and OpenShell v0.0.26.
 
 Validated baseline:
 
-- NemoClaw: v0.0.6+
-- OpenShell: v0.0.22
-- vLLM: v0.19.0 (custom SM110 image)
+- NemoClaw: v0.0.13+
+- OpenShell: 0.0.26
+- OpenClaw: 2026.3.11
+- vLLM: 0.19.1rc1 (custom SM110 image)
 - Gateway: `nemoclaw`
-- Sandbox: `thor-v4`
+- Sandbox: `thor-v5`
 - Provider: `vllm-local`
 
 Important rule:
@@ -91,15 +92,14 @@ cd ~/NemoClaw && git pull origin main && npm install && npm link
 nemoclaw onboard
 ```
 
-This creates the sandbox (e.g. `thor-v4`), the OpenShell gateway, and bakes a
+This creates the sandbox (e.g. `thor-v5`), the OpenShell gateway, and bakes a
 base config into the sandbox image. Some onboard defaults are wrong for local
-models (see "Known onboard issues" below) — `configure-local-provider.sh`
-fixes them.
+vLLM inference — `configure-local-provider.sh` fixes them (see Section 11).
 
 3. Start the model server and leave it running in that terminal:
 
 ```bash
-./start-model.sh qwopus3.5-27b-nvfp4
+./start-model.sh qwen3.5-27b-claude-distilled-v2-nvfp4
 ```
 
 4. In a second terminal, configure and verify:
@@ -107,22 +107,8 @@ fixes them.
 ```bash
 ./configure-local-provider.sh
 ./status.sh
-nemoclaw thor-v4 connect
+nemoclaw thor-v5 connect
 ```
-
-### Known onboard issues
-
-`nemoclaw onboard` bakes these defaults that break local model inference:
-
-| Setting | Onboard default | Required value | Fixed by |
-|---------|----------------|----------------|----------|
-| `inference.api` | `openai-responses` | `openai-completions` | `configure-local-provider.sh` |
-| `reasoning` | `false` | `true` | `configure-local-provider.sh` |
-| `maxTokens` | `4096` | `16384` | `configure-local-provider.sh` |
-| `baseUrl` | (cloud endpoint) | `https://inference.local/v1` | `configure-local-provider.sh` |
-
-The `openai-responses` API bypasses vLLM's `--tool-call-parser` and breaks tool
-calling for all local models. See NemoClaw issue #976.
 
 ## 4. Start After Reboot
 
@@ -131,7 +117,7 @@ Same sequence every time — no special reboot handling needed:
 1. Start the model server:
 
 ```bash
-./start-model.sh qwopus3.5-27b-nvfp4
+./start-model.sh qwen3.5-27b-claude-distilled-v2-nvfp4
 ```
 
 2. Rebind the provider and patch the sandbox:
@@ -144,7 +130,7 @@ Same sequence every time — no special reboot handling needed:
 
 ```bash
 ./status.sh
-nemoclaw thor-v4 connect
+nemoclaw thor-v5 connect
 ```
 
 If `./status.sh` says the sandbox is missing, re-run `nemoclaw onboard`.
@@ -165,16 +151,20 @@ automatically freed.
 
 ## 6. Model Profiles
 
-| Profile | Model | Notes |
-|---------|-------|-------|
-| `qwen3.5-122b-a10b-nvfp4-resharded` | 122B MoE | Most capable, local resharded weights |
-| `qwopus3.5-27b-nvfp4` | 27B DeltaNet | Opus-distilled, NVFP4 |
-| `qwen3.5-27b-claude-distilled-nvfp4` | 27B DeltaNet | Claude-distilled, NVFP4 |
-| `qwen3.5-27b-fp8` | 27B dense | MTP speculative decoding |
-| `qwen3.5-35b-a3b-fp8` | 35B MoE | Fastest Qwen, MTP spec |
-| `qwen3.5-35b-a3b-nvfp4` | 35B MoE | NVFP4 quantized |
-| `gemma4-31b-it-nvfp4` | 31B dense | Vision+text, NVFP4 |
-| `gemma4-26b-a4b-it` | 26B MoE | Vision+text, BF16 |
+| Profile | Model | Seqs | Agents | Notes |
+|---------|-------|------|--------|-------|
+| `qwen3.5-122b-a10b-nvfp4-resharded` | 122B MoE | 4 | 1 | Most capable, local resharded weights |
+| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v2 distilled, best for coding |
+| `qwen3.5-27b-claude-distilled-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v1 distilled |
+| `qwopus3.5-27b-nvfp4` | 27B DeltaNet | 9 | 3 | Opus-distilled, NVFP4 |
+| `qwen3.5-27b-fp8` | 27B dense | 8 | 2 | FP8 quantized |
+| `qwen3.5-35b-a3b-fp8` | 35B MoE | 22 | 5 | FP8, highest concurrency |
+| `qwen3.5-35b-a3b-nvfp4` | 35B MoE | 26 | 6 | NVFP4, highest concurrency |
+| `gemma4-31b-it-nvfp4` | 31B dense | 6 | 6 | Vision+text, NVFP4 |
+| `gemma4-26b-a4b-it` | 26B MoE | 17 | 4 | Vision+text, BF16 |
+
+**Seqs** = max concurrent sequences in vLLM. **Agents** = max concurrent
+OpenClaw main agents (subagents fill remaining slots automatically).
 
 ### Launcher overrides
 
@@ -236,7 +226,7 @@ directories into the container:
 |----------------|-----------|----------|
 | `/root/.cache/flashinfer` | `~/thor-flashinfer-cache` | CUTLASS MoE GEMM `.so` files |
 | `/root/.cache/vllm` | `~/thor-vllm-cache` | torch.compile AOT artifacts |
-| `/root/.cache/torch` | `~/thor-torch-cache` | Triton kernel cache |
+| `/root/.cache/torch` | `~/thor-torch-cache` | Triton kernel cache, inductor cubins |
 
 If any of these host directories are deleted, the next launch repeats
 the corresponding compilation step.
@@ -249,7 +239,7 @@ levels. This is the primary reason swap is required (see Section 2).
 Connect:
 
 ```bash
-nemoclaw thor-v4 connect
+nemoclaw thor-v5 connect
 ```
 
 Inside the sandbox, the main interactive UI is:
@@ -271,13 +261,13 @@ openclaw tui
 Upload a repo into `/sandbox`:
 
 ```bash
-openshell sandbox upload thor-v4 /path/to/repo /sandbox/myrepo
+openshell sandbox upload thor-v5 /path/to/repo /sandbox/myrepo
 ```
 
 Then connect and work in the copy:
 
 ```bash
-nemoclaw thor-v4 connect
+nemoclaw thor-v5 connect
 cd /sandbox/myrepo
 openclaw tui
 ```
@@ -291,7 +281,7 @@ Important:
 Copy the repo back out:
 
 ```bash
-openshell sandbox download thor-v4 /sandbox/myrepo /path/to/output-copy
+openshell sandbox download thor-v5 /sandbox/myrepo /path/to/output-copy
 ```
 
 Or copy out only a patch:
@@ -305,7 +295,7 @@ git diff > /sandbox/myrepo.patch
 Then on the host:
 
 ```bash
-openshell sandbox download thor-v4 /sandbox/myrepo.patch .
+openshell sandbox download thor-v5 /sandbox/myrepo.patch .
 ```
 
 ## 9. Stop Without Uninstalling
@@ -351,24 +341,42 @@ openshell gateway stop
 
 - **Swap must be active** before starting any model (see Section 2).
   Verify with `swapon --show` before launching `start-model.sh`.
-- Use `nemoclaw thor-v4 connect` as the normal shell entrypoint.
+- Use `nemoclaw thor-v5 connect` as the normal shell entrypoint.
 - Use `openclaw tui` as the normal prompt UI.
 - If the TUI shows "gateway disconnected": `HOME=/sandbox openclaw gateway run &`
 - After any model change, run `./configure-local-provider.sh <profile>`.
 - After a reboot: verify swap (`swapon --show`), then `./start-model.sh`,
-  `./configure-local-provider.sh`, `./status.sh`, `nemoclaw thor-v4 connect`.
+  `./configure-local-provider.sh`, `./status.sh`, `nemoclaw thor-v5 connect`.
 - If you stop vLLM, always run `sudo sync && sudo sysctl -w vm.drop_caches=3`
   before loading another model.
 - First launch of a new model profile takes 20-60 min for kernel compilation
   (see Section 7). Subsequent launches take 3-8 min.
 
-## Key Differences From v3
+## 11. Why configure-local-provider.sh Is Needed
 
-| Aspect | v3 | v4 |
+`nemoclaw onboard` bakes defaults that don't work for local vLLM inference:
+
+| Setting | Onboard default | What we need | Why |
+|---------|----------------|--------------|-----|
+| `baseUrl` | `https://inference.local/v1` | `http://host.openshell.internal:8000/v1` | OpenClaw's fetch doesn't honor HTTP_PROXY (upstream bug openclaw/openclaw#62181) |
+| `contextWindow` | 131072 | 262144 | Models support 256K context |
+| `maxTokens` | 4096 | 16384 | Agent needs long outputs for code generation |
+| `timeoutSeconds` | (unset) | 1800 | Long reasoning sessions need 30min timeout |
+| Concurrency | (unset) | Per-profile | Matches vLLM max_num_seqs budget |
+
+The script patches these via `kubectl exec` into the sandbox. This bypasses
+Landlock (kubectl exec starts a new process, not a child of the sandbox
+entrypoint) and DAC restrictions (runs as root).
+
+## 12. Key Differences From v4
+
+| Aspect | v4 | v5 |
 |--------|----|----|
-| Setup | `./install.sh` + `./apply-host-fixes.sh` | `nemoclaw onboard` + `configure-local-provider.sh` |
-| Sandbox | `thor-assistant` | `thor-v4` |
-| Inference | Restream proxy (port 8199) → host vLLM | OpenShell provider route → host vLLM |
-| Tool streaming | Proxy buffered tool-call fragments | vLLM 0.19 native fix (PR #35615) |
-| Scripts | 25+ scripts | 4 scripts + 5 libs |
-| Teardown | `./uninstall.sh` + `./restore-host-state.sh` | `nemoclaw stop` + remove sandbox manually |
+| NemoClaw | v0.0.6 | v0.0.13 |
+| OpenShell | 0.0.22 | 0.0.26 |
+| Sandbox | `thor-v4` | `thor-v5` |
+| Sandbox survival | Untested | OpenShell 0.0.26 supports pod persistence |
+| Sandbox policy | Manual preset selection | `nemoclaw onboard` with interactive preset TUI |
+| Default model | `qwopus3.5-27b-nvfp4` | `qwen3.5-27b-claude-distilled-v2-nvfp4` |
+| Egress firewall | Manual iptables script | Removed (OpenShell policy handles network) |
+| Restream proxy | Retired in v4 | N/A |

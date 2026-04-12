@@ -174,8 +174,8 @@ resolve_model_profile() {
             THOR_MODEL_ID_DEFAULT="Sehyo/Qwen3.5-122B-A10B-NVFP4"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="4"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="4"
+            THOR_TARGET_MAX_NUM_SEQS="3"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
@@ -192,6 +192,16 @@ resolve_model_profile() {
         qwen3.5-27b-claude-distilled-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="9"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.5-27b-claude-distilled-v2-nvfp4)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-v2-NVFP4"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="9"
@@ -245,7 +255,7 @@ resolve_model_profile() {
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="6"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="6"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="gemma4"

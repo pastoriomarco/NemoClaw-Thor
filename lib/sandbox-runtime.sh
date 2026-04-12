@@ -664,13 +664,17 @@ with openclaw_path.open(encoding="utf-8") as f:
 # --- Proven necessary by hand (v4 session) ---
 # Fix provider API: onboard bakes openai-responses into the sandbox image,
 # which bypasses vLLM's --tool-call-parser and breaks tool calling.
+# Fix baseUrl: onboard sets https://inference.local/v1 which goes through the
+# OpenShell TLS proxy (10.200.0.1:3128). Node.js 22's NODE_USE_ENV_PROXY=1
+# doesn't reliably route through the proxy, causing 20s timeouts. Using the
+# direct vLLM host alias (plain HTTP) bypasses the proxy entirely and works.
 inference = (
     openclaw_cfg.setdefault("models", {})
     .setdefault("providers", {})
     .setdefault("inference", {})
 )
 inference["api"] = "openai-completions"
-inference["baseUrl"] = "https://inference.local/v1"
+inference["baseUrl"] = "http://host.openshell.internal:8000/v1"
 
 # --- Model identity: update model ID and name in the provider model list ---
 # Required for model switching without re-onboarding. Onboard bakes the
@@ -700,7 +704,7 @@ else:
     onboard_cfg = {}
 onboard_cfg.update({
     "endpointType": "custom",
-    "endpointUrl": "https://inference.local/v1",
+    "endpointUrl": "http://host.openshell.internal:8000/v1",
     "ncpPartner": None,
     "model": model_id,
     "profile": "inference-local",
