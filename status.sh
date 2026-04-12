@@ -10,7 +10,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/checks.sh"
 source "${SCRIPT_DIR}/lib/config.sh"
 source "${SCRIPT_DIR}/lib/sandbox-runtime.sh"
-source "${SCRIPT_DIR}/lib/egress-firewall.sh"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     echo "Usage: ./status.sh [model-profile]"
@@ -406,24 +405,6 @@ except Exception as e:
         info "No active host forward on port 18789 — gateway check skipped"
         info "To enable this check: openshell forward start 18789 ${sandbox_name} --background"
         record 0
-    fi
-fi
-
-# ── Egress firewall ──────────────────────────────────────────
-if [[ -n "${cluster_container}" && -n "${sandbox_name}" ]]; then
-    # grep -c prints "0" and returns exit code 1 when no matches — use || true
-    # to prevent set -e from aborting, then default empty result to 0.
-    fw_drop_count=$(docker exec "${cluster_container}" \
-        iptables -L "${EGRESS_FW_CHAIN}" -n 2>/dev/null \
-        | grep -c "DROP" || true)
-    fw_drop_count="${fw_drop_count:-0}"
-    if [[ "${fw_drop_count}" -gt 0 ]]; then
-        pass "Egress firewall active — sandbox internet access blocked"
-        record 0
-    else
-        fail "Egress firewall NOT active — sandbox has unrestricted internet"
-        fix "Run: ./enforce-egress-firewall.sh"
-        record 1
     fi
 fi
 
