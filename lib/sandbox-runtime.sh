@@ -626,6 +626,8 @@ sync_sandbox_runtime_config() {
         -e THOR_MODEL_ID="${THOR_MODEL_ID}" \
         -e THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
         -e THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
+        -e THOR_TARGET_MODEL_REASONING="${THOR_TARGET_MODEL_REASONING}" \
+        -e THOR_TARGET_MAX_TOKENS="${THOR_TARGET_MAX_TOKENS}" \
         -e THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}" \
         -e THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}" \
         -e THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}" \
@@ -635,66 +637,74 @@ sync_sandbox_runtime_config() {
         sh <<'SH'
 set -euo pipefail
 
-kubectl -n openshell exec "${THOR_SANDBOX_NAME}" -- env \
+kubectl -n openshell exec -i "${THOR_SANDBOX_NAME}" -- env \
     THOR_MODEL_ID="${THOR_MODEL_ID}" \
     THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
     THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
+    THOR_TARGET_MODEL_REASONING="${THOR_TARGET_MODEL_REASONING}" \
+    THOR_TARGET_MAX_TOKENS="${THOR_TARGET_MAX_TOKENS}" \
     THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}" \
     THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}" \
     THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}" \
     THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH="${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH}" \
     THOR_OPENCLAW_TOOLS_DENY_JSON="${THOR_OPENCLAW_TOOLS_DENY_JSON}" \
-    sh -lc '
-python3 - <<'"'"'PY'"'"'
+    python3 - <<'PY'
 import json
 import os
-import pwd
-from datetime import datetime, timezone
 from pathlib import Path
 
 model_id = os.environ["THOR_MODEL_ID"]
+context_window = int(os.environ.get("THOR_TARGET_MAX_MODEL_LEN") or "65536")
+
+openclaw_path = Path("/sandbox/.openclaw/openclaw.json")
+
+with openclaw_path.open(encoding="utf-8") as f:
+    openclaw_cfg = json.load(f)
+
+# --- Proven necessary by hand (v4 session) ---
+# Fix provider API: onboard bakes openai-responses into the sandbox image,
+# which bypasses vLLM's --tool-call-parser and breaks tool calling.
+# Fix baseUrl: onboard sets https://inference.local/v1 which goes through the
+# OpenShell TLS proxy (10.200.0.1:3128). Node.js 22's NODE_USE_ENV_PROXY=1
+# doesn't reliably route through the proxy, causing 20s timeouts. Using the
+# direct vLLM host alias (plain HTTP) bypasses the proxy entirely and works.
+inference = (
+    openclaw_cfg.setdefault("models", {})
+    .setdefault("providers", {})
+    .setdefault("inference", {})
+)
+inference["api"] = "openai-completions"
+inference["baseUrl"] = "http://host.openshell.internal:8000/v1"
+
+# --- Model identity: update model ID and name in the provider model list ---
+# Required for model switching without re-onboarding. Onboard bakes the
+# original model's ID/name into the models array; this overwrites them
+# with the currently served model.
+for model in inference.get("models", []):
+    if isinstance(model, dict):
+        model["id"] = model_id
+        model["name"] = f"inference/{model_id}"
+        model["reasoning"] = os.environ.get("THOR_TARGET_MODEL_REASONING", "false").lower() == "true"
+        model["maxTokens"] = int(os.environ.get("THOR_TARGET_MAX_TOKENS") or "16384")
+        model["contextWindow"] = context_window
+
+# --- Onboard config rewrite (/sandbox/.nemoclaw/config.json) ---
+# Required for model switching. Onboard writes the original model's name
+# here; NemoClaw reads it on startup to determine which provider/model
+# to use for agent dispatch. Without this, `nemoclaw agent` routes to a
+# stale model ID after switching.
+from datetime import datetime, timezone
 provider_name = os.environ["THOR_LOCAL_PROVIDER_NAME"]
 provider_label = "Local vLLM" if provider_name == "vllm-local" else provider_name
-primary_model = f"inference/{model_id}"
-context_window = int(os.environ.get("THOR_TARGET_MAX_MODEL_LEN") or "65536")
-main_max_concurrent = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT") or "1")
-subagents_max_concurrent = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT") or "1")
-subagents_max_children = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN") or "1")
-subagents_max_spawn_depth = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH") or "1")
-tools_deny = json.loads(os.environ["THOR_OPENCLAW_TOOLS_DENY_JSON"])
-
 onboard_path = Path("/sandbox/.nemoclaw/config.json")
-openclaw_path = Path("/sandbox/.openclaw/openclaw.json")
-openclaw_identity_dir = openclaw_path.parent / "identity"
-openclaw_device_json = openclaw_identity_dir / "device.json"
-openclaw_device_auth_json = openclaw_identity_dir / "device-auth.json"
-openclaw_devices_dir = openclaw_path.parent / "devices"
-openclaw_devices_pending_json = openclaw_devices_dir / "pending.json"
-openclaw_devices_paired_json = openclaw_devices_dir / "paired.json"
-
-try:
-    sandbox_user = pwd.getpwnam("sandbox")
-    sandbox_uid = sandbox_user.pw_uid
-    sandbox_gid = sandbox_user.pw_gid
-except KeyError:
-    sandbox_uid = os.getuid()
-    sandbox_gid = os.getgid()
-
-def chown_path(path: Path) -> None:
-    try:
-        os.chown(path, sandbox_uid, sandbox_gid)
-    except FileNotFoundError:
-        pass
-
 if onboard_path.exists():
     with onboard_path.open(encoding="utf-8") as f:
         onboard_cfg = json.load(f)
 else:
     onboard_cfg = {}
-
 onboard_cfg.update({
     "endpointType": "custom",
-    "endpointUrl": "https://inference.local/v1",
+    "endpointUrl": "http://host.openshell.internal:8000/v1",
     "ncpPartner": None,
     "model": model_id,
     "profile": "inference-local",
@@ -703,105 +713,130 @@ onboard_cfg.update({
     "providerLabel": provider_label,
     "onboardedAt": datetime.now(timezone.utc).isoformat(),
 })
-
 onboard_path.parent.mkdir(parents=True, exist_ok=True)
 with onboard_path.open("w", encoding="utf-8") as f:
     json.dump(onboard_cfg, f, indent=2)
     f.write("\n")
-chown_path(onboard_path.parent)
-chown_path(onboard_path)
-os.chmod(onboard_path, 0o600)
 
-with openclaw_path.open(encoding="utf-8") as f:
-    openclaw_cfg = json.load(f)
-
+# --- Agent behavior: primary model ref, concurrency, timeout ---
+# Sets the primary model reference so OpenClaw routes to the correct model.
+# Sets timeoutSeconds=1800 (30min) to prevent long reasoning sessions from
+# being killed by a short default timeout.
+# NOTE: temperature is NOT set here. vLLM auto-loads the correct sampling
+# defaults from each model's generation_config.json (e.g. temperature=1.0
+# for Gemma 4, temperature=0.6 for Qwen 3.5 coding). Hardcoding temperature
+# here would override those model-specific defaults.
+# NOTE: parallel_tool_calls is NOT set here. The OpenAI API default is true.
+# v3 disabled it because older models produced broken multi-tool responses
+# through the restream proxy. With vLLM 0.19 native tool streaming, this
+# restriction may no longer be needed. If parallel tool calls cause issues,
+# add: agents_defaults.setdefault("models", {})[primary_model] = {
+#     "params": {"parallel_tool_calls": False}}
+primary_model = f"inference/{model_id}"
 agents_defaults = openclaw_cfg.setdefault("agents", {}).setdefault("defaults", {})
 agents_defaults.setdefault("model", {})["primary"] = primary_model
-agents_defaults["maxConcurrent"] = main_max_concurrent
-agents_defaults.setdefault("models", {})[primary_model] = {
-    "params": {
-        "parallel_tool_calls": False,
-        "temperature": 0,
-    }
-}
+agents_defaults["maxConcurrent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT") or "1")
+agents_defaults["timeoutSeconds"] = 1800
+
+# --- Subagent concurrency ---
+# Configures how many subagents OpenClaw can spawn concurrently, how many
+# children each agent can have, and max spawn depth. Values are calculated
+# by resolve_thor_openclaw_concurrency_targets() in config.sh:
+#   subagent_slots = max_num_seqs - effective_main
+#   children_per_agent = min(4, ceil(subagent_slots / effective_main))
+# This ensures fair distribution — no single agent can hog all slots.
+# Thor's bandwidth-bound architecture means concurrent agents scale linearly
+# in throughput, so filling slots is free performance.
 subagents_cfg = agents_defaults.setdefault("subagents", {})
-subagents_cfg["maxConcurrent"] = subagents_max_concurrent
-subagents_cfg["maxChildrenPerAgent"] = subagents_max_children
-subagents_cfg["maxSpawnDepth"] = subagents_max_spawn_depth
+subagents_cfg["maxConcurrent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT") or "1")
+subagents_cfg["maxChildrenPerAgent"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN") or "1")
+subagents_cfg["maxSpawnDepth"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH") or "1")
 
-models_cfg = openclaw_cfg.setdefault("models", {})
-models_cfg["mode"] = "merge"
-providers_cfg = models_cfg.setdefault("providers", {})
-providers_cfg["inference"] = {
-    "baseUrl": "https://inference.local/v1",
-    "apiKey": "unused",
-    "api": "openai-completions",
-    "models": [
-        {
-            "id": model_id,
-            "name": model_id,
-            "reasoning": False,
-            "input": ["text"],
-            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
-            "contextWindow": context_window,
-            "maxTokens": 4096,
-        }
-    ],
-}
+# # --- Gateway auth bypass ---
+# # What: sets gateway.mode=local, disables device auth, allows insecure auth,
+# #   whitelists localhost origins for the control UI, and trusts localhost as
+# #   a proxy. This means the TUI connects without approval prompts.
+# # Why it existed: the OpenClaw gateway requires device pairing by default —
+# #   a new device must be approved on first connect. On v3, pod restarts
+# #   wiped the identity/device files (stored in pod tmpfs), so every restart
+# #   triggered a new approval prompt. These flags bypassed that entirely.
+# # Why it may not be needed: with sandbox survival (0.0.22), identity files
+# #   persist. Also NemoClaw v0.0.6 may handle gateway auth defaults during
+# #   onboard. Test: `nemoclaw connect` — if the TUI connects without prompts,
+# #   this is unnecessary.
+# #
+# gateway_cfg = openclaw_cfg.setdefault("gateway", {})
+# gateway_cfg["mode"] = "local"
+# control_ui_cfg = gateway_cfg.setdefault("controlUi", {})
+# control_ui_cfg["allowInsecureAuth"] = True
+# control_ui_cfg["dangerouslyDisableDeviceAuth"] = True
+# control_ui_cfg["allowedOrigins"] = [
+#     "http://127.0.0.1:18789",
+#     "http://localhost:18789",
+#     "http://[::1]:18789",
+# ]
+# gateway_cfg["trustedProxies"] = ["127.0.0.1", "::1"]
 
-gateway_cfg = openclaw_cfg.setdefault("gateway", {})
-gateway_cfg["mode"] = "local"
-control_ui_cfg = gateway_cfg.setdefault("controlUi", {})
-control_ui_cfg["allowInsecureAuth"] = True
-control_ui_cfg["dangerouslyDisableDeviceAuth"] = True
-control_ui_cfg["allowedOrigins"] = [
-    "http://127.0.0.1:18789",
-    "http://localhost:18789",
-    "http://[::1]:18789",
-]
-gateway_cfg["trustedProxies"] = ["127.0.0.1", "::1"]
+# # --- Tool deny list ---
+# # What: sets tools.profile to "coding", denies cron/web_fetch/web_search,
+# #   and restricts sandbox tools to fs and runtime groups only.
+# # Why it existed: without a deny list, the agent has access to web_fetch
+# #   and web_search which would fail silently against the egress firewall
+# #   (wasting tokens on retries), and cron which has no use case. The
+# #   sandbox tool restrictions prevent the agent from using tools meant for
+# #   the host environment.
+# # Why it may not be needed: if the egress firewall is off and you want
+# #   the agent to have full tool access, this is unnecessary. If strict-local
+# #   policy is active, these tools would fail anyway — but denying them
+# #   prevents the agent from wasting tokens trying.
+# #
+# tools_deny = json.loads(os.environ["THOR_OPENCLAW_TOOLS_DENY_JSON"])
+# tools_cfg = openclaw_cfg.setdefault("tools", {})
+# tools_cfg["profile"] = "coding"
+# tools_cfg["deny"] = tools_deny
+# tools_cfg.setdefault("sandbox", {}).setdefault("tools", {})["allow"] = [
+#     "group:fs",
+#     "group:runtime",
+# ]
+# tools_cfg["sandbox"]["tools"]["deny"] = []
 
-tools_cfg = openclaw_cfg.setdefault("tools", {})
-tools_cfg["profile"] = "coding"
-tools_cfg["deny"] = tools_deny
-tools_cfg.setdefault("sandbox", {}).setdefault("tools", {})["allow"] = [
-    "group:fs",
-    "group:runtime",
-]
-tools_cfg["sandbox"]["tools"]["deny"] = []
+# # --- Directory/permission setup ---
+# # What: creates .openclaw/identity, .openclaw/devices, .openclaw/cron dirs,
+# #   chowns them to the sandbox user, sets restrictive permissions, and
+# #   creates cron/jobs.json if missing.
+# # Why it existed: the openclaw gateway crashes on startup if cron/jobs.json
+# #   doesn't exist. The identity and devices dirs need to be writable by the
+# #   sandbox user for device pairing to work. Without chown, these dirs are
+# #   root-owned (created by kubectl exec running as root) and the sandbox
+# #   user can't write device identity files.
+# # Why it may not be needed: onboard may create these dirs with correct
+# #   ownership. Sandbox survival means they persist. Only needed if the
+# #   gateway crashes with "cron/jobs.json not found" or if device pairing
+# #   fails with permission errors.
+# #
+# try:
+#     sandbox_user = pwd.getpwnam("sandbox")
+#     sandbox_uid = sandbox_user.pw_uid
+#     sandbox_gid = sandbox_user.pw_gid
+# except KeyError:
+#     sandbox_uid = os.getuid()
+#     sandbox_gid = os.getgid()
+# def chown_path(path):
+#     try: os.chown(path, sandbox_uid, sandbox_gid)
+#     except FileNotFoundError: pass
+# for d in [openclaw_path.parent / "identity", openclaw_path.parent / "devices", openclaw_path.parent / "cron"]:
+#     d.mkdir(parents=True, exist_ok=True)
+#     chown_path(d)
+# cron_jobs = openclaw_path.parent / "cron" / "jobs.json"
+# if not cron_jobs.exists():
+#     cron_jobs.write_text("{}\n")
 
-openclaw_cron_dir = openclaw_path.parent / "cron"
-openclaw_cron_jobs = openclaw_cron_dir / "jobs.json"
-
-openclaw_path.parent.mkdir(parents=True, exist_ok=True)
-openclaw_identity_dir.mkdir(parents=True, exist_ok=True)
-openclaw_devices_dir.mkdir(parents=True, exist_ok=True)
-openclaw_cron_dir.mkdir(parents=True, exist_ok=True)
-chown_path(openclaw_identity_dir)
-chown_path(openclaw_devices_dir)
-chown_path(openclaw_cron_dir)
-os.chmod(openclaw_identity_dir, 0o700)
-os.chmod(openclaw_devices_dir, 0o700)
-os.chmod(openclaw_cron_dir, 0o755)
-if not openclaw_cron_jobs.exists():
-    openclaw_cron_jobs.write_text("{}\n")
-chown_path(openclaw_cron_jobs)
-os.chmod(openclaw_cron_jobs, 0o644)
-for writable_path in (
-    openclaw_device_json,
-    openclaw_device_auth_json,
-    openclaw_devices_pending_json,
-    openclaw_devices_paired_json,
-):
-    if writable_path.exists():
-        chown_path(writable_path)
-        os.chmod(writable_path, 0o600)
-
+# --- Write openclaw.json ---
+os.chmod(openclaw_path, 0o644)
 with openclaw_path.open("w", encoding="utf-8") as f:
     json.dump(openclaw_cfg, f, indent=2)
     f.write("\n")
 os.chmod(openclaw_path, 0o444)
 PY
-'
 SH
 }

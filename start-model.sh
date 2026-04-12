@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start-model.sh — Start a local Qwen vLLM server for NemoClaw-Thor
+# start-model.sh — Start a local inference server for NemoClaw-Thor
 #
 # Usage:
 #   ./start-model.sh [model-profile]
@@ -46,9 +46,16 @@ fi
 
 save_thor_runtime_config
 
-info "Starting local vLLM server..."
-info "OpenShell should point to: ${THOR_LOCAL_VLLM_BASE_URL}"
-info "Stop with Ctrl-C."
-echo ""
-
-run_thor_vllm_container
+if [[ "${THOR_LAUNCH_BACKEND:-vllm}" == "llamacpp" ]]; then
+    info "Starting local llama-server..."
+    info "OpenShell should point to: ${THOR_LOCAL_VLLM_BASE_URL}"
+    info "Stop with Ctrl-C."
+    echo ""
+    run_thor_llamacpp_container
+else
+    info "Starting local vLLM server..."
+    info "OpenShell should point to: ${THOR_LOCAL_VLLM_BASE_URL}"
+    info "Stop with Ctrl-C."
+    echo ""
+    run_thor_vllm_container
+fi

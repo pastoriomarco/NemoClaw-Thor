@@ -1,0 +1,42 @@
+# NemoClaw-Thor vLLM — bundled image docker compose
+#
+# Usage:
+#   HF_CACHE=~/my-hf-cache docker compose -f bundle-compose.yml up
+#
+# Or set env vars in a .env file next to this compose file.
+#
+# Requires:
+#   - Jetson AGX Thor (SM110) with NVIDIA Container Runtime
+#   - Model weights (auto-downloaded to HF_CACHE on first run)
+#   - NVIDIA_DISABLE_REQUIRE=true already baked into the image
+
+services:
+  vllm:
+    image: nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132-bundled
+    runtime: nvidia
+    ipc: host
+    network_mode: host
+    environment:
+      # Model selection
+      VLLM_MODEL: ${VLLM_MODEL:-Kbenkhaled/Qwen3.5-35B-A3B-NVFP4}
+      VLLM_SERVED_MODEL_NAME: ${VLLM_SERVED_MODEL_NAME:-Qwen3.5-35B-A3B-NVFP4}
+      VLLM_PORT: ${VLLM_PORT:-8000}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-65536}
+      VLLM_GPU_MEM_UTIL: ${VLLM_GPU_MEM_UTIL:-0.8}
+      VLLM_MAX_NUM_SEQS: ${VLLM_MAX_NUM_SEQS:-20}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      # SM110 flags already baked into image ENV — no need to set here
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      # Model weights — only required mount. Set HF_CACHE env var or edit directly.
+      - ${HF_CACHE:-~/thor-hf-cache}:/data/models/huggingface
+      # Optional: persist JIT caches between image updates (overlay the baked-in ones)
+      # - ${FLASHINFER_CACHE:-~/thor-flashinfer-cache}:/root/.cache/flashinfer
+      # - ${VLLM_CACHE:-~/thor-vllm-cache}:/root/.cache/vllm
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${VLLM_PORT:-8000}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 600s  # allow up to 10 min for first-run CUDA warmup

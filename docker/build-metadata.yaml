@@ -1,0 +1,13 @@
+build_date: 2026-04-10T18:43:01Z
+script_commit: f0f3a8793a073e74119a39c794cb35237241cc8c
+vllm_ref: main
+vllm_commit: e281cb721ca21f39afff53b02f59ddedb3977172
+flashinfer_ref: main
+flashinfer_commit: 904fa8cbcf0d5d1d8b31283020223bfec1acbb6f
+gpu_arch: 11.0a
+cuda_base: nvidia/cuda:13.2.0-devel-ubuntu24.04
+platform: jetson-thor-sm110
+build_args:
+  build_jobs: 14
+  pre_transformers: 1
+  vllm_prs: ""

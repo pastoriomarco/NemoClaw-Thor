@@ -67,34 +67,9 @@ openshell inference set \
 pass "Inference route set to ${THOR_LOCAL_PROVIDER_NAME} / ${THOR_MODEL_ID}"
 
 if [[ -n "${sandbox_name}" ]]; then
-    info "Reconciling sandbox SSH connect state for ${sandbox_name}..."
-    reconcile_sandbox_ssh_handshake_secret "${sandbox_name}"
-    pass "Sandbox SSH connect state is healthy"
-
     info "Syncing sandbox runtime config for ${sandbox_name}..."
     sync_sandbox_runtime_config "${sandbox_name}"
     pass "Sandbox runtime config synced to ${THOR_MODEL_ID}"
-
-    registry_file="$(thor_nemoclaw_registry_file)"
-    if [[ -f "${registry_file}" ]]; then
-        python3 - "${registry_file}" "${sandbox_name}" "${THOR_MODEL_ID}" "${THOR_LOCAL_PROVIDER_NAME}" <<'PYEOF'
-import json
-import sys
-
-path, sandbox_name, model_id, provider_name = sys.argv[1:5]
-with open(path, encoding="utf-8") as f:
-    data = json.load(f)
-
-entry = data.get("sandboxes", {}).get(sandbox_name)
-if isinstance(entry, dict):
-    entry["model"] = model_id
-    entry["provider"] = provider_name
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-PYEOF
-        pass "Updated ~/.nemoclaw registry for ${sandbox_name}"
-    fi
 else
     warn "Could not resolve a sandbox name to sync internal NemoClaw config"
     fix "Set THOR_MANAGED_SANDBOX_NAME in ${THOR_CONFIG_FILE}, or rerun install/onboard."
@@ -143,14 +118,16 @@ if [[ -n "${vllm_response}" ]]; then
         -d "{
             \"model\": \"${THOR_MODEL_ID}\",
             \"messages\": [{\"role\": \"user\", \"content\": \"Reply with one word: ready\"}],
-            \"max_tokens\": 16
+            \"max_tokens\": 128
         }" 2>/dev/null || echo "")
 
     if echo "${warmup_reply}" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
-content = data['choices'][0]['message']['content']
-sys.exit(0 if content.strip() else 1)
+msg = data['choices'][0]['message']
+content = msg.get('content') or ''
+reasoning = msg.get('reasoning') or msg.get('reasoning_content') or ''
+sys.exit(0 if content.strip() or reasoning.strip() else 1)
 " 2>/dev/null; then
         pass "Model warmup complete"
     else
