@@ -62,4 +62,9 @@ ENV VLLM_MAX_NUM_SEQS=20
 COPY bundle-entrypoint.sh /workspace/bundle-entrypoint.sh
 RUN chmod +x /workspace/bundle-entrypoint.sh
 
+# Keep the bundled image aligned with the standard Thor launch path for Qwen
+# tool calling. The compatibility template is small and removes dependence on
+# an external bind mount when using the bundled image directly.
+COPY templates/ /opt/nemoclaw-thor/templates/
+
 ENTRYPOINT ["/workspace/bundle-entrypoint.sh"]

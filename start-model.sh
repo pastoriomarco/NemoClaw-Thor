@@ -48,13 +48,15 @@ save_thor_runtime_config
 
 if [[ "${THOR_LAUNCH_BACKEND:-vllm}" == "llamacpp" ]]; then
     info "Starting local llama-server..."
-    info "OpenShell should point to: ${THOR_LOCAL_VLLM_BASE_URL}"
+    info "OpenClaw sandbox base URL: ${THOR_OPENCLAW_BASE_URL}"
+    info "OpenShell provider target: ${THOR_LOCAL_VLLM_BASE_URL}"
     info "Stop with Ctrl-C."
     echo ""
     run_thor_llamacpp_container
 else
     info "Starting local vLLM server..."
-    info "OpenShell should point to: ${THOR_LOCAL_VLLM_BASE_URL}"
+    info "OpenClaw sandbox base URL: ${THOR_OPENCLAW_BASE_URL}"
+    info "OpenShell provider target: ${THOR_LOCAL_VLLM_BASE_URL}"
     info "Stop with Ctrl-C."
     echo ""
     run_thor_vllm_container

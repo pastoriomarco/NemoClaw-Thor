@@ -625,6 +625,8 @@ sync_sandbox_runtime_config() {
         -e THOR_SANDBOX_NAME="${sandbox_name}" \
         -e THOR_MODEL_ID="${THOR_MODEL_ID}" \
         -e THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
+        -e THOR_OPENCLAW_BASE_URL="${THOR_OPENCLAW_BASE_URL}" \
+        -e THOR_LOCAL_VLLM_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL}" \
         -e THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
         -e THOR_TARGET_MODEL_REASONING="${THOR_TARGET_MODEL_REASONING}" \
         -e THOR_TARGET_MAX_TOKENS="${THOR_TARGET_MAX_TOKENS}" \
@@ -640,6 +642,8 @@ set -euo pipefail
 kubectl -n openshell exec -i "${THOR_SANDBOX_NAME}" -- env \
     THOR_MODEL_ID="${THOR_MODEL_ID}" \
     THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME}" \
+    THOR_OPENCLAW_BASE_URL="${THOR_OPENCLAW_BASE_URL}" \
+    THOR_LOCAL_VLLM_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL}" \
     THOR_TARGET_MAX_MODEL_LEN="${THOR_TARGET_MAX_MODEL_LEN}" \
     THOR_TARGET_MODEL_REASONING="${THOR_TARGET_MODEL_REASONING}" \
     THOR_TARGET_MAX_TOKENS="${THOR_TARGET_MAX_TOKENS}" \
@@ -661,20 +665,24 @@ openclaw_path = Path("/sandbox/.openclaw/openclaw.json")
 with openclaw_path.open(encoding="utf-8") as f:
     openclaw_cfg = json.load(f)
 
-# --- Proven necessary by hand (v4 session) ---
+# --- Proven necessary by hand (v4/v5 sessions) ---
 # Fix provider API: onboard bakes openai-responses into the sandbox image,
 # which bypasses vLLM's --tool-call-parser and breaks tool calling.
-# Fix baseUrl: onboard sets https://inference.local/v1 which goes through the
-# OpenShell TLS proxy (10.200.0.1:3128). Node.js 22's NODE_USE_ENV_PROXY=1
-# doesn't reliably route through the proxy, causing 20s timeouts. Using the
-# direct vLLM host alias (plain HTTP) bypasses the proxy entirely and works.
+# Keep the sandbox/OpenClaw client pointed at the proxy-level inference route:
+#   https://inference.local/v1
+# The underlying OpenShell provider target is configured separately on the host:
+#   - direct mode provider target: http://host.openshell.internal:8000/v1
+#   - ManyForge mode provider target: http://host.openshell.internal:8888/v1
+# In ManyForge mode the host mux forwards normal inference to vLLM on :8000
+# and ManyForge plugin traffic to ManyForge on :9000. The sandbox-facing URL is
+# controlled by THOR_OPENCLAW_BASE_URL and persisted by config.sh.
 inference = (
     openclaw_cfg.setdefault("models", {})
     .setdefault("providers", {})
     .setdefault("inference", {})
 )
 inference["api"] = "openai-completions"
-inference["baseUrl"] = "http://host.openshell.internal:8000/v1"
+inference["baseUrl"] = os.environ.get("THOR_OPENCLAW_BASE_URL", "https://inference.local/v1")
 
 # --- Model identity: update model ID and name in the provider model list ---
 # Required for model switching without re-onboarding. Onboard bakes the
@@ -689,10 +697,10 @@ for model in inference.get("models", []):
         model["contextWindow"] = context_window
 
 # --- Onboard config rewrite (/sandbox/.nemoclaw/config.json) ---
-# Required for model switching. Onboard writes the original model's name
-# here; NemoClaw reads it on startup to determine which provider/model
-# to use for agent dispatch. Without this, `nemoclaw agent` routes to a
-# stale model ID after switching.
+# Required for model switching and provider-mode switching. Onboard writes the
+# original model/provider endpoint here; NemoClaw reads it on startup to
+# determine which provider/model to use for agent dispatch. Without this,
+# `nemoclaw agent` routes to a stale model ID or stale base URL.
 from datetime import datetime, timezone
 provider_name = os.environ["THOR_LOCAL_PROVIDER_NAME"]
 provider_label = "Local vLLM" if provider_name == "vllm-local" else provider_name
@@ -704,7 +712,7 @@ else:
     onboard_cfg = {}
 onboard_cfg.update({
     "endpointType": "custom",
-    "endpointUrl": "http://host.openshell.internal:8000/v1",
+    "endpointUrl": os.environ.get("THOR_OPENCLAW_BASE_URL", "https://inference.local/v1"),
     "ncpPartner": None,
     "model": model_id,
     "profile": "inference-local",

@@ -11,14 +11,51 @@ source "${SCRIPT_DIR}/lib/checks.sh"
 source "${SCRIPT_DIR}/lib/config.sh"
 source "${SCRIPT_DIR}/lib/sandbox-runtime.sh"
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    echo "Usage: ./configure-local-provider.sh [model-profile]"
-    echo ""
-    print_supported_model_profiles
-    exit 0
-fi
+THOR_INFERENCE_ROUTE_TIMEOUT_SECONDS="${THOR_INFERENCE_ROUTE_TIMEOUT_SECONDS:-180}"
+
+# Parse flags
+_mux_flag_set="false"
+while [[ "${1:-}" == --* ]]; do
+    case "${1}" in
+        --with-manyforge-mux)
+            THOR_MANYFORGE_MUX_ENABLED="true"
+            _mux_flag_set="true"
+            shift
+            ;;
+        --without-manyforge-mux)
+            THOR_MANYFORGE_MUX_ENABLED="false"
+            _mux_flag_set="true"
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: ./configure-local-provider.sh [OPTIONS] [model-profile]"
+            echo ""
+            echo "Options:"
+            echo "  --with-manyforge-mux      Route inference.local through the ManyForge mux"
+            echo "                            proxy (port 8888) for ManyForge MCP tool access"
+            echo "  --without-manyforge-mux   Restore direct vLLM routing (port 8000)"
+            echo ""
+            print_supported_model_profiles
+            exit 0
+            ;;
+        *)
+            echo "Unknown flag: ${1}" >&2
+            exit 1
+            ;;
+    esac
+done
 
 load_thor_runtime_config "${1:-}"
+
+# When a mux flag was explicitly passed, force the base URL to match.
+# This overrides any stale URL from a previous config.env save.
+if [[ "${_mux_flag_set}" == "true" ]]; then
+    if [[ "${THOR_MANYFORGE_MUX_ENABLED}" == "true" ]]; then
+        THOR_LOCAL_VLLM_BASE_URL="http://host.openshell.internal:${THOR_MANYFORGE_MUX_PORT}/v1"
+    else
+        THOR_LOCAL_VLLM_BASE_URL="http://host.openshell.internal:8000/v1"
+    fi
+fi
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Local Provider Configuration${NC}"
@@ -63,8 +100,9 @@ info "Setting inference route to ${THOR_MODEL_ID}..."
 openshell inference set \
     --provider "${THOR_LOCAL_PROVIDER_NAME}" \
     --model "${THOR_MODEL_ID}" \
+    --timeout "${THOR_INFERENCE_ROUTE_TIMEOUT_SECONDS}" \
     --no-verify
-pass "Inference route set to ${THOR_LOCAL_PROVIDER_NAME} / ${THOR_MODEL_ID}"
+pass "Inference route set to ${THOR_LOCAL_PROVIDER_NAME} / ${THOR_MODEL_ID} (${THOR_INFERENCE_ROUTE_TIMEOUT_SECONDS}s)"
 
 if [[ -n "${sandbox_name}" ]]; then
     info "Syncing sandbox runtime config for ${sandbox_name}..."

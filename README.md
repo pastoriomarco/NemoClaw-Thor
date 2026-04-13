@@ -11,14 +11,14 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 | OpenClaw | 2026.3.11 | Pinned in NemoClaw's Dockerfile.base |
 | vLLM | 0.19.1rc1 | Custom SM110 image with FlashInfer CUTLASS |
 | Sandbox | `thor-v5` | Landlock + seccomp + netns |
-| Provider | `vllm-local` | Direct HTTP to host vLLM |
+| Provider | `vllm-local` | Direct HTTP to host vLLM (`:8000`) or ManyForge mux mode (`:8888`) |
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `start-model.sh <profile>` | Launch vLLM with a model profile |
-| `configure-local-provider.sh [profile]` | Wire OpenShell provider + patch sandbox config |
+| `configure-local-provider.sh [OPTIONS] [profile]` | Wire OpenShell provider + patch sandbox config |
 | `status.sh [profile]` | System health checks |
 
 ## Usage
@@ -35,6 +35,28 @@ cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
 ./configure-local-provider.sh qwen3.5-27b-claude-distilled-v2-nvfp4
 ./status.sh
 nemoclaw thor-v5 connect
+```
+
+### ManyForge-integrated mode
+
+If the OpenClaw main agent must reach ManyForge tools through the verified
+workspace-plugin path, switch the provider to the muxed route first:
+
+```bash
+./configure-local-provider.sh --with-manyforge-mux qwen3.5-27b-claude-distilled-v2-nvfp4
+./status.sh
+```
+
+This keeps the OpenClaw-side provider name the same (`vllm-local`) but points
+the OpenShell provider target at `http://host.openshell.internal:8888/v1`,
+while the sandbox/OpenClaw client continues to use `https://inference.local/v1`.
+In this mode the ManyForge mux forwards normal inference to vLLM and
+`x_manyforge` traffic to ManyForge.
+
+To restore the default direct-vLLM path:
+
+```bash
+./configure-local-provider.sh --without-manyforge-mux
 ```
 
 ### After reboot
@@ -80,7 +102,9 @@ Host (Jetson AGX Thor)
 │   └── Model serving with SM110 NVFP4 + FlashInfer CUTLASS
 ├── OpenShell gateway (K3s, openshell-cluster-nemoclaw)
 │   ├── L7 proxy (10.200.0.1:3128) — TLS termination, policy enforcement
-│   └── Inference route: inference.local → vllm-local → host:8000
+│   └── Inference route:
+│       • direct mode      → vllm-local → host:8000
+│       • ManyForge mode   → vllm-local → host:8888 (mux)
 └── Sandbox pod (thor-v5)
     ├── OpenClaw gateway (port 18789) — agent orchestration
     ├── OpenClaw agent — LLM-powered task execution
@@ -89,11 +113,11 @@ Host (Jetson AGX Thor)
 
 ### Why configure-local-provider.sh is needed
 
-`nemoclaw onboard` bakes defaults that don't work for local vLLM inference:
+`nemoclaw onboard` bakes defaults that don't work for our local runtime modes:
 
 | Setting | Onboard default | What we need | Why |
 |---------|----------------|--------------|-----|
-| `baseUrl` | `https://inference.local/v1` | `http://host.openshell.internal:8000/v1` | OpenClaw's fetch doesn't honor HTTP_PROXY (upstream bug openclaw/openclaw#62181) |
+| `baseUrl` | `https://inference.local/v1` | Keep `https://inference.local/v1` in the sandbox, but repoint the OpenShell provider target to `http://host.openshell.internal:8000/v1` by default or `http://host.openshell.internal:8888/v1` in ManyForge mode | In this build the sandbox/OpenClaw client works through the proxy route; the provider target decides whether inference goes straight to vLLM or through the ManyForge mux |
 | `contextWindow` | 131072 | 262144 | Models support 256K context |
 | `maxTokens` | 4096 | 16384 | Agent needs long outputs for code generation |
 | `timeoutSeconds` | (unset) | 1800 | Long reasoning sessions need 30min timeout |
@@ -102,6 +126,10 @@ Host (Jetson AGX Thor)
 The `configure-local-provider.sh` script patches these via `kubectl exec` into
 the sandbox. This bypasses Landlock (kubectl exec starts a new process, not a
 child of the sandbox entrypoint) and DAC restrictions (runs as root).
+
+When ManyForge integration is enabled, the same script also persists the mux
+state in `~/.config/nemoclaw-thor/config.env` so `status.sh` and later runs
+stay consistent.
 
 ## Key files
 

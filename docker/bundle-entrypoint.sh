@@ -61,7 +61,7 @@ ARGS=(
     --language-model-only
     --reasoning-parser qwen3
     --enable-auto-tool-choice
-    --tool-call-parser qwen3_coder
+    --tool-call-parser qwen3_xml
     --enable-prefix-caching
     --max-model-len "${VLLM_MAX_MODEL_LEN:-65536}"
     --kv-cache-dtype "${VLLM_KV_CACHE_DTYPE:-fp8}"
@@ -75,7 +75,7 @@ if [ -n "${VLLM_API_KEY}" ] && [ "${VLLM_API_KEY}" != "dummy" ]; then
     ARGS+=(--api-key "${VLLM_API_KEY}")
 fi
 
-# Chat template: baked in at /opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja
+# Chat template: bundled at /opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja
 TEMPLATE=/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja
 if [ -f "$TEMPLATE" ]; then
     ARGS+=(--chat-template "$TEMPLATE")

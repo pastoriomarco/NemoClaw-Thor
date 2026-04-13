@@ -469,7 +469,7 @@ nemoclaw stop && nemoclaw start
 | `dashboard_tcp_proxy.py` | DELETED | Unused proxy script |
 | `enforce-egress-firewall.sh` | DELETED | Replaced by OpenShell sandbox policy |
 | `lib/egress-firewall.sh` | DELETED | Replaced by OpenShell sandbox policy |
-| `templates/qwen3-tool-call-compat.jinja` | DELETED | Replaced by vLLM native parser |
+| `templates/qwen3-tool-call-compat.jinja` | RETAINED | Current Qwen tool-calling path still depends on the compatibility template + `qwen3_xml`; the earlier deletion note was incorrect |
 | `configure-local-provider.sh` | UPDATE | Removed dead egress-firewall source, commented-out blocks |
 | `lib/launch.sh` | UPDATE | Added TORCHINDUCTOR_CACHE_DIR for persistent cubin cache |
 | `README.md` | REWRITTEN | Complete v5 rewrite with architecture, model profiles, config explanation |

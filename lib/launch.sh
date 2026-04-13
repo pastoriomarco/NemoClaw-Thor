@@ -168,6 +168,39 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
             ;;
+        qwen3.5-9b-claude-distilled-nvfp4)
+            # Qwen3.5-9B VLM: DeltaNet hybrid (linear_attention + full_attention) with visual encoder.
+            # Claude 4.6 Opus reasoning-distilled, NVFP4 MLP-only + FP8 KV. Visual encoder kept bf16.
+            # Multimodal: vision + text + tools. No --language-model-only.
+            # --mm-encoder-attn-backend TORCH_SDPA: workaround for SM110 ViT PTX crash (#38411).
+            # --max-num-batched-tokens 4096: MTP speculative decode defaults to 2048 which throttles
+            #   throughput. 4096 gives the scheduler enough headroom for 8 seqs + draft tokens.
+            # Use the dedicated no-think chat template variant for this fast-control profile.
+            # The standard Qwen template opens <think> by default, which causes the 9B distilled
+            # model to burn the full token budget reasoning before it emits content/tool calls.
+            # Also do not advertise a Qwen reasoning parser for this profile: OpenClaw's current
+            # OpenAI-completions path expects ordinary content/tool_calls, and vLLM's split
+            # reasoning channel leaves the embedded agent with no final content to consume.
+            # Source: Alexzander85/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-NVFP4-MLP-FP8KV
+            THOR_LAUNCH_MODEL_SOURCE="Alexzander85/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-NVFP4-MLP-FP8KV"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.4}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat-nothink.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat-nothink.jinja"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--quantization" "modelopt"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--enable-prefix-caching"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
+            )
+            ;;
         qwen3.5-27b-claude-distilled-nvfp4)
             # Qwen3.5-27B DeltaNet hybrid: 48 linear_attention + 16 full_attention layers.
             # Mixed NVFP4 (W4A4 for gate/up/o_proj) + FP8 (down_proj, QKV) + BF16 (lm_head).
@@ -212,6 +245,28 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "qwen3_xml"
                 "--enable-prefix-caching"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
+            )
+            ;;
+        gemma4-e4b-it)
+            # Gemma 4 E4B IT — MoE (8B total, ~4B active per token), ~16 GB BF16.
+            # Native function calling (gemma4 parser), vision, audio.
+            # No NVFP4 quant available — runs at BF16, light enough at 0.4 GPU util.
+            # triton_attn: same head_dim=512 FlashInfer limitation as all Gemma 4 models.
+            # SWA (sliding window attention) + few global layers = small KV footprint.
+            # --mm-encoder-attn-backend TORCH_SDPA: SM110 ViT PTX crash workaround.
+            # 128K context (native for E-series, vs 256K for medium models).
+            THOR_LAUNCH_MODEL_SOURCE="google/gemma-4-E4B-it"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.4}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "triton_attn"
+                "--reasoning-parser" "gemma4"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "gemma4"
+                "--enable-prefix-caching"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
             )
             ;;
         gemma4-31b-it-nvfp4)

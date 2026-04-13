@@ -152,9 +152,11 @@ Supported model profiles:
   qwen3.5-122b-a10b-nvfp4-resharded
   qwen3.5-27b-claude-distilled-nvfp4  (DeltaNet hybrid, reasoning-distilled)
   qwopus3.5-27b-nvfp4       (DeltaNet hybrid, Opus-distilled NVFP4)
+  qwen3.5-9b-claude-distilled-nvfp4  (DeltaNet hybrid, 9B Opus-distilled NVFP4)
   qwen3.5-27b-fp8
   qwen3.5-35b-a3b-fp8
   qwen3.5-35b-a3b-nvfp4
+  gemma4-e4b-it             (vLLM, BF16 MoE, 8B/4B-active, vision+text+tools)
   gemma4-31b-it-nvfp4       (vLLM, NVFP4 quantized, vision+text+tools)
   gemma4-26b-a4b-it         (vLLM, BF16 MoE 128E/8A, vision+text+tools)
 EOF
@@ -187,6 +189,16 @@ resolve_model_profile() {
             THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
             THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.5-9b-claude-distilled-nvfp4)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.5-9B-Claude-Distilled-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="false"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
         qwen3.5-27b-claude-distilled-nvfp4)
@@ -249,6 +261,18 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
+        gemma4-e4b-it)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="gemma-4-E4B-it"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="12"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_TOOL_CALL_PARSER="gemma4"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
         gemma4-31b-it-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Gemma-4-31B-IT-NVFP4"
@@ -283,7 +307,31 @@ resolve_model_profile() {
     THOR_MODEL_ID="${THOR_MODEL_ID:-${THOR_MODEL_ID_DEFAULT}}"
     THOR_POLICY_PROFILE="${THOR_POLICY_PROFILE:-strict-local}"
     THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME:-vllm-local}"
-    THOR_LOCAL_VLLM_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL:-http://host.openshell.internal:8000/v1}"
+    THOR_MANYFORGE_MUX_ENABLED="${THOR_MANYFORGE_MUX_ENABLED:-false}"
+    THOR_MANYFORGE_MUX_PORT="${THOR_MANYFORGE_MUX_PORT:-8888}"
+
+    # The sandbox/OpenClaw client should always talk to inference.local. The
+    # underlying OpenShell provider target is what changes between direct vLLM
+    # and ManyForge mux mode.
+    THOR_OPENCLAW_BASE_URL="${THOR_OPENCLAW_BASE_URL:-https://inference.local/v1}"
+
+    # When ManyForge mux is enabled, the provider target URL MUST point to the
+    # mux proxy — this is not a default, it's a forced override. When disabled,
+    # reset to direct vLLM if the URL still points to the mux port (cleanup
+    # from a previous mux-enabled run); otherwise keep the saved/user value.
+    # THOR_HOST_VLLM_MODELS_URL always points directly to vLLM for health checks.
+    if [[ "${THOR_MANYFORGE_MUX_ENABLED}" == "true" ]]; then
+        THOR_LOCAL_VLLM_BASE_URL="http://host.openshell.internal:${THOR_MANYFORGE_MUX_PORT}/v1"
+    else
+        case "${THOR_LOCAL_VLLM_BASE_URL:-}" in
+            *":${THOR_MANYFORGE_MUX_PORT}/"*)
+                THOR_LOCAL_VLLM_BASE_URL="http://host.openshell.internal:8000/v1"
+                ;;
+            *)
+                THOR_LOCAL_VLLM_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL:-http://host.openshell.internal:8000/v1}"
+                ;;
+        esac
+    fi
     THOR_HOST_VLLM_MODELS_URL="${THOR_HOST_VLLM_MODELS_URL:-http://127.0.0.1:8000/v1/models}"
     THOR_LOCAL_VLLM_API_KEY="${THOR_LOCAL_VLLM_API_KEY:-dummy}"
     THOR_OPENSHELL_GATEWAY_NAME="${THOR_OPENSHELL_GATEWAY_NAME:-nemoclaw}"
@@ -346,6 +394,7 @@ load_thor_runtime_config() {
     local env_profile="${THOR_MODEL_PROFILE:-}"
     local env_model_id="${THOR_MODEL_ID:-}"
     local env_provider_name="${THOR_LOCAL_PROVIDER_NAME:-}"
+    local env_openclaw_base_url="${THOR_OPENCLAW_BASE_URL:-}"
     local env_base_url="${THOR_LOCAL_VLLM_BASE_URL:-}"
     local env_host_models_url="${THOR_HOST_VLLM_MODELS_URL:-}"
     local env_api_key="${THOR_LOCAL_VLLM_API_KEY:-}"
@@ -353,6 +402,9 @@ load_thor_runtime_config() {
     local env_policy_profile="${THOR_POLICY_PROFILE:-}"
     local env_managed_sandbox_name="${THOR_MANAGED_SANDBOX_NAME:-}"
     local env_managed_provider_names="${THOR_MANAGED_PROVIDER_NAMES:-}"
+    local env_manyforge_mux_enabled="${THOR_MANYFORGE_MUX_ENABLED:-}"
+    local env_manyforge_mux_port="${THOR_MANYFORGE_MUX_PORT:-}"
+    local env_target_model_reasoning="${THOR_TARGET_MODEL_REASONING:-}"
     local env_target_max_model_len="${THOR_TARGET_MAX_MODEL_LEN:-}"
     local env_target_kv_cache_dtype="${THOR_TARGET_KV_CACHE_DTYPE:-}"
     local env_target_max_num_seqs="${THOR_TARGET_MAX_NUM_SEQS:-}"
@@ -388,6 +440,7 @@ load_thor_runtime_config() {
     fi
 
     [[ -n "${env_provider_name}" ]] && THOR_LOCAL_PROVIDER_NAME="${env_provider_name}"
+    [[ -n "${env_openclaw_base_url}" ]] && THOR_OPENCLAW_BASE_URL="${env_openclaw_base_url}"
     [[ -n "${env_base_url}" ]] && THOR_LOCAL_VLLM_BASE_URL="${env_base_url}"
     [[ -n "${env_host_models_url}" ]] && THOR_HOST_VLLM_MODELS_URL="${env_host_models_url}"
     [[ -n "${env_api_key}" ]] && THOR_LOCAL_VLLM_API_KEY="${env_api_key}"
@@ -395,6 +448,8 @@ load_thor_runtime_config() {
     [[ -n "${env_policy_profile}" ]] && THOR_POLICY_PROFILE="${env_policy_profile}"
     [[ -n "${env_managed_sandbox_name}" ]] && THOR_MANAGED_SANDBOX_NAME="${env_managed_sandbox_name}"
     [[ -n "${env_managed_provider_names}" ]] && THOR_MANAGED_PROVIDER_NAMES="${env_managed_provider_names}"
+    [[ -n "${env_manyforge_mux_enabled}" ]] && THOR_MANYFORGE_MUX_ENABLED="${env_manyforge_mux_enabled}"
+    [[ -n "${env_manyforge_mux_port}" ]] && THOR_MANYFORGE_MUX_PORT="${env_manyforge_mux_port}"
 
     resolve_model_profile "${THOR_MODEL_PROFILE:-}"
 
@@ -416,6 +471,7 @@ load_thor_runtime_config() {
     fi
 
     # Explicit env vars always win (user override at invocation time).
+    [[ -n "${env_target_model_reasoning}" ]] && THOR_TARGET_MODEL_REASONING="${env_target_model_reasoning}"
     [[ -n "${env_target_max_model_len}" ]] && THOR_TARGET_MAX_MODEL_LEN="${env_target_max_model_len}"
     [[ -n "${env_target_kv_cache_dtype}" ]] && THOR_TARGET_KV_CACHE_DTYPE="${env_target_kv_cache_dtype}"
     [[ -n "${env_target_max_num_seqs}" ]] && THOR_TARGET_MAX_NUM_SEQS="${env_target_max_num_seqs}"
@@ -437,6 +493,7 @@ save_thor_runtime_config() {
         printf "THOR_MODEL_ID=%q\n" "${THOR_MODEL_ID}"
         printf "THOR_POLICY_PROFILE=%q\n" "${THOR_POLICY_PROFILE}"
         printf "THOR_LOCAL_PROVIDER_NAME=%q\n" "${THOR_LOCAL_PROVIDER_NAME}"
+        printf "THOR_OPENCLAW_BASE_URL=%q\n" "${THOR_OPENCLAW_BASE_URL}"
         printf "THOR_LOCAL_VLLM_BASE_URL=%q\n" "${THOR_LOCAL_VLLM_BASE_URL}"
         printf "THOR_HOST_VLLM_MODELS_URL=%q\n" "${THOR_HOST_VLLM_MODELS_URL}"
         printf "THOR_LOCAL_VLLM_API_KEY=%q\n" "${THOR_LOCAL_VLLM_API_KEY}"
@@ -447,6 +504,9 @@ save_thor_runtime_config() {
         printf "THOR_TARGET_KV_CACHE_DTYPE=%q\n" "${THOR_TARGET_KV_CACHE_DTYPE}"
         printf "THOR_TARGET_MAX_NUM_SEQS=%q\n" "${THOR_TARGET_MAX_NUM_SEQS}"
         printf "THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT=%q\n" "${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT}"
+        printf "THOR_TARGET_MODEL_REASONING=%q\n" "${THOR_TARGET_MODEL_REASONING}"
+        printf "THOR_MANYFORGE_MUX_ENABLED=%q\n" "${THOR_MANYFORGE_MUX_ENABLED:-false}"
+        printf "THOR_MANYFORGE_MUX_PORT=%q\n" "${THOR_MANYFORGE_MUX_PORT:-8888}"
     } > "${THOR_CONFIG_FILE}"
 }
 
@@ -456,7 +516,8 @@ print_thor_runtime_config() {
     echo "  Policy profile:    ${THOR_POLICY_PROFILE}"
     echo "  Provider name:     ${THOR_LOCAL_PROVIDER_NAME}"
     echo "  Gateway name:      ${THOR_OPENSHELL_GATEWAY_NAME}"
-    echo "  OpenShell URL:     ${THOR_LOCAL_VLLM_BASE_URL}"
+    echo "  Sandbox base URL:  ${THOR_OPENCLAW_BASE_URL}"
+    echo "  Provider target:   ${THOR_LOCAL_VLLM_BASE_URL}"
     echo "  Host models URL:   ${THOR_HOST_VLLM_MODELS_URL}"
     if [[ -n "${THOR_MANAGED_SANDBOX_NAME:-}" ]]; then
         echo "  Tracked sandbox:   ${THOR_MANAGED_SANDBOX_NAME}"
@@ -469,4 +530,7 @@ print_thor_runtime_config() {
     echo "  Planned max seqs:  ${THOR_TARGET_MAX_NUM_SEQS}"
     echo "  OpenClaw main:     ${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT} (requested ${THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT})"
     echo "  OpenClaw subagent: ${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}"
+    if [[ "${THOR_MANYFORGE_MUX_ENABLED:-false}" == "true" ]]; then
+        echo "  ManyForge mux:     enabled (port ${THOR_MANYFORGE_MUX_PORT:-8888})"
+    fi
 }

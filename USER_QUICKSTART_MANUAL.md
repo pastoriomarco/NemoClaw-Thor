@@ -11,13 +11,16 @@ Validated baseline:
 - vLLM: 0.19.1rc1 (custom SM110 image)
 - Gateway: `nemoclaw`
 - Sandbox: `thor-v5`
-- Provider: `vllm-local`
+- Provider: `vllm-local` (direct `:8000` by default, muxed `:8888` for ManyForge mode)
 
 Important rule:
 
 - `./start-model.sh <profile>` only starts vLLM.
 - `./configure-local-provider.sh [profile]` binds OpenShell to the running
   model, patches openclaw.json inside the sandbox, and sends a warmup request.
+- `./configure-local-provider.sh --with-manyforge-mux [profile]` switches the
+  provider to `http://host.openshell.internal:8888/v1` so the embedded
+  OpenClaw agent can use the verified ManyForge workspace-plugin path.
 
 ## 1. Shell Prep
 
@@ -110,6 +113,13 @@ vLLM inference — `configure-local-provider.sh` fixes them (see Section 11).
 nemoclaw thor-v5 connect
 ```
 
+If you are enabling ManyForge tool access for the embedded OpenClaw agent, use:
+
+```bash
+./configure-local-provider.sh --with-manyforge-mux
+./status.sh
+```
+
 ## 4. Start After Reboot
 
 Same sequence every time — no special reboot handling needed:
@@ -124,6 +134,12 @@ Same sequence every time — no special reboot handling needed:
 
 ```bash
 ./configure-local-provider.sh
+```
+
+To restore direct local inference after using ManyForge mode:
+
+```bash
+./configure-local-provider.sh --without-manyforge-mux
 ```
 
 3. Verify and connect:
@@ -156,10 +172,12 @@ automatically freed.
 | `qwen3.5-122b-a10b-nvfp4-resharded` | 122B MoE | 4 | 1 | Most capable, local resharded weights |
 | `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v2 distilled, best for coding |
 | `qwen3.5-27b-claude-distilled-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v1 distilled |
+| `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | 2 | Claude distilled, multimodal, 0.4 GPU mem |
 | `qwopus3.5-27b-nvfp4` | 27B DeltaNet | 9 | 3 | Opus-distilled, NVFP4 |
 | `qwen3.5-27b-fp8` | 27B dense | 8 | 2 | FP8 quantized |
 | `qwen3.5-35b-a3b-fp8` | 35B MoE | 22 | 5 | FP8, highest concurrency |
 | `qwen3.5-35b-a3b-nvfp4` | 35B MoE | 26 | 6 | NVFP4, highest concurrency |
+| `gemma4-e4b-it` | 8B MoE (4B active) | 12 | 3 | Vision+text+audio, BF16, 0.4 GPU mem |
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | 4 | Vision+text, BF16 |
 
@@ -358,7 +376,7 @@ openshell gateway stop
 
 | Setting | Onboard default | What we need | Why |
 |---------|----------------|--------------|-----|
-| `baseUrl` | `https://inference.local/v1` | `http://host.openshell.internal:8000/v1` | OpenClaw's fetch doesn't honor HTTP_PROXY (upstream bug openclaw/openclaw#62181) |
+| `baseUrl` | `https://inference.local/v1` | Keep `https://inference.local/v1` in the sandbox and repoint the OpenShell provider target to `http://host.openshell.internal:8000/v1` or `http://host.openshell.internal:8888/v1` in ManyForge mode | In the current build the embedded OpenClaw client works through `inference.local`; the provider target controls whether requests go direct to vLLM or through the ManyForge mux |
 | `contextWindow` | 131072 | 262144 | Models support 256K context |
 | `maxTokens` | 4096 | 16384 | Agent needs long outputs for code generation |
 | `timeoutSeconds` | (unset) | 1800 | Long reasoning sessions need 30min timeout |

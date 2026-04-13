@@ -78,6 +78,7 @@ trap "rm -rf $TMPCTX" EXIT
 # Copy Dockerfile and entrypoint into context
 cp "${SCRIPT_DIR}/Dockerfile.bundle" "${TMPCTX}/Dockerfile"
 cp "${SCRIPT_DIR}/bundle-entrypoint.sh" "${TMPCTX}/bundle-entrypoint.sh"
+cp -a "${SCRIPT_DIR}/../templates" "${TMPCTX}/templates"
 
 # Copy caches into context (rsync for speed/progress; fall back to cp)
 echo "Copying FlashInfer cache to build context..."
