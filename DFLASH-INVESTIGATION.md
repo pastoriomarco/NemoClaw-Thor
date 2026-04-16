@@ -325,8 +325,26 @@ With the kernel disabled, newer vLLM should work. Test incrementally:
 2. Then DFlash profile
 3. If GDN crash recurs, bisect between dev195 and latest main
 
+### flash-attn-4 with SM110 support — POTENTIAL GAME CHANGER
+
+| Item | Details | Reference |
+|------|---------|-----------|
+| flash-attn-4 v4.0.0.beta9 | **Explicit SM110a/SM110f support** (released April 15 2026) | `pip install flash-attn-4` |
+| SM110 assertion | `assert self.arch >= Arch.sm_100 and self.arch <= Arch.sm_110f` | Kernel code |
+| JIT compiled | CuTeDSL — no prebuilt arch-specific wheel, compiles at runtime | Requires `nvidia-cutlass-dsl >= 4.4.x` |
+| Status | Beta, actively developed. SM120 fwd+bwd added in beta6. | Separate package from `flash-attn` |
+
+**Why this matters**: If flash-attn-4 handles head_dim=256 on SM110 (the TMEM
+limit that blocked FA4 before), we can use `--attention-backend flash_attn`
+directly — the **exact config z-lab tested with**. This would likely give the
+full 47% acceptance without the SDPA workaround, since the DFlash code was
+designed and tested with flash_attn's paged KV implementation.
+
+**Test plan**: Install `flash-attn-4` in the container, verify it handles
+head_dim=256 on SM110, then test DFlash with `--attention-backend flash_attn`.
+
 ### Future: DDTree
 
 | Item | What it does | Reference | Notes |
 |------|-------------|-----------|-------|
-| DDTree | Diffusion Draft Tree — tree-structured DFlash candidates for up to 8.2x speedup | [liranringel/ddtree](https://github.com/liranringel/ddtree) on GitHub, [paper](https://arxiv.org/abs/2602.06036) | Standalone HuggingFace Transformers implementation. No vLLM integration — would require tree verification with custom 4D attention masks, KV cache compaction, SDPA-only target model. Major engineering effort. Track upstream for vLLM integration PRs. |
+| DDTree | Diffusion Draft Tree — tree-structured DFlash candidates, verifies multiple continuations in single target forward | [paper](https://arxiv.org/html/2604.12989), [code](https://github.com/liranringel/ddtree), [project page](https://liranringel.github.io/ddtree/) | Published April 14 2026. Built on HuggingFace Transformers. Uses best-first heap to select promising continuations under node budget. Our SDPA approach is a good foundation — SDPA supports arbitrary attn_mask for tree attention. |

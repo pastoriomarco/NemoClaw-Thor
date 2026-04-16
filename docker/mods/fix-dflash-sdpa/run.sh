@@ -47,13 +47,25 @@ old_cache_insert = """        if context_slot_mapping is None:
 new_cache_insert = """        if context_slot_mapping is None:
             return
 
-        # --- Store context K/V in plain buffers for SDPA (bypass paged KV) ---
+        # --- Accumulate context K/V in plain buffers for SDPA (bypass paged KV) ---
         all_k_final = all_k_flat.view(L, num_ctx, nkv, hd)
         if not hasattr(self, '_sdpa_context_kv'):
             self._sdpa_context_kv = [None] * L
+        # Reset on new request (first position is 0)
+        first_pos = context_positions[0].item()
+        is_new_request = (first_pos == 0)
         for i in range(L):
-            # Store as [num_ctx, num_kv_heads, head_dim] per layer
-            self._sdpa_context_kv[i] = (all_k_final[i].clone(), all_v[i].clone())"""
+            new_k = all_k_final[i].clone()
+            new_v = all_v[i].clone()
+            if self._sdpa_context_kv[i] is not None and not is_new_request:
+                # Append new context to existing (accumulate across iterations)
+                old_k, old_v = self._sdpa_context_kv[i]
+                self._sdpa_context_kv[i] = (
+                    torch.cat([old_k, new_k], dim=0),
+                    torch.cat([old_v, new_v], dim=0),
+                )
+            else:
+                self._sdpa_context_kv[i] = (new_k, new_v)"""
 
 if old_cache_insert in content:
     content = content.replace(old_cache_insert, new_cache_insert, 1)
