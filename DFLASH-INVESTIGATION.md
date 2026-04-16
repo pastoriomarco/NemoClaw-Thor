@@ -27,13 +27,45 @@ wrong. Acceptance rate is 0.26% (position 0 ~2%, positions 1-7 = 0%).
 - Drafter receives correct input_ids, positions, non-NaN hidden states
 - z-lab's working config uses `--attention-backend flash_attn` (FA4), not FlashInfer
 
-**Remaining hypotheses**:
-1. FlashInfer non-causal attention produces subtly different results from flash_attn
-2. KV cache slot mapping mismatch between DFlash Triton kernel and drafter attention
-3. block_size mismatch in slot computation (DFlash uses target's block_table)
+**Ruled out**:
+- Non-causal vs causal: tested with causal=True (metadata-only mod), acceptance
+  identical at 0%. The attention masking is NOT the problem.
+- FP8 vs BF16 target model: both show 0%.
+- Slot mapping values: SLOTS debug captured, slots are internally consistent
+  (contiguous, correct block_id math, correct drafter block_table used).
 
-**Next step**: Fix the debug-dflash mod's `UnboundLocalError` (references `new_cad`
-before assignment), re-add SLOTS logging, capture block_size and slot mapping values.
+**SLOTS debug output (test #17)**:
+```
+SLOTS #1: block_size=16, num_context=18, num_query=9,
+  cad.seq_lens=[18], new_seq_lens=[27],
+  ctx_slots[:8]=[26880, 26881, 26882, 26883, 26884, 26885, 26886, 26887],
+  query_slots[:9]=[26898, 26899, 26900, 26901, 26902, 26903, 26904, 26905, 26906],
+  ctx_pos[:8]=[0, 1, 2, 3, 4, 5, 6, 7],
+  query_pos[:9]=[18, 19, 20, 21, 22, 23, 24, 25, 26]
+DRAFT #1: draft_tokens=[161284, 41979, 36272, 158357, 2822, 11930, 2804, 6860]  (CJK garbage)
+DRAFT #2: draft_tokens=[321, 381, 25, 310, 310, 310, 328, 11]  (generic English)
+```
+
+**Current theory**: FlashInfer's paged KV mechanism is incompatible with DFlash's
+`precompute_and_store_context_kv` + forward pattern. The precompute writes K/V
+via `do_kv_cache_update(slot_mapping)`, but FlashInfer's `.run()` reads from
+different offsets or the K/V tensor layout is incompatible. DRAFT #1 reads
+garbage (uninitialized memory), DRAFT #2-3 read stale/wrong context.
+
+This is supported by the fact that z-lab ONLY tested with `flash_attn` backend,
+never FlashInfer. The DFlash paged KV write/read pattern may depend on flash_attn-
+specific tensor layouts that FlashInfer doesn't match.
+
+**Proposed solutions** (ordered by estimated effort):
+
+| Option | What | Effort | Risk |
+|--------|------|--------|------|
+| 1. Patch FlashInfer paged KV | Debug exactly why `do_kv_cache_update` + `.run()` disagree on K/V offsets | 4-8 hours | High — requires FlashInfer C++/CUDA internals |
+| 2. PyTorch SDPA for drafter | Monkey-patch drafter's 5 attention layers to use `F.scaled_dot_product_attention` with non-paged KV | 1-2 hours | Low — uses proven PyTorch code, drafter is tiny |
+| 3. Bypass paged KV entirely | Rewrite precompute + forward to use plain K/V buffers, no KV cache | 2-4 hours | Medium — breaks vLLM KV lifecycle management |
+
+**Recommended**: Option 2 (SDPA for drafter). Minimal code, proven attention
+implementation, sidesteps the FlashInfer paged KV issue entirely.
 
 ---
 
@@ -205,14 +237,17 @@ vllm serve lovedheart/Qwen3.5-9B-FP8 \
 (not in disabled list). Test 14 worked because NVFP4 doesn't use that kernel.
 Tests 15-16 proved the fix.
 
-### DFlash Acceptance Rate Tests (pre-crash-fix era, with cached JIT)
+### DFlash Acceptance Rate Tests
 
 | # | Config | Acceptance | Notes |
 |---|--------|-----------|-------|
-| A | FlashInfer + FP8 target + BF16 KV | 0.3% | pos0=2-5%, pos1-7=0% |
-| B | FlashInfer + BF16 target + BF16 KV | 0.3% | Identical to FP8 |
+| A | FlashInfer + FP8 target + BF16 KV (pre-crash-fix, cached JIT) | 0.3% | pos0=2-5%, pos1-7=0% |
+| B | FlashInfer + BF16 target + BF16 KV (pre-crash-fix, cached JIT) | 0.3% | Identical to FP8 |
 | C | flash_attn backend | Xid 43 | FA2 crashes SM110 |
 | D | num_speculative_tokens=1 | NaN | Edge case with 2 query tokens |
+| E | FP8 + FP8 KV + DFlash + BlockScaled disabled | dtype mismatch | Drafter writes BF16 K/V into FP8 cache |
+| F | FP8 + BF16 KV + DFlash + BlockScaled disabled + non-causal | 0.4% | SLOTS captured, garbage draft tokens |
+| G | FP8 + BF16 KV + DFlash + BlockScaled disabled + **causal** | 0.0% | Identical — non-causal vs causal makes no difference |
 
 ### Infrastructure Issues
 
