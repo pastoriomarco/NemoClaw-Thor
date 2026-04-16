@@ -186,3 +186,117 @@ and capture the SLOTS output to verify slot mapping correctness.
 | InstantTensor | Already present, fast model loading |
 
 After rebuild: resume FlashInfer DFlash slot mapping investigation.
+
+---
+
+## Updated Analysis (2026-04-16)
+
+### Key discovery: DFlash crashes the ORIGINAL image too
+
+After rebooting Thor and clearing JIT caches, we confirmed:
+- **Non-DFlash 9B NVFP4 profile**: works perfectly on original image after reboot
+- **DFlash profile**: Xid 43 crash on the SAME original image after reboot
+
+This means DFlash **never survived a reboot**. It only worked in previous sessions
+because FlashInfer JIT caches from prior non-DFlash runs happened to cover the
+kernel configurations DFlash needed. When caches are cleared (reboot), the DFlash
+warmup triggers FlashInfer JIT compilation for a kernel configuration that produces
+a bad cubin on SM110, causing a GPU hang.
+
+### What's different about DFlash warmup vs normal warmup
+
+| Aspect | Non-DFlash | DFlash |
+|--------|-----------|--------|
+| Models profiled | Target only | Target + drafter |
+| Attention modes | Causal only | Causal + non-causal |
+| KV cache block_size | Normal (16) | Unified (560, mamba page match) |
+| Speculative tokens | 0 or 1 (MTP) | 8 (parallel drafting) |
+| FlashInfer kernels JIT'd | Standard configs | Additional non-causal + unusual block_size |
+
+### Original image pinned versions
+
+| Component | Version / Commit |
+|-----------|-----------------|
+| CUDA base | nvidia/cuda:13.2.0-devel-ubuntu24.04 |
+| nvcc | 13.2, V13.2.51 |
+| torch | 2.12.0.dev20260410+cu132 |
+| vLLM | 0.19.1rc1.dev195 (e281cb721) |
+| FlashInfer | 0.6.7 (904fa8cbc) |
+| triton | 3.7.0 |
+| transformers | 5.5.3 |
+| FA2 cubins | SM80 only |
+| fastsafetensors | 0.2.2 |
+| instanttensor | NOT installed |
+
+---
+
+## Step-by-step plan to get DFlash working
+
+### Phase A: Isolate the Xid 43 crash trigger (requires reboot between each test)
+
+**Step A1**: DFlash WITHOUT `fix-flashinfer-non-causal` mod
+- Keep: fix-kv-page-unify, debug-dflash
+- Remove: fix-flashinfer-non-causal
+- Expected: vLLM will refuse to start (DFlash asserts `causal=False` on attention
+  metadata). If it gets past the assertion somehow, it means non-causal was never
+  the issue.
+- If it crashes with Xid 43 before the assertion: the crash is in the drafter
+  model initialization, not in non-causal attention.
+
+**Step A2**: DFlash WITHOUT `fix-kv-page-unify` mod
+- Keep: fix-flashinfer-non-causal, debug-dflash
+- Remove: fix-kv-page-unify
+- Expected: may crash with `page_size_bytes` assertion. If it launches, the
+  block_size will be different (not 560), which tests whether block_size=560
+  is the JIT crash trigger.
+
+**Step A3**: DFlash with ALL mods but `--max-num-batched-tokens 512`
+- Smaller profiling batch → simpler FlashInfer kernels JIT'd
+- If this works: the crash is in a specific kernel shape triggered by larger batches
+
+**Step A4**: Pre-warm FlashInfer with non-DFlash profile first
+- Launch 9B NVFP4 (works), let it fully warm up and populate JIT caches
+- Stop it
+- Launch DFlash profile (reuses cached kernels, only JITs new configs)
+- If this works: the crash is a first-run JIT issue that goes away with partial cache
+
+### Phase B: Fix the 0% acceptance rate
+
+Once DFlash launches without crashing:
+
+**Step B1**: Capture SLOTS debug output
+- The `[0/4]` instrumentation logs block_size, slot mapping values, seq_lens
+- Compare context slot mapping with query slot mapping
+- Verify block_size matches between Triton kernel and FlashInfer attention
+
+**Step B2**: Verify KV cache consistency
+- Check if precomputed context KV is written to the same cache slots that
+  the drafter's attention reads from
+- Check if the block table used by the Triton kernel matches the drafter's
+  KV cache group
+
+**Step B3**: Test with `--additional-config '{"gdn_prefill_backend":"triton"}'`
+- Force Triton for GDN (should already be default on SM110, but be explicit)
+
+### Phase C: Incremental image rebuild
+
+Each step = one change + full test (non-DFlash + DFlash):
+
+**Step C1**: CUDA 13.0 base only
+- Change: CUDA_BASE, PyTorch cu130, keep same vLLM/FlashInfer commits
+- Risk: PyTorch cu130 might have different cuBLAS behavior
+- Test: non-DFlash 9B NVFP4, then DFlash
+
+**Step C2**: + InstantTensor
+- `uv pip install instanttensor` in runner stage
+- Test: `--load-format instanttensor` on any profile
+
+**Step C3**: + TriAttention
+- `uv pip install triattention @ git+https://github.com/WeianMao/triattention.git`
+- Test: import works, no runtime errors
+
+**Step C4**: + TurboQuant (newer vLLM)
+- Update vLLM ref to latest main (includes TurboQuant PR #38479)
+- Risk: GDN code changes, DFlash changes, attention backend changes
+- Test: non-DFlash first, then DFlash
+- If fails: bisect between dev195 and latest to find breaking commit
