@@ -33,9 +33,10 @@ prepare_thor_launch_profile() {
     THOR_VLLM_ARGS=()
 
     # SM110 (Thor): CUTLASS sm100 kernels are incompatible — disable them.
+    # CutlassFp8BlockScaledMMKernel: uses enable_sm100f_only, crashes SM110 (Xid 43).
     # FlashInfer FP8 is re-enabled: JIT cache has sm_110a GEMM kernels.
     THOR_DOCKER_ENV_ARGS+=(
-        -e "VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel"
+        -e "VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel,CutlassFp8BlockScaledMMKernel"
     )
 
     case "${profile}" in
@@ -158,9 +159,9 @@ prepare_thor_launch_profile() {
                 "--download-dir" "/data/models/huggingface/hub"
                 "--attention-backend" "flashinfer"
                 "--enforce-eager"
+                "--language-model-only"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--mm-encoder-attn-backend" "TORCH_SDPA"
                 "--max-num-batched-tokens" "4096"
                 "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.5-9B-DFlash","num_speculative_tokens":8}'
             )

@@ -300,3 +300,219 @@ Each step = one change + full test (non-DFlash + DFlash):
 - Risk: GDN code changes, DFlash changes, attention backend changes
 - Test: non-DFlash first, then DFlash
 - If fails: bisect between dev195 and latest to find breaking commit
+
+---
+
+## Xid 43 Crash Isolation Tests (2026-04-16)
+
+### Discovery: our mods cause Xid 43, not bare DFlash
+
+Systematic mod removal testing on the original image (CUDA 13.2, vLLM dev195),
+each test on a freshly rebooted, clean GPU:
+
+| # | Mods applied | Result | GPU state |
+|---|-------------|--------|-----------|
+| 1 | None | Python error: "non-causal not supported" | Clean |
+| 2 | fix-kv-page-unify only | Python error: "non-causal not supported" | Clean |
+| 3 | metadata-only + kv-page-unify | **Xid 43** | Crashed |
+| 4 | full non-causal + kv-page-unify | **Xid 43** | Crashed |
+| 5 | metadata-only only (no kv-page-unify) | **Xid 43** | Crashed |
+
+### Analysis
+
+Without `supports_non_causal()=True`, vLLM rejects FlashInfer before DFlash
+initialization starts — clean Python error. With it (patches 1-3), vLLM
+proceeds into the DFlash dummy_run/warmup which triggers a FlashInfer kernel
+JIT for a configuration that crashes SM110.
+
+The metadata-only mod (patches 1-3, 6a/6b) does NOT change the actual FlashInfer
+kernel dispatch (`plan()` is still called with `causal=True`). Yet it crashes
+because enabling `supports_non_causal()` allows the DFlash code path to execute,
+which exercises FlashInfer in configurations the non-DFlash path never touches:
+
+- **block_size=560** (from fix-kv-page-unify, hybrid mamba page unification)
+- **DFlash dummy_run**: profiles target + drafter simultaneously
+- **Different query patterns**: 9 query tokens per request (1 bonus + 8 speculative)
+
+Test #5 (pending) removes fix-kv-page-unify to isolate whether block_size=560
+is the trigger. If test #5 doesn't crash, the fix is to make block_size=560
+compatible with FlashInfer's JIT on SM110.
+
+### The "previously worked" mystery — explained
+
+DFlash appeared to work before our session because:
+1. FlashInfer JIT caches from prior runs contained cubins for the needed
+   kernel configurations
+2. These caches survived across container restarts (host-mounted volumes)
+3. They were cleared when we deleted caches during debugging
+4. After reboot, GPU-side cubin caches were also cleared
+5. Fresh JIT compilation for the DFlash-specific configurations produces
+   cubins that crash SM110
+
+The non-DFlash profile works after reboot because its FlashInfer kernel
+configurations are simpler and JIT-compile correctly for SM110.
+
+### Additional tests (test #5 done + standalone FlashInfer)
+
+| # | Mods applied | Result | GPU state |
+|---|-------------|--------|-----------|
+| 5 | metadata-only only (no kv-page-unify) | **Xid 43** | Crashed |
+| 6 | Standalone FlashInfer: head_dim=128, 32/8 heads, page=16 | **PASS** | Clean |
+| 7 | Standalone FlashInfer: page_size=560 | **PASS** | Clean |
+| 8 | Standalone FlashInfer: causal=False | **PASS** | Clean |
+
+**Key finding**: FlashInfer kernels are NOT the crash source. All drafter-config
+FlashInfer JIT compilations (head_dim=128, page_size=560, causal=False) pass
+on SM110 in isolation. The Xid 43 comes from something else in the DFlash
+warmup path — most likely the **Triton-compiled GDN/FLA kernels** or the
+**precompute_and_store_context_kv fused GEMM** that are exercised during the
+DFlash dummy_run but not during standalone FlashInfer tests.
+
+### Current theory: Triton JIT kernel crash
+
+The DFlash dummy_run calls:
+1. `precompute_and_store_context_kv()` — Triton fused GEMM + RMSNorm + RoPE
+2. `model.forward()` — 5 drafter transformer layers (FlashInfer attention + MLP)
+3. Target model warmup — includes GDN linear_attention (Triton/FLA kernel)
+
+The GDN Triton/FLA kernel is also used in the non-DFlash warmup and works.
+But DFlash might profile it at a **different batch size** (the DFlash dummy_run
+uses `self.max_query_tokens` which is smaller than the target-only warmup),
+causing Triton to JIT a different kernel shape that crashes on SM110.
+
+### Next step: test Triton kernels in isolation
+
+Run the GDN chunk_gated_delta_rule Triton kernel and the precompute fused GEMM
+standalone with DFlash-specific batch sizes to find the exact crash trigger.
+
+### Additional tests (tests #6-10)
+
+| # | Config | Result | GPU |
+|---|--------|--------|-----|
+| 6 | Standalone FlashInfer: drafter config (128/32/8) | **PASS** | Clean |
+| 7 | Standalone FlashInfer: page_size=560 | **PASS** | Clean |
+| 8 | Standalone FlashInfer: causal=False | **PASS** | Clean |
+| 9 | DFlash + skip-dflash-warmup + BF16 KV | **Xid 43** | Crashed |
+| 10 | DFlash + skip-dflash-warmup + FP8 KV | **Xid 43** | Crashed |
+
+**Critical insight**: Skipping the DFlash drafter's dummy_run still crashes.
+The Xid 43 occurs during the **target model's warmup** when `speculative_config`
+is set — not the drafter's warmup. The working non-DFlash profile has no
+speculative config at all.
+
+When `speculative_config` is set, vLLM's `_dummy_run` profiles the target model
+at different batch sizes that account for spec tokens. This triggers different
+FlashInfer or TRTLLM kernel JIT paths that crash on SM110.
+
+**FlashInfer kernels work fine in isolation** (tests 6-8). The crash is in the
+vLLM warmup orchestration with speculative decoding enabled.
+
+### Test #11: MTP on FP8 9B model (fresh boot)
+
+| # | Config | Result | GPU |
+|---|--------|--------|-----|
+| 11 | FP8 9B + MTP + BF16 KV + FlashInfer | **Xid 43** (block_size=528) | Crashed |
+
+MTP also crashes! But the working 9B NVFP4 profile (from main branch) also
+has MTP and works. The difference:
+
+| | Working (9B NVFP4) | Crashing (9B FP8 + MTP) |
+|---|---|---|
+| KV dtype | FP8 | BF16 |
+| Quantization | NVFP4 + modelopt | FP8 |
+| block_size | unknown (no page unification log) | 528 |
+| Spec decode | MTP (1 token) | MTP (1 token) |
+
+**Hypothesis**: The working NVFP4 profile uses FP8 KV which produces a different
+(possibly normal) block_size. The crashing configs use BF16 KV which triggers
+the mamba page unification to large block_sizes (528/560) that crash the
+TRTLLM attention kernel on SM110.
+
+### Block_size constraint check
+
+The search result mentioning `block_size (2096) <= max_num_batched_tokens` refers
+to a different model config with larger mamba state. Our observed values:
+- BF16 KV: block_size=560, max_num_batched_tokens=4096 → 560 < 4096 ✓
+- FP8 KV: block_size=528, max_num_batched_tokens=4096 → 528 < 4096 ✓
+
+The constraint is satisfied. The crash is not from this limit.
+
+### TRTLLM attention as likely crash trigger
+
+From [vLLM issue #32353](https://github.com/vllm-project/vllm/issues/32353):
+TRTLLM attention crashes on Blackwell with hybrid models. Workaround:
+`--attention-config use_trtllm_attention=0`
+
+On SM110 (Blackwell), FlashInfer auto-selects TRTLLM attention for decode.
+TRTLLM might not handle the large block_sizes from mamba page unification.
+The non-speculative NVFP4 profile might avoid TRTLLM during warmup by having
+simpler profiling patterns (single-token decode only, no multi-token queries).
+
+### Tests #12-14: TRTLLM disabled + cache pre-warming
+
+| # | Config | Result | GPU |
+|---|--------|--------|-----|
+| 12 | DFlash + TRTLLM disabled (`use_trtllm_attention=0`) | **Xid 43** (block_size=560) | Crashed |
+| 13 | Pre-warm with NVFP4 profile (block_size=1056), then DFlash (block_size=560) | **Xid 43** | Crashed |
+| 14 | NVFP4 profile alone (has MTP, block_size=1056) | **Works** | Clean |
+
+**Key discovery: block_size differs between profiles!**
+
+| Profile | KV dtype | block_size | Works? |
+|---------|----------|------------|--------|
+| 9B NVFP4 (no DFlash) | FP8 | 1056 | Yes |
+| 9B FP8 + DFlash | BF16 | 560 | No (Xid 43) |
+| 9B FP8 + MTP | BF16 | 528 | No (Xid 43) |
+
+Pre-warming with the NVFP4 profile doesn't help because the JIT cache is
+keyed on kernel parameters including page_size/block_size. The DFlash config
+needs block_size=560 kernels which were never JIT'd by the block_size=1056 run.
+
+**The crash is NOT from TRTLLM** — disabling it didn't help. The crash occurs
+during the vLLM warmup whenever block_size=560 (or 528) is used, regardless
+of TRTLLM setting. The FlashInfer native kernels for these block_sizes
+produce bad cubins on SM110.
+
+### Next approach: pre-warm with same model + same KV config (BF16) WITHOUT spec decode
+
+If the FP8 model with BF16 KV launches without spec decode (no DFlash, no MTP),
+it will JIT the exact block_size=560 kernels needed. Then switching to DFlash
+should find those kernels cached.
+
+This matches what happened in our original sessions: we ran the base model first,
+which populated the JIT cache, and DFlash launched after with pre-warmed kernels.
+
+### ROOT CAUSE FOUND (2026-04-16): CutlassFp8BlockScaledMMKernel
+
+| # | Config | Result | GPU |
+|---|--------|--------|-----|
+| 15 | FP8 model + FP8 KV + NO spec decode + BlockScaled disabled | **WORKS** | Clean |
+| 16 | FP8 model + FP8 KV + DFlash + BlockScaled disabled | **WORKS** (template error only) | Clean |
+
+**The Xid 43 crash was caused by `CutlassFp8BlockScaledMMKernel`**, not by
+FlashInfer, block_size, TRTLLM, or non-causal attention.
+
+The FP8 model (`lovedheart/Qwen3.5-9B-FP8`) auto-selects
+`CutlassFp8BlockScaledMMKernel` for its FP8 GEMM operations. This CUTLASS
+kernel uses `enable_sm100f_only` which rejects SM110 at runtime, causing
+the GPU hang (Xid 43).
+
+Our `VLLM_DISABLED_KERNELS` env var only disabled:
+- `CutlassFP8ScaledMMLinearKernel` (non-block-scaled variant)
+- `CutlassInt8ScaledMMLinearKernel`
+
+But NOT `CutlassFp8BlockScaledMMKernel` (the block-scaled variant used by
+the FP8 model). Adding it to the disabled list causes vLLM to fall back to
+`TritonFp8BlockScaledMMKernel` which works on SM110.
+
+**Fix**: Add `CutlassFp8BlockScaledMMKernel` to VLLM_DISABLED_KERNELS.
+
+**Why NVFP4 profile worked**: The NVFP4 model uses `--quantization modelopt`
+with `VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass`, which never selects
+the `CutlassFp8BlockScaledMMKernel`.
+
+**Why BF16 KV also crashed**: The BF16 KV crash was a cascading failure.
+The `CutlassFp8BlockScaledMMKernel` runs during model loading (FP8 weight
+dequantization), before KV cache is even set up. The Xid 43 from the
+CUTLASS kernel corrupts the GPU context, and subsequent operations
+(including KV cache setup at any block_size) fail with CUBLAS errors.
