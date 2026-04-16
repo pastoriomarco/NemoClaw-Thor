@@ -182,20 +182,252 @@ vllm serve lovedheart/Qwen3.5-9B-FP8 \
 ```
 
 **Status**: Launches, serves inference, no GPU crashes.
-**Acceptance rate**: 7.7% overall, position 0 at 28.5%.
-**Target**: 46.52% (z-lab benchmark). Gap likely from reasoning tokens,
-FP8 numerical divergence, or chat template interaction.
+**Acceptance rate**: 7.7% overall (8 tokens), position 0 at 28.5%.
+**1-token acceptance**: 85-92% (DFlash with num_speculative_tokens=1).
+**Target**: 46.52% (z-lab benchmark, flash_attn backend on standard GPU).
+
+**Root cause of 85% → 8% degradation**: The DFlash parallel denoising mechanism
+(8 mask tokens denoising simultaneously with non-causal attention) does not work
+correctly with SDPA. Single-token prediction (where only 1 mask token attends to
+context + bonus) works at 85-92%. Adding 7 more mask tokens causes severe
+interference, dropping all positions to ~8%.
+
+z-lab achieved 47% with flash_attn paged KV attention. Our SDPA uses plain
+concatenated K/V buffers instead of paged KV. The parallel denoising seems to
+depend on flash_attn's specific numerical path or paged KV layout.
+
+**What we ruled out** (via comprehensive diagnostics):
+- FP8 quantization: BF16 target gives same ~8% acceptance
+- SDPA computation: manual Q@K^T→softmax→@V matches SDPA output (max_diff=0.06, BF16 precision)
+- GQA expansion: native GQA vs repeat_interleave gives 0 diff
+- SDPA backend: MATH (FP32 softmax) gives same ~8% as default (flash/efficient)
+- Context accumulation: verified context grows properly across DFlash steps (20→29→38)
+- Attention patterns: bonus token correctly attends to recent context (RoPE decay visible)
+
+**Update (2026-04-16 late)**: Paged-cache SDPA hybrid improved acceptance 3x:
+
+### FlashInfer Bug Investigation (2026-04-16, comprehensive)
+
+DFlash on SM110 requires FlashInfer for attention (FA2/FA4 crash on SM110 for
+head_dim=256). The DFlash drafter (32 Q heads, 8 KV heads, head_dim=128) has
+different architecture from the target (16 Q heads, 4 KV heads, head_dim=256).
+This heterogeneous configuration exposes multiple FlashInfer integration bugs.
+
+**Note**: DFlash was never officially tested with FlashInfer upstream.
+PR #36847 (DFlash merge) states: *"FlashInfer (TRTLLM) attention does not
+support non-causality. A follow-up would be to allow different attention
+backends for the drafter and the target model."*
+
+#### Bug #1: `num_qo_heads` mismatch — FIXED
+
+**Symptom**: FlashInfer attention computed with 16 Q heads (target's) instead of 32 (drafter's).
+**Root cause**: `FlashInferMetadataBuilder` reads `num_qo_heads` from `model_config`
+(target model) instead of from the drafter's `kv_cache_spec`.
+**Fix**: Mod `fix-flashinfer-qo-heads` — detect head_dim mismatch with model_config and
+derive `num_qo_heads` from `num_kv_heads × GQA_ratio`.
+**Upstream**: PR #39775 (open, 2026-04-14) adds `num_q_heads` to `AttentionSpec` — same fix.
+
+**Verification**: `FI-FIX: Corrected num_qo_heads to 32 (kv_heads=8 × ratio=4)`
+
+#### Bug #2: HND stride corruption — NOT APPLICABLE on SM110
+
+**Symptom**: FlashInfer produces wrong attention with HND-permuted kv_cache view.
+**Root cause**: Standalone test confirms NHD layout works for non-causal prefill,
+HND (permuted) doesn't. FlashInfer's paged prefill kernel on SM110 doesn't handle
+strided HND views correctly.
+**Status**: SM110 already uses NHD (identity stride_order), so this bug is dormant.
+Would affect platforms that use HND layout.
+
+**Verification**: Standalone test — NHD non-causal max_diff=0.008 (OK), HND max_diff=2.2 (broken).
+
+#### Bug #3: All-zero attention output — FIXED
+
+**Symptom**: `unified_attention_with_output` returns all-zero tensor for drafter layers.
+**Root cause**: On SM110/SM121, `use_trtllm_decode_attention=False`, causing drafter's
+1-token steps to be classified as "decode" and routed to `BatchDecodeWithPagedKVCacheWrapper`
+which returns zeros on SM110 (crashes on SM121).
+**Fix**: Mod `fix-flashinfer-drafter-prefill` (port of PR #36060) — override
+`build_for_drafting` to set `reorder_batch_threshold=0`, forcing prefill path.
+**Upstream**: PR #36060 (open, 2026-03-04) — identical fix for SM121.
+
+**Verification**: After fix, output norm=2204 (non-zero). Before: norm=0.
+
+#### Bug #4: Stale wrapper internal state — NOT THE ROOT CAUSE
+
+**Symptom**: FlashInfer output identical across different drafter steps (same norm=2204.661133).
+**Hypothesis**: `BatchPrefillWithPagedKVCacheWrapper` internal GPU buffers don't refresh
+between `.plan()` calls.
+**Testing**: Created fresh wrapper instance per step — no improvement. Also tested
+`fast_build=False` and `use_trtllm_decode_attention=False` overrides — no improvement.
+**Conclusion**: The identical outputs may be because the first two DFlash steps have
+very similar context (only a few tokens different), producing similar attention.
+The wrapper IS refreshing correctly.
+**Upstream**: PR #39546 (open, 2026-04-10) fixes a related stale buffer issue for
+TRTLLM paths on Blackwell, but doesn't apply to our non-TRTLLM path.
+
+#### Bug #5: FlashInfer pipeline produces wrong attention output — UNFIXED
+
+**Symptom**: FlashInfer produces non-zero but WRONG attention output for the drafter
+(max_diff=153.7 vs SDPA reference, 3.4x magnitude difference). 0.1-0.3% acceptance.
+Output magnitude: FlashInfer norm=2204 vs SDPA norm=658 for layer 32 (first drafter).
+Layer 33 closer: norm=852 vs 957, diff=34. Error originates in layer 32 and propagates.
+
+**Comprehensive verification (all confirmed correct)**:
+
+| Component | Method | Result |
+|-----------|--------|--------|
+| `sm_scale` | Log in `build_for_drafting` | 0.088388 (1/√128) ✓ |
+| `num_qo_heads` | Log + FlashInfer API logging | 32 ✓ |
+| `num_kv_heads` | FlashInfer API logging | 8 ✓ |
+| `head_dim` | FlashInfer API logging | 128 ✓ |
+| `page_size` | FlashInfer API + cache shape dim 2 | 16 ✓ |
+| `causal` | FlashInfer API logging | False ✓ |
+| NHD layout | stride_order = identity | ✓ |
+| `num_prefills` | Log in `build_for_drafting` | 1 (prefill wrapper created) ✓ |
+| Prefill wrapper | Metadata check | Not None ✓ |
+| Cache write: precompute | Slot readback | 0.000000 diff ✓ |
+| Cache write: query KV | `unified_kv_cache_update` logging | Fires, sm=torch.Size([18]) ✓ |
+| Cache tensor: drafter vs target | Shape comparison | Separate: [72100,2,16,8,128] vs [72100,2,16,4,256] ✓ |
+| Layer names in slot_mapping | Dict lookup logging | All 5 drafter layers found ✓ |
+| Standalone FlashInfer kernel | Known-pattern test | Matches SDPA (max_diff=0.008) ✓ |
+| Direct `.run()` bypass | Called wrapper.run() directly | Still wrong (same as pipeline) |
+| Fresh wrapper per step | New instance each call | No improvement |
+| `backend="fa2"` | Forced non-trtllm-gen | No improvement |
+| Explicit pre-write of query KV | `do_kv_cache_update` before `self.attn()` | No improvement |
+
+**What we ruled OUT**:
+- Custom op dispatch (`unified_attention_with_output`): direct `.run()` same result
+- Missing KV writes: both precompute and query writes verified firing
+- Stale wrapper state: fresh wrapper per step, no improvement
+- Wrong backend: fa2 forced, no improvement
+- Slot mapping mismatch: correct layer names, correct slot tensors
+- kv_sharing skip: `kv_sharing_target_layer_name = None` on all drafter layers
+
+**Remaining hypothesis**: FlashInfer's JIT-compiled prefill kernel for SM110 produces
+different results when operating on vLLM's large shared cache pool (72100 blocks) vs
+a standalone small cache. The `.plan()` parameters are identical, but the kernel's
+page-indexing behavior differs with the large cache. Possible JIT code generation
+issue where the kernel's index arithmetic overflows or uses wrong addressing for
+block indices > ~1000.
+
+**Evidence**: Cache dump showed FlashInfer reads pages [1680, 1681]. Page 1680 is
+correct (precompute wrote there). Page 1681 contained stale TARGET model data.
+Even after explicit query KV write to page 1681, FlashInfer output didn't change —
+suggesting FlashInfer's kernel reads from a DIFFERENT offset within the page than
+where `reshape_and_cache_flash` wrote. This could be a cache stride/offset
+calculation bug in the JIT kernel for SM110 with `num_kv_heads=8, head_dim=128`
+(the drafter's configuration that differs from the target's `4×256`).
+
+**Custom op path traced**:
+```
+self.attn(q, k, v)
+  → Attention.forward()
+    → torch.ops.vllm.unified_kv_cache_update(k, v, "model.layers.32.self_attn.attn")
+        → get_attention_context(layer_name)
+          → forward_context.no_compile_layers[layer_name]  # gets drafter's Attention
+          → attn_layer.kv_cache                             # gets drafter's cache
+          → slot_mapping.get(layer_name)                    # gets query slots
+        → attn_layer.impl.do_kv_cache_update(...)          # writes to drafter cache ✓
+    → torch.ops.vllm.unified_attention_with_output(q, k, v, out, "model.layers.32.self_attn.attn")
+        → get_attention_context(layer_name)                 # same lookup
+        → FlashInferImpl.forward(q, k, v, layer, kv_cache, attn_metadata, output)
+          → prefill_wrapper.run(q, kv_cache, out=output)    # FlashInfer kernel → WRONG
+```
+
+**Upstream references**:
+- flashinfer-ai/flashinfer#1709: `.plan()` wrong output for `causal=False` with trtllm-gen
+- flashinfer-ai/flashinfer#2849: `BatchPrefillWithPagedKVCacheRun` crash on SM121
+- vllm#37754: FlashInfer + MTP crash on SM121 with illegal memory access
+
+**Additional verification (2026-04-16 late, from second-opinion analysis)**:
+
+| Check | Method | Result |
+|-------|--------|--------|
+| `kv_cache.data_ptr()` precompute vs forward | Log in both paths | **MATCH** (281432027037696) |
+| `use_direct_call=True` (bypass custom op) | Forced on drafter Attention | **Same 0.1%** — not a custom op issue |
+| `maybe_transfer_kv_layer` decorator | Source review | **No-op** (no KV transfer group) |
+| `window_left` / `logits_soft_cap` | Model config check | **Both None** (Qwen3 doesn't use them) |
+| `no_compile_layers` key type | Source review | Raw strings, matches slot_mapping keys |
+| `infer_global_hyperparameters` leakage | sm_scale logged + config check | **Correct** (drafter group has own params) |
+
+**Exhaustive elimination summary**:
+Every component of the `unified_attention_with_output` dispatch chain has been
+independently verified correct. The cache is the same physical tensor in precompute
+and forward. The plan parameters match the standalone test. The standalone kernel
+produces correct output. Yet the pipeline kernel produces wrong output (max_diff=153.7,
+3.4x magnitude). The only remaining difference is the **cache pool size** (72100+
+blocks in pipeline vs ~100 in standalone).
+
+**To reproduce upstream**: File issue at flashinfer-ai/flashinfer with:
+1. SM110 (Jetson AGX Thor), FlashInfer 0.6.8, CUDA 13.0
+2. `BatchPrefillWithPagedKVCacheWrapper` with `causal=False`
+3. 32 Q heads, 8 KV heads, head_dim=128, page_size=16, BF16
+4. Large cache pool (72100+ blocks) — works with small cache (~100 blocks), fails with large
+5. `backend="auto"` and `backend="fa2"` both fail
+6. All plan parameters verified identical between passing and failing cases
+7. `kv_cache.data_ptr()` verified same between write and read paths
+8. `use_direct_call=True` (bypassing torch custom op) produces same wrong output
+
+### Paged-Cache SDPA Hybrid (fix-dflash-paged-sdpa) — BEST WORKING APPROACH
+
+Workaround for bugs #3-5: Keep paged cache writes via `do_kv_cache_update`
+(verified correct), but replace FlashInfer forward with manual cache reads + SDPA.
+
+1. Precompute: writes context K/V to paged cache via `reshape_and_cache_flash`
+2. Forward: writes query K/V to cache, reads ALL K/V back using slot indices
+3. SDPA computes attention over paged-cache K/V (not plain buffers)
+
+| Method | Acceptance (8 tok) | Tok/s | Notes |
+|--------|-------------------|-------|-------|
+| Plain SDPA buffers | 8% | 21.8 (DFlash-3) | Original workaround |
+| **Paged-cache SDPA** | **18-22%** | **25.7 (DFlash-8)** | **3x acceptance gain** |
+| z-lab (flash_attn) | 47% | N/A | Target benchmark |
+
+Reading from paged cache gives better K/V than plain buffers because
+`reshape_and_cache_flash` applies the same write path that flash_attn uses.
+Remaining gap to z-lab's 47% is the SDPA vs flash_attn attention computation itself.
+
+### Upstream References
+
+| PR / Issue | Description | Relevance |
+|-----------|-------------|-----------|
+| [#39775](https://github.com/vllm-project/vllm/pull/39775) | Fix `num_qo_heads` for heterogeneous drafters | Our bug #1 (same fix) |
+| [#36060](https://github.com/vllm-project/vllm/pull/36060) | Force prefill for drafter on SM121 | Our bug #3 (same fix) |
+| [#39546](https://github.com/vllm-project/vllm/pull/39546) | Fix stale FlashInfer buffers on Blackwell | Related to bug #4 |
+| [#39126](https://github.com/vllm-project/vllm/pull/39126) | Separate attention backend for drafter | Would solve bug #5 |
+| [#13264](https://github.com/vllm-project/vllm/issues/13264) | Drafter inherits target's `static_forward_context` | Root cause family |
+| [#36847](https://github.com/vllm-project/vllm/pull/36847) | DFlash merge — notes FI incompatibility | Official acknowledgment |
+
+### Runtime Mods Summary
+
+All DFlash mods in `docker/mods/`:
+
+| Mod | Purpose | Required? |
+|-----|---------|-----------|
+| `fix-flashinfer-non-causal` | 8 patches for non-causal attention in FlashInfer | Yes (DFlash) |
+| `fix-kv-page-unify` | Hybrid model mamba page size assertion | Yes (Qwen3.5) |
+| `fix-flashinfer-qo-heads` | Correct Q head count for drafter metadata | Yes (bug #1) |
+| `fix-flashinfer-drafter-prefill` | Force prefill path + fresh wrapper for drafter | Yes (bug #3) |
+| `fix-dflash-sdpa` | SDPA workaround (plain buffers) — 8% acceptance | Superseded |
+| `fix-dflash-paged-sdpa` | Paged-cache SDPA hybrid — 22% acceptance | **Recommended** |
+| `fix-dflash-branchspec` | BranchSpec top-K verification | Optional |
+| `diag-flashinfer-kv` | KV cache write/read-back verification | Debug only |
+| `diag-fi-vs-sdpa` | FlashInfer vs SDPA output comparison | Debug only |
+| `diag-fi-capture` | FlashInfer .run() parameter capture | Debug only |
 
 ---
 
 ## Attention Backend Compatibility Matrix (SM110 / Qwen3.5)
 
-| Backend | head_dim=128 (drafter) | head_dim=256 (target) | Non-causal | Status |
-|---------|----------------------|----------------------|------------|--------|
+| Backend | head_dim=128 (drafter) | head_dim=256 (target) | Non-causal | DFlash Status |
+|---------|----------------------|----------------------|------------|---------------|
 | FA4 (CuTe DSL) | Works | TMEM limit → FA2 fallback | Yes | Broken |
 | FA2 (any cubins) | Untested | Xid 43 GPU hang | Yes | Broken |
-| FlashInfer | Works | Works | Patched | 0% acceptance |
+| FlashInfer native | 5 bugs found, 4 fixed | Works | Patched | 0.3% (bug #5) |
+| FlashInfer + paged SDPA | Reads from cache + SDPA | Works | Yes | **22% (working)** |
+| PyTorch SDPA (plain) | Works | N/A (target uses FI) | Yes | 8% (degraded) |
 | triton_attn | Works | Works | No support | Can't use |
+| MTP (built-in heads) | N/A (no drafter) | Uses target's backend | N/A | **76% / 28 tok/s** |
 
 ---
 
@@ -210,6 +442,154 @@ FP8 numerical divergence, or chat template interaction.
 | triton | 3.7.0 |
 | transformers | 5.5.3 |
 | FA2 cubins | SM80 only |
+
+---
+
+## DFlash-N Sweep: Optimal Speculative Token Count (2026-04-16)
+
+Tested DFlash with varying `num_speculative_tokens` on FP8 9B target, SM110.
+All tests use SDPA attention (fix-dflash-sdpa mod), FlashInfer for target.
+
+| N | Tok/s | Acceptance | Mean Len | vs Baseline | Notes |
+|---|-------|-----------|----------|-------------|-------|
+| 0 | 18.2 | N/A | 1.00 | 1.00x | No speculative decode |
+| 1 | 16.2 | 91.6% | 1.92 | 0.89x | High acceptance but drafter overhead cancels gain |
+| **2** | **19.7** | **82.8%** | **2.66** | **1.08x** | Good sweet spot |
+| **3** | **21.8** | **54.3%** | **2.63** | **1.20x** | **Optimal: +20% throughput** |
+| 4 | 20.0 | 55.3% | 3.21 | 1.10x | Diminishing returns |
+| 6 | 14.2 | 7.5% | 1.45 | 0.78x | Parallel denoising collapses |
+| 8 | 13.1 | 3.9% | 1.31 | 0.72x | Worse than baseline |
+
+**Key findings**:
+1. Acceptance drops sharply between N=4 (55%) and N=6 (7.5%) — DFlash parallel
+   denoising breaks down with SDPA around N=5
+2. Drafter overhead is significant on Thor: 1B model reads ≈77% of 9B target time
+3. N=3 is optimal: enough tokens accepted (2.63 mean) to overcome drafter overhead
+4. Thor concurrent scaling: 8 parallel requests → 9.5x throughput (160 tok/s)
+
+**Implication for BranchSpec tree**: Use DFlash-3 as the subtree drafter at each
+tree level. k=3 branches per level × DFlash-3 per branch = 9 candidates per level.
+With 3 tree levels: 1+3+9=13 drafter calls (batchable to ~3 effective on Thor).
+Expected throughput: 3-5x single-sequence baseline = 55-90 tok/s for single user.
+
+## BranchSpec: Multi-Candidate Verification (2026-04-16)
+
+BranchSpec modifies the rejection sampler to accept if the target's token is
+in the drafter's top-K candidates at each position (instead of exact top-1 match).
+Zero extra drafter cost — top-K is computed alongside the greedy sample.
+
+| Config | Tok/s | Acceptance | Mean Len | vs Baseline |
+|--------|-------|-----------|----------|-------------|
+| No spec decode | 18.2 | N/A | 1.00 | 1.00x |
+| DFlash-3 (top-1) | 21.8 | 54.3% | 2.63 | 1.20x |
+| DFlash-3 + BranchSpec K=3 | 22.3 | 56-66% | 2.93 | 1.22x |
+| DFlash-3 + BranchSpec K=5 | 22.5 | 55-73% | 3.19 | 1.23x |
+
+**Per-position acceptance improvement** (BranchSpec K=5 peak):
+- pos 0: 83.3% (was 80% with top-1)
+- pos 1: 71.8% (was 50%)
+- pos 2: 64.1% (was 30%)
+
+**Observations**:
+1. BranchSpec improves acceptance significantly (54%→73%) but throughput only
+   +2-3% over DFlash-3 baseline because the extra `compute_logits` call and
+   Python-side top-K check add overhead.
+2. A Triton kernel for top-K membership check would eliminate the Python overhead.
+3. The real win from BranchSpec requires multi-level trees (Option C Hybrid) where
+   each level expands k branches with DFlash-3 subtrees.
+
+**Concurrent scaling benchmark** (no spec decode, same prompts):
+| Concurrent seqs | Tok/s | Speedup |
+|-----------------|-------|---------|
+| 1 | 16.9 | 1.0x |
+| 2 | 34.8 | 2.1x |
+| 4 | 84.0 | 5.0x |
+| 8 | 160.8 | 9.5x |
+
+Thor scales nearly linearly with concurrency — spare compute can run
+multiple speculative branches essentially for free.
+
+## MTP: The Winner for Thor (2026-04-16)
+
+**Key discovery**: MTP (Multi-Token Prediction) built into Qwen3.5 dramatically
+outperforms DFlash on Thor because MTP heads share the target model's weights —
+**zero additional weight reads** on Thor's bandwidth-limited architecture.
+
+DFlash uses a separate 1B drafter model (2GB weight reads per step = 77% of target
+cost). MTP uses tiny linear heads (~16MB) that ride free on the target forward.
+
+### MTP N-Token Sweep
+
+| N | Tok/s | Acceptance | Mean Len | vs Baseline |
+|---|-------|-----------|----------|-------------|
+| 0 | 18.2 | N/A | 1.0 | 1.00x |
+| 1 | 24.8 | 89-97% | 1.95 | 1.36x |
+| 2 | 26.4 | 81-90% | 2.78 | 1.45x |
+| 3 | 27.0 | 65-84% | 3.49 | 1.48x |
+| **4** | **28.0** | **69-76%** | **4.03** | **1.54x** |
+| 5 | 26.9 | 66-73% | 4.44 | 1.48x |
+
+**MTP N=4 is optimal: 28.0 tok/s (+54% over baseline)**
+
+### MTP N=4 Concurrent Scaling
+
+| Concurrent | Tok/s | Speedup (vs 1 MTP) |
+|------------|-------|---------------------|
+| 1 | 27.0 | 1.00x |
+| 2 | 44.0 | 1.63x |
+| 4 | 99.7 | 3.70x |
+| 8 | 163.0 | 6.05x |
+
+### Why MTP > DFlash on Thor
+
+| Factor | DFlash | MTP |
+|--------|--------|-----|
+| Drafter model | 1B separate (2GB weights) | Built-in heads (~16MB) |
+| Weight reads per step | +2GB (77% of target) | ~0 (shared backbone) |
+| Best single-seq throughput | 21.8 tok/s (+20%) | **28.0 tok/s (+54%)** |
+| Acceptance at N=4 | 55% (SDPA degradation) | **76%** |
+| Concurrent 8-seq aggregate | N/A (crashes) | **163 tok/s** |
+
+### BranchSpec on MTP: Negative Result
+
+BranchSpec top-K verification (accepting if target token ∈ drafter top-K) was
+tested on MTP N=4 with K=3. Result: **19.0 tok/s** — 32% SLOWER than plain MTP.
+
+Root cause: BranchSpec forces a full `compute_logits` call to get top-K, which
+doubles the logits computation cost. MTP's optimized `get_top_tokens` path avoids
+full-vocab logits entirely. The overhead exceeds the acceptance gain.
+
+Lesson: on bandwidth-limited platforms, minimizing compute per step matters more
+than maximizing acceptance rate. MTP's lean design wins.
+
+### All Approaches Ranked (Single-Sequence Throughput on Thor)
+
+| Rank | Method | Tok/s | vs Baseline | Key Advantage |
+|------|--------|-------|-------------|---------------|
+| 1 | **MTP N=4** | **28.0** | **+54%** | Zero drafter overhead |
+| 2 | MTP N=3 | 27.0 | +48% | Slightly fewer misses |
+| 3 | MTP N=2 | 26.4 | +45% | Higher acceptance (90%) |
+| 4 | MTP N=1 | 24.8 | +36% | 97% acceptance |
+| 5 | DFlash-3 + BranchSpec K=5 | 22.5 | +23% | Top-K verification |
+| 6 | DFlash-3 | 21.8 | +20% | Best DFlash config |
+| 7 | N-gram N=4 | 19.8 | +9% | Zero drafter, pattern-based |
+| 8 | N-gram N=8 | 19.5 | +7% | More speculative tokens |
+| 9 | No speculation | 18.2 | baseline | — |
+| 10 | DFlash-1 | 16.2 | -11% | Drafter overhead too high |
+| 11 | DFlash-8 | 13.1 | -28% | Parallel denoising broken |
+
+### Recommended Production Configuration
+
+```bash
+vllm serve lovedheart/Qwen3.5-9B-FP8 \
+  --attention-backend flashinfer \
+  --enforce-eager \
+  --language-model-only \
+  --kv-cache-dtype bfloat16 \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":4}'
+```
+
+For multi-user: add `--max-num-seqs 8` for up to 163 tok/s aggregate.
 
 ---
 
@@ -252,6 +632,30 @@ Tests 15-16 proved the fix.
 | F | FP8 + BF16 KV + DFlash + BlockScaled disabled + non-causal | 0.4% | SLOTS captured, garbage draft tokens |
 | G | FP8 + BF16 KV + DFlash + BlockScaled disabled + **causal** | 0.0% | Identical — non-causal vs causal makes no difference |
 | H | FP8 + BF16 KV + DFlash + BlockScaled disabled + **SDPA drafter** | **7.7%** | Position 0: 28.5%, mean length 1.4-1.8. FlashInfer paged KV was the root cause. |
+| I | SDPA + **1 spec token** (FP8 target, BF16 KV) | **85-92%** | Single mask token predicts correctly. DFlash as MTP works great. |
+| J | SDPA + 8 tokens + **BF16 target** (Qwen/Qwen3.5-9B) | **4-10%** | Same as FP8. Rules out FP8 quantization as cause. |
+| K | SDPA **MATH backend** + 8 tokens (FP8 target) | **3-13%** | FP32 softmax gives same results. Rules out SDPA kernel precision. |
+| L | SDPA + diagnostic: **no accumulation** (always reset context buffer) | **6-9%** | Similar to accumulated — recent context dominates via RoPE decay. |
+| M | SDPA + diagnostic: **with accumulation** (context grows 20→29→38) | **6%** | Accumulation works but doesn't improve acceptance. |
+
+### SDPA Diagnostic Findings (Test L-M)
+
+Comprehensive diagnostic added to SDPA forward (layer 0 only, first 3 steps):
+
+| Metric | Finding |
+|--------|---------|
+| SDPA vs manual attention | max_diff=0.06-0.07 (normal BF16 precision) |
+| Native GQA vs repeat_interleave | max_diff=0.000000 (identical) |
+| Context KV stats | No NaN/Inf, mean≈0, std≈1.7 (K) / 4.7 (V) |
+| Bonus token ctx_attn | 69-80% on context, 20-31% on query (mask) tokens |
+| Attention entropy | 1.5-1.7 for bonus, 0.9-1.5 for mask tokens |
+| Max logit range | [-10.9, 35.8] — attention is sharp, not uniform |
+
+**Key observation from attention patterns**:
+- Bonus token: 70% attention on context (mostly last few tokens via RoPE), 30% on self/masks
+- Mask tokens: 59-88% on context, attending strongly to last context token + bonus token
+- Later mask positions attend MORE to context (88%) and less to query tokens (12%)
+- All mask V values are identical (same embedding), only K differs by RoPE position
 
 ### Infrastructure Issues
 
@@ -343,7 +747,73 @@ designed and tested with flash_attn's paged KV implementation.
 **Test plan**: Install `flash-attn-4` in the container, verify it handles
 head_dim=256 on SM110, then test DFlash with `--attention-backend flash_attn`.
 
-### Future: DDTree
+### Future: BranchSpec — Bandwidth-Aware Tree Speculation for Thor
+
+**Context**: Thor's unified memory architecture has high compute capacity but
+limited memory bandwidth (273 GB/s). Single-sequence decoding is bandwidth-bound,
+leaving compute cores underutilized. Running multiple speculative branches as
+parallel requests in the same batch exploits this spare compute.
+
+**Key finding enabling this approach**: DFlash with 1 spec token achieves
+85-92% acceptance on SM110 with SDPA. The parallel denoising (8 tokens)
+degrades to 8%, but single-token prediction is excellent.
+
+**BranchSpec Algorithm**:
+
+```
+Input: prefix P, target model T, drafter D, budget B, branching factor k
+Output: extended sequence P' with n new verified tokens
+
+1. DRAFT: Run DFlash-1 on P → logits L₀ for next token
+   Sample top-k tokens: {c₁, c₂, ..., cₖ} from L₀
+
+2. EXPAND: For each candidate cᵢ:
+   Run DFlash-1 on P+cᵢ → logits L₁ᵢ
+   Sample top-k: {cᵢ₁, cᵢ₂, ..., cᵢₖ} from L₁ᵢ
+   Continue expanding until budget B is exhausted (best-first by cumulative log-prob)
+
+3. VERIFY: Build tree attention mask M:
+   - Each candidate sees its ancestors + the shared prefix
+   - Siblings do NOT see each other (causal within branch, independent across)
+   Flatten tree to B candidate sequences
+   Submit as one batch to target model T (all share prefix KV via prefix caching)
+   Target verifies all candidates in parallel (uses spare compute)
+
+4. ACCEPT: Walk tree from root, accept longest path where target agrees
+   All verified tokens become the new prefix.
+   Rejected branches are discarded.
+```
+
+**Expected throughput improvement** (conservative estimates):
+
+| Per-token accuracy | k=1 (baseline) | k=3 (tree) | k=5 (tree) |
+|-------------------|----------------|------------|------------|
+| 85% (our 1-token) | 1.85 tok/step | ~4.2 tok/step | ~5.8 tok/step |
+| 47% (z-lab ref) | 1.89 tok/step | ~3.5 tok/step | ~4.9 tok/step |
+
+*tok/step = mean verified tokens per DFlash+verify cycle*
+
+Formula: For depth d with per-level acceptance p and branching k,
+expected accepted length = Σᵢ₌₁ᵈ [1 - (1-p)ᵏ]ⁱ (geometric series with effective p' = 1-(1-p)ᵏ)
+
+With p=0.85, k=3: p'=0.997, expected length ≈ min(d, 1/0.003) ≈ d (almost always full depth)
+But drafter accuracy drops for later positions in the branch, so realistic estimate is 3-6 tokens.
+
+**Thor-specific advantage**: Processing k=3 branches in parallel costs almost nothing
+extra — Thor's compute is underutilized during single-sequence decode. The only cost
+is KV cache memory for k branches (mitigated by prefix caching for shared prefix).
+
+**Implementation path**:
+1. Use DFlash with `num_speculative_tokens=1` as the base drafter (85% accuracy)
+2. Run k parallel draft sequences by submitting k "virtual requests" per step
+3. Each virtual request shares the same prefix (vLLM prefix caching)
+4. Target model verifies all k branches in one batch
+5. Accept the longest verified path
+
+This avoids the 8% parallel denoising issue entirely by using sequential 1-token
+DFlash in each branch, while exploiting Thor's parallel compute for verification.
+
+### DDTree Reference
 
 | Item | What it does | Reference | Notes |
 |------|-------------|-----------|-------|
