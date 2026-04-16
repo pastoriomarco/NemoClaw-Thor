@@ -251,6 +251,41 @@ Each change should be tested individually: non-DFlash profile first, then DFlash
 |----|-------------|-----------|-------|
 | #32165 | Separate KV cache dtype for draft model | [vllm-project/vllm#32165](https://github.com/vllm-project/vllm/pull/32165) | Allows `--speculative-config '{"kv_cache_dtype":"auto"}'` so drafter uses BF16 KV while target uses FP8. Not merged (needs-rebase). Would enable FP8 KV for target + BF16 for drafter. |
 
+### Ideal new container design
+
+Based on all findings, the target container should contain:
+
+| Component | Target version | Source | Notes |
+|-----------|---------------|--------|-------|
+| CUDA base | `nvidia/cuda:13.0.0-devel-ubuntu24.04` | Docker Hub | Match host CUDA 13.0 driver |
+| PyTorch | cu130 nightly (pin date) | `https://download.pytorch.org/whl/nightly/cu130` | Pin exact date for reproducibility |
+| vLLM | Latest main + PR #32165 | `github.com/vllm-project/vllm` main + `--apply-vllm-pr 32165` | TurboQuant (merged), latest DFlash fixes, separate draft KV dtype |
+| FlashInfer | 0.6.7 (commit 904fa8cbc) or latest | `github.com/flashinfer-ai/flashinfer` | Pin to tested commit, or test latest |
+| InstantTensor | latest | `pip install instanttensor` | Fast model loading |
+| TriAttention | git main | `pip install triattention @ git+https://github.com/WeianMao/triattention.git` | Not on PyPI |
+| fastsafetensors | latest | `pip install fastsafetensors` | Already present |
+| transformers | 5.5.x | `pip install transformers==5.5.0` | Qwen3.5 + Gemma 4 support |
+
+**Build-time settings:**
+- `TORCH_CUDA_ARCH_LIST=11.0a`
+- `FLASHINFER_CUDA_ARCH_LIST=11.0a`
+- FA2 SM110 patch: NOT included (confirmed Xid 43, FA2 kernels use SM80-specific patterns)
+- flash_attn shim symlink: baked into image (`ln -s vllm/vllm_flash_attn flash_attn` for FA4 CuTe DSL imports)
+
+**Runtime environment (entrypoint):**
+- `VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel,CutlassFp8BlockScaledMMKernel`
+
+**Runtime mods (volume-mounted, applied at container start):**
+- `fix-flashinfer-non-causal` — 8 patches for DFlash non-causal attention on FlashInfer
+- `fix-kv-page-unify` — hybrid model mamba page size assertion fix
+
+**Key risk**: vLLM dev319 previously crashed with CUBLAS in GDN layers, but that
+was a cascading failure from `CutlassFp8BlockScaledMMKernel` (now disabled).
+With the kernel disabled, newer vLLM should work. Test incrementally:
+1. Non-DFlash 9B NVFP4 profile first
+2. Then DFlash profile
+3. If GDN crash recurs, bisect between dev195 and latest main
+
 ### Future: DDTree
 
 | Item | What it does | Reference | Notes |
