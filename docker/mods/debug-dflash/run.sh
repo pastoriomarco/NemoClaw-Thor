@@ -19,10 +19,9 @@ path = sys.argv[1]
 with open(path, "r") as f:
     content = f.read()
 
-# Add logging after the slot_mapping buffer slice
-old = "        query_slot_mapping = self._slot_mapping_buffer[:num_query_total]"
-new = """        query_slot_mapping = self._slot_mapping_buffer[:num_query_total]
-        # DEBUG: log block_size, slot mapping, and seq_lens
+# Add logging before the return statement (after new_cad is created)
+old = "        return num_query_total, token_indices_to_sample, new_cad"
+new = """        # DEBUG: log block_size, slot mapping, and seq_lens
         if not hasattr(self, '_bs_log_count'):
             self._bs_log_count = 0
         self._bs_log_count += 1
@@ -43,7 +42,8 @@ new = """        query_slot_mapping = self._slot_mapping_buffer[:num_query_total
                 f"query_slots[:9]={query_slot_mapping[:_q_n].tolist()}, "
                 f"ctx_pos[:8]={self._context_positions_buffer[:_ctx_n].tolist()}, "
                 f"query_pos[:9]={self.positions[:_q_n].tolist()}"
-            )"""
+            )
+        return num_query_total, token_indices_to_sample, new_cad"""
 if old in content:
     content = content.replace(old, new, 1)
     with open(path, "w") as f:
