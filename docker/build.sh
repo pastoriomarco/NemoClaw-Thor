@@ -29,7 +29,7 @@ cd "$SCRIPT_DIR"
 VLLM_REF="main"
 FLASHINFER_REF="main"
 BUILD_JOBS=8
-CUDA_BASE="nvidia/cuda:13.2.0-devel-ubuntu24.04"
+CUDA_BASE="nvidia/cuda:13.0.0-devel-ubuntu24.04"
 TORCH_CUDA_ARCH_LIST="11.0a"
 FLASHINFER_CUDA_ARCH_LIST="11.0a"
 IMAGE_NAME="nemoclaw-thor/vllm"

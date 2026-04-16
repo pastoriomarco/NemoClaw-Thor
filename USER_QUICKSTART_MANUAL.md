@@ -177,6 +177,9 @@ automatically freed.
 | `qwen3.5-27b-fp8` | 27B dense | 8 | 2 | FP8 quantized |
 | `qwen3.5-35b-a3b-fp8` | 35B MoE | 22 | 5 | FP8, highest concurrency |
 | `qwen3.5-35b-a3b-nvfp4` | 35B MoE | 26 | 6 | NVFP4, highest concurrency |
+| `qwen3.5-9b-claude-distilled-nvfp4-dflash` | 9B VLM | 5 | 2 | DFlash spec decode, FA4, BF16 KV |
+| `qwen3.5-35b-a3b-nvfp4-dflash` | 35B MoE | 16 | 5 | DFlash spec decode, FA4, BF16 KV |
+| `qwen3.5-27b-claude-distilled-v2-nvfp4-dflash` | 27B DeltaNet | 6 | 2 | DFlash spec decode, FA4, BF16 KV |
 | `gemma4-e4b-it` | 8B MoE (4B active) | 12 | 3 | Vision+text+audio, BF16, 0.4 GPU mem |
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | 4 | Vision+text, BF16 |
@@ -210,7 +213,66 @@ Persistent defaults are saved in:
 ~/.config/nemoclaw-thor/config.env
 ```
 
-## 7. First Launch — FlashInfer JIT Compilation
+### DFlash profiles (speculative decoding)
+
+Profiles ending in `-dflash` use block diffusion speculative decoding with
+a ~0.5B drafter model that generates 15 tokens in a single diffusion step.
+The target model then verifies the draft in one forward pass.
+
+These profiles require:
+
+- **FlashInfer attention backend with non-causal support** — DFlash needs
+  non-causal attention (`causal=False`). FA4 (CuTe DSL) can't handle
+  head_dim=256 layers in Qwen3.5 DeltaNet models (TMEM hardware limit,
+  falls back to FA2 which crashes on SM110). FlashInfer handles head_dim=256
+  natively. The `fix-flashinfer-non-causal` runtime mod patches FlashInfer
+  to advertise and propagate non-causal support (applied automatically).
+- **InstantTensor** — fast safetensors loading for quicker model startup.
+  Requires overlay image build (see Section 7).
+- **BF16 KV cache** — FP8 KV cache is not compatible with DFlash verification.
+  DFlash profiles use `--kv-cache-dtype bfloat16` explicitly.
+- **Reduced max_num_seqs** — BF16 KV + drafter model (~0.9 GB) uses more memory.
+
+DFlash profiles have fewer concurrent sequences than their base variants but
+should produce higher per-request throughput via speculative decoding.
+
+Gemma 4 models do NOT have DFlash profiles — their head_dim=256/512 is
+incompatible with FlashInfer's attention kernels, and no DFlash drafters
+exist for them.
+
+## 7. Image Builds
+
+### Full rebuild (FlashInfer + vLLM from source)
+
+```bash
+cd docker/
+./build.sh --skip-flashinfer --skip-vllm   # reuse cached wheels
+./build.sh                                  # full rebuild from main
+./build.sh --vllm-ref v0.8.5               # pin vLLM version
+```
+
+This produces `nemoclaw-thor/vllm:latest` via a multi-stage Dockerfile.
+See `./build.sh --help` for all options.
+
+### Overlay build (add packages without rebuilding)
+
+To add Python packages on top of the existing image without rebuilding
+FlashInfer/vLLM from source:
+
+```bash
+cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
+
+# Preserve current image as a backup tag
+docker tag nemoclaw-thor/vllm:latest nemoclaw-thor/vllm:v4-base
+
+# Build overlay (seconds, not hours)
+docker build -f docker/Dockerfile.overlay -t nemoclaw-thor/vllm:latest docker/
+```
+
+Edit `docker/Dockerfile.overlay` to add more packages. The overlay
+inherits everything from the base image and just adds a thin layer.
+
+## 8. First Launch — FlashInfer JIT Compilation
 
 The first time a model profile is launched on a fresh install, vLLM
 JIT-compiles FlashInfer CUTLASS kernels for SM110a (Blackwell/Thor).
@@ -252,7 +314,7 @@ the corresponding compilation step.
 Memory usage during compilation peaks significantly above normal operating
 levels. This is the primary reason swap is required (see Section 2).
 
-## 8. Use The Sandbox
+## 9. Use The Sandbox
 
 Connect:
 
@@ -316,7 +378,7 @@ Then on the host:
 openshell sandbox download thor-v5 /sandbox/myrepo.patch .
 ```
 
-## 9. Stop Without Uninstalling
+## 10. Stop Without Uninstalling
 
 ### Leave the sandbox shell
 
@@ -355,7 +417,7 @@ Or directly:
 openshell gateway stop
 ```
 
-## 10. Practical Rules
+## 11. Practical Rules
 
 - **Swap must be active** before starting any model (see Section 2).
   Verify with `swapon --show` before launching `start-model.sh`.
@@ -370,7 +432,7 @@ openshell gateway stop
 - First launch of a new model profile takes 20-60 min for kernel compilation
   (see Section 7). Subsequent launches take 3-8 min.
 
-## 11. Why configure-local-provider.sh Is Needed
+## 12. Why configure-local-provider.sh Is Needed
 
 `nemoclaw onboard` bakes defaults that don't work for local vLLM inference:
 
@@ -386,7 +448,7 @@ The script patches these via `kubectl exec` into the sandbox. This bypasses
 Landlock (kubectl exec starts a new process, not a child of the sandbox
 entrypoint) and DAC restrictions (runs as root).
 
-## 12. Key Differences From v4
+## 13. Key Differences From v4
 
 | Aspect | v4 | v5 |
 |--------|----|----|

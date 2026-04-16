@@ -86,40 +86,6 @@ prepare_thor_launch_profile() {
                 "--enable-prefix-caching"
             )
             ;;
-        qwen3.5-27b-fp8)
-            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.5-27B-FP8"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_LAUNCH_SPECULATIVE_CONFIG="${THOR_SPECULATIVE_CONFIG:-{\"method\":\"qwen3_next_mtp\",\"num_speculative_tokens\":2}}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--tensor-parallel-size" "1"
-                "--attention-backend" "flashinfer"
-                "--language-model-only"
-                "--reasoning-parser" "qwen3"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--speculative-config" "${THOR_LAUNCH_SPECULATIVE_CONFIG}"
-            )
-            ;;
-        qwen3.5-35b-a3b-fp8)
-            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.5-35B-A3B-FP8"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_LAUNCH_SPECULATIVE_CONFIG="${THOR_SPECULATIVE_CONFIG:-{\"method\":\"qwen3_next_mtp\",\"num_speculative_tokens\":2}}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--tensor-parallel-size" "1"
-                "--attention-backend" "flashinfer"
-                "--language-model-only"
-                "--reasoning-parser" "qwen3"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--speculative-config" "${THOR_LAUNCH_SPECULATIVE_CONFIG}"
-            )
-            ;;
         qwen3.5-35b-a3b-nvfp4)
             THOR_LAUNCH_MODEL_SOURCE="Kbenkhaled/Qwen3.5-35B-A3B-NVFP4"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
@@ -141,31 +107,6 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "qwen3_xml"
                 "--enable-prefix-caching"
                 "--max-num-batched-tokens" "4096"
-            )
-            ;;
-        qwopus3.5-27b-nvfp4)
-            # Qwen3.5-27B DeltaNet hybrid: 48 linear_attention + 16 full_attention layers.
-            # Mixed NVFP4 (W4A4 for gate/up/o_proj) + FP8 (down_proj, QKV) + BF16 (lm_head).
-            # Only the 16 full_attention layers use KV cache — much smaller KV footprint than pure dense.
-            # FlashInfer v0.6.7 FMHA works on SM110 (+38% vs triton_attn, verified).
-            # No MoE — VLLM_USE_FLASHINFER_MOE_FP4 not applicable.
-            # linear_attention layers handled by GatedDeltaNetAttention (vllm built-in).
-            THOR_LAUNCH_MODEL_SOURCE="ShinePixelOrg/Qwopus3.5-27B-v3-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
-            )
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "flashinfer"
-                "--language-model-only"
-                "--reasoning-parser" "qwen3"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--enable-prefix-caching"
-                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
             ;;
         qwen3.5-9b-claude-distilled-nvfp4)
@@ -199,6 +140,51 @@ prepare_thor_launch_profile() {
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
                 "--max-num-batched-tokens" "4096"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
+            )
+            ;;
+        qwen3.5-9b-dflash)
+            # DFlash with Qwen3.5-9B FP8 + FlashInfer backend.
+            # FA4/FA2 cannot work on SM110 for head_dim=256 (Xid 43 GPU hang).
+            # FlashInfer handles head_dim=256 on SM110 correctly.
+            # Non-causal attention for DFlash via fix-flashinfer-non-causal mod.
+            THOR_LAUNCH_MODEL_SOURCE="lovedheart/Qwen3.5-9B-FP8"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.4}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat-nothink.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat-nothink.jinja"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_MODS=fix-flashinfer-non-causal,fix-kv-page-unify,debug-dflash"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--enforce-eager"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.5-9B-DFlash","num_speculative_tokens":8}'
+            )
+            ;;
+        qwen3.5-9b-bf16-dflash)
+            # BF16 target + DFlash drafter — diagnostic profile to isolate FP8 as
+            # a variable in the 0% acceptance investigation. BF16 is the reference
+            # configuration that DFlash was trained and validated against.
+            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.5-9B"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.5}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat-nothink.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat-nothink.jinja"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_MODS=fix-flashinfer-non-causal,fix-kv-page-unify,debug-dflash"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--enforce-eager"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.5-9B-DFlash","num_speculative_tokens":8}'
             )
             ;;
         qwen3.5-27b-claude-distilled-nvfp4)

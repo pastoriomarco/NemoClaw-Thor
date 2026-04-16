@@ -1,0 +1,13 @@
+# Dockerfile.overlay — Lightweight additions on top of the base vLLM image
+#
+# Use this to add packages without rebuilding the full multi-stage build.
+#
+# Usage:
+#   docker build -f docker/Dockerfile.overlay -t nemoclaw-thor/vllm:latest docker/
+#
+# This re-tags :latest so start-model.sh picks it up automatically.
+
+ARG BASE_IMAGE=nemoclaw-thor/vllm:latest
+FROM ${BASE_IMAGE}
+
+RUN pip install --no-cache-dir instanttensor

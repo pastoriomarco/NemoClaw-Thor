@@ -151,10 +151,8 @@ print_supported_model_profiles() {
 Supported model profiles:
   qwen3.5-122b-a10b-nvfp4-resharded
   qwen3.5-27b-claude-distilled-nvfp4  (DeltaNet hybrid, reasoning-distilled)
-  qwopus3.5-27b-nvfp4       (DeltaNet hybrid, Opus-distilled NVFP4)
   qwen3.5-9b-claude-distilled-nvfp4  (DeltaNet hybrid, 9B Opus-distilled NVFP4)
-  qwen3.5-27b-fp8
-  qwen3.5-35b-a3b-fp8
+  qwen3.5-9b-dflash               (base 9B FP8 + DFlash spec decode)
   qwen3.5-35b-a3b-nvfp4
   gemma4-e4b-it             (vLLM, BF16 MoE, 8B/4B-active, vision+text+tools)
   gemma4-31b-it-nvfp4       (vLLM, NVFP4 quantized, vision+text+tools)
@@ -168,7 +166,7 @@ normalize_model_profile() {
 
 resolve_model_profile() {
     local requested
-    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.5-27b-fp8}}")
+    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.5-27b-claude-distilled-nvfp4}}")
 
     case "${requested}" in
         qwen3.5-122b-a10b-nvfp4)
@@ -201,6 +199,26 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="false"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
+        qwen3.5-9b-dflash)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.5-9B-FP8-DFlash"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
+            THOR_TARGET_MAX_NUM_SEQS="6"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="false"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.5-9b-bf16-dflash)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.5-9B-BF16-DFlash"
+            THOR_TARGET_MAX_MODEL_LEN="32768"
+            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
+            THOR_TARGET_MODEL_REASONING="false"
+            THOR_TARGET_MAX_TOKENS="8192"
+            ;;
         qwen3.5-27b-claude-distilled-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-NVFP4"
@@ -218,36 +236,6 @@ resolve_model_profile() {
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="9"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwopus3.5-27b-nvfp4)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwopus3.5-27B-v3-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="9"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.5-27b-fp8)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-FP8"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="8"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.5-35b-a3b-fp8)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-35B-A3B-FP8"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="22"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="5"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
