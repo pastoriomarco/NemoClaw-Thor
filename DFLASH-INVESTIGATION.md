@@ -12,60 +12,60 @@
 
 ## Problems Found (ordered by difficulty)
 
-### Problem 1: 0% DFlash acceptance rate — UNSOLVED
+### Problem 1: 0% DFlash acceptance rate — SOLVED (7.7%, improving)
 
 **Symptom**: DFlash launches and serves inference, but draft tokens are always
-wrong. Acceptance rate is 0.26% (position 0 ~2%, positions 1-7 = 0%).
+wrong. Acceptance rate was 0% (position 0 ~2%, positions 1-7 = 0%).
 
-**What we know**:
-- Draft tokens are coherent English words but don't match target predictions
-- Example: for "Count from 1 to 20", drafter predicts `\n, I, 0, ,` instead of `1, ,, 2, ,`
-- Both FP8 and BF16 target models show identical 0% acceptance
-- z-lab benchmarks show FP8 works (46.52% vs 47.24% BF16 — only 0.7% drop)
-- FlashInfer `causal=False` metadata is correctly set (DFlash assertion passes)
-- FlashInfer kernel uses `MaskMode.NON_CAUSAL` when `_causal=False`
-- Drafter receives correct input_ids, positions, non-NaN hidden states
-- z-lab's working config uses `--attention-backend flash_attn` (FA4), not FlashInfer
+**Root cause**: FlashInfer's paged KV cache mechanism is incompatible with
+DFlash's `precompute_and_store_context_kv` + forward pattern on SM110.
+The precompute writes K/V via `do_kv_cache_update(slot_mapping)`, but
+FlashInfer's `.run()` reads from wrong offsets or the K/V tensor layout
+is incompatible. Draft tokens read from uninitialized or stale memory.
 
-**Ruled out**:
-- Non-causal vs causal: tested with causal=True (metadata-only mod), acceptance
-  identical at 0%. The attention masking is NOT the problem.
-- FP8 vs BF16 target model: both show 0%.
-- Slot mapping values: SLOTS debug captured, slots are internally consistent
-  (contiguous, correct block_id math, correct drafter block_table used).
+**How we found it**:
+1. SLOTS debug captured slot mapping values — internally consistent, correct
+   drafter block_table used, block_size=16
+2. Tested causal=True vs causal=False — identical 0% acceptance, ruling out
+   non-causal masking as the cause
+3. Standalone FlashInfer tests passed — the kernel itself works on SM110
+4. z-lab only tested with `flash_attn` backend, never FlashInfer — suggesting
+   the write/read pattern depends on flash_attn-specific tensor layouts
 
-**SLOTS debug output (test #17)**:
+**SLOTS debug output** (confirmed correct slot mapping):
 ```
 SLOTS #1: block_size=16, num_context=18, num_query=9,
-  cad.seq_lens=[18], new_seq_lens=[27],
   ctx_slots[:8]=[26880, 26881, 26882, 26883, 26884, 26885, 26886, 26887],
-  query_slots[:9]=[26898, 26899, 26900, 26901, 26902, 26903, 26904, 26905, 26906],
-  ctx_pos[:8]=[0, 1, 2, 3, 4, 5, 6, 7],
-  query_pos[:9]=[18, 19, 20, 21, 22, 23, 24, 25, 26]
-DRAFT #1: draft_tokens=[161284, 41979, 36272, 158357, 2822, 11930, 2804, 6860]  (CJK garbage)
-DRAFT #2: draft_tokens=[321, 381, 25, 310, 310, 310, 328, 11]  (generic English)
+  query_slots[:9]=[26898, 26899, 26900, 26901, 26902, 26903, 26904, 26905, 26906]
+DRAFT #1: [161284, 41979, 36272, ...]  (CJK garbage — reading uninitialized KV cache)
 ```
 
-**Current theory**: FlashInfer's paged KV mechanism is incompatible with DFlash's
-`precompute_and_store_context_kv` + forward pattern. The precompute writes K/V
-via `do_kv_cache_update(slot_mapping)`, but FlashInfer's `.run()` reads from
-different offsets or the K/V tensor layout is incompatible. DRAFT #1 reads
-garbage (uninitialized memory), DRAFT #2-3 read stale/wrong context.
+**Fix**: `fix-dflash-sdpa` runtime mod — replaces FlashInfer paged KV attention
+with PyTorch SDPA for the drafter's 5 attention layers only:
 
-This is supported by the fact that z-lab ONLY tested with `flash_attn` backend,
-never FlashInfer. The DFlash paged KV write/read pattern may depend on flash_attn-
-specific tensor layouts that FlashInfer doesn't match.
+1. `precompute_and_store_context_kv`: stores K/V in plain per-layer buffers
+   instead of writing to paged KV cache via `do_kv_cache_update`
+2. `DFlashQwen3Attention.forward`: uses `F.scaled_dot_product_attention` with
+   concatenated context+query K/V instead of FlashInfer `.run()`
+3. Model forward propagates per-layer context K/V buffers to attention layers
 
-**Proposed solutions** (ordered by estimated effort):
+The target model continues using FlashInfer for its attention (head_dim=256,
+paged KV works correctly for normal attention — only the DFlash precompute
+pattern was broken).
 
-| Option | What | Effort | Risk |
-|--------|------|--------|------|
-| 1. Patch FlashInfer paged KV | Debug exactly why `do_kv_cache_update` + `.run()` disagree on K/V offsets | 4-8 hours | High — requires FlashInfer C++/CUDA internals |
-| 2. PyTorch SDPA for drafter | Monkey-patch drafter's 5 attention layers to use `F.scaled_dot_product_attention` with non-paged KV | 1-2 hours | Low — uses proven PyTorch code, drafter is tiny |
-| 3. Bypass paged KV entirely | Rewrite precompute + forward to use plain K/V buffers, no KV cache | 2-4 hours | Medium — breaks vLLM KV lifecycle management |
+**Results after fix**:
+- Position 0: **28.5%** acceptance (was ~2%)
+- Overall: **7.7%** (208/2696 tokens accepted)
+- Mean acceptance length: **1.4-1.8 tokens**
+- Per-position: 28.5%, 7.7%, 5.6%, 5.3%, 5.0%, 4.1%, 3.6%, 1.8%
 
-**Recommended**: Option 2 (SDPA for drafter). Minimal code, proven attention
-implementation, sidesteps the FlashInfer paged KV issue entirely.
+**Gap vs z-lab benchmark (46.52%)**:
+Still below target. Possible reasons:
+- FP8 model + BF16 drafter may have numerical divergence in hidden states
+- Model generates `Thinking Process:` reasoning tokens the drafter wasn't trained on
+- The no-think chat template may not fully suppress reasoning
+- SDPA scale factor or numerical precision differences vs flash_attn
+- Need to test with more diverse prompts for stable metrics
 
 ---
 
@@ -170,7 +170,7 @@ manifests after reboots and can be worked around by not clearing caches.
 ```bash
 # Environment
 VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel,CutlassFp8BlockScaledMMKernel
-VLLM_MODS=fix-flashinfer-non-causal,fix-kv-page-unify
+VLLM_MODS=fix-flashinfer-non-causal,fix-kv-page-unify,fix-dflash-sdpa
 
 # vLLM args
 vllm serve lovedheart/Qwen3.5-9B-FP8 \
@@ -181,7 +181,10 @@ vllm serve lovedheart/Qwen3.5-9B-FP8 \
   --speculative-config '{"method":"dflash","model":"z-lab/Qwen3.5-9B-DFlash","num_speculative_tokens":8}'
 ```
 
-**Status**: Launches, serves inference, no GPU crashes. Acceptance rate ~0%.
+**Status**: Launches, serves inference, no GPU crashes.
+**Acceptance rate**: 7.7% overall, position 0 at 28.5%.
+**Target**: 46.52% (z-lab benchmark). Gap likely from reasoning tokens,
+FP8 numerical divergence, or chat template interaction.
 
 ---
 
@@ -248,6 +251,7 @@ Tests 15-16 proved the fix.
 | E | FP8 + FP8 KV + DFlash + BlockScaled disabled | dtype mismatch | Drafter writes BF16 K/V into FP8 cache |
 | F | FP8 + BF16 KV + DFlash + BlockScaled disabled + non-causal | 0.4% | SLOTS captured, garbage draft tokens |
 | G | FP8 + BF16 KV + DFlash + BlockScaled disabled + **causal** | 0.0% | Identical — non-causal vs causal makes no difference |
+| H | FP8 + BF16 KV + DFlash + BlockScaled disabled + **SDPA drafter** | **7.7%** | Position 0: 28.5%, mean length 1.4-1.8. FlashInfer paged KV was the root cause. |
 
 ### Infrastructure Issues
 
