@@ -226,14 +226,33 @@ Tests 15-16 proved the fix.
 
 ---
 
-## Planned Image Rebuild
-
-| Change | Why | Priority |
-|--------|-----|----------|
-| CUDA 13.0 base | Match host driver, survive reboots | High |
-| InstantTensor | Fast model loading (up to 32x) | Medium |
-| TriAttention | KV cache compression (up to 10.7x) | Medium |
-| TurboQuant (newer vLLM) | Online KV compression, DFlash fixes | Medium |
-| Drop FA2 SM110 patch | Confirmed Xid 43, not viable | Done |
+## Planned Improvements
 
 Each change should be tested individually: non-DFlash profile first, then DFlash.
+
+### Image rebuild
+
+| Change | Why | Priority | Reference |
+|--------|-----|----------|-----------|
+| CUDA 13.0 base | Match host CUDA 13.0 driver, survive reboots without JIT cache | High | `nvidia/cuda:13.0.0-devel-ubuntu24.04` |
+| Drop FA2 SM110 patch | Confirmed Xid 43, FA2 not viable on SM110 | Done | — |
+
+### Packages to add
+
+| Package | What it does | Reference | Notes |
+|---------|-------------|-----------|-------|
+| InstantTensor | Fast model loading (up to 32x on H200) | `pip install instanttensor`, vLLM flag `--load-format instanttensor` | Already in Dockerfile, not yet tested on Thor |
+| TriAttention | KV cache compression via trigonometric frequency-domain scoring (up to 10.7x KV reduction, 2.5x throughput) | `pip install triattention @ git+https://github.com/WeianMao/triattention.git` | vLLM plugin, OpenAI-compatible API. Not on PyPI. |
+| TurboQuant | Online KV cache compression (PolarQuant keys + uniform values, up to 4.9x compression, pure Triton) | Merged in vLLM main (PR [#38479](https://github.com/vllm-project/vllm/pull/38479), Apr 15 2026). Flag: `--kv-cache-dtype turboquant_k8v4` | Requires newer vLLM (post dev195). SM121 tested with Triton fallback. |
+
+### vLLM PRs to cherry-pick
+
+| PR | What it does | Reference | Notes |
+|----|-------------|-----------|-------|
+| #32165 | Separate KV cache dtype for draft model | [vllm-project/vllm#32165](https://github.com/vllm-project/vllm/pull/32165) | Allows `--speculative-config '{"kv_cache_dtype":"auto"}'` so drafter uses BF16 KV while target uses FP8. Not merged (needs-rebase). Would enable FP8 KV for target + BF16 for drafter. |
+
+### Future: DDTree
+
+| Item | What it does | Reference | Notes |
+|------|-------------|-----------|-------|
+| DDTree | Diffusion Draft Tree — tree-structured DFlash candidates for up to 8.2x speedup | [liranringel/ddtree](https://github.com/liranringel/ddtree) on GitHub, [paper](https://arxiv.org/abs/2602.06036) | Standalone HuggingFace Transformers implementation. No vLLM integration — would require tree verification with custom 4D attention masks, KV cache compaction, SDPA-only target model. Major engineering effort. Track upstream for vLLM integration PRs. |
