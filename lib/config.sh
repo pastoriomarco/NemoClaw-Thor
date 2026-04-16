@@ -203,7 +203,7 @@ resolve_model_profile() {
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-9B-FP8-DFlash"
             THOR_TARGET_MAX_MODEL_LEN="131072"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
             THOR_TARGET_MAX_NUM_SEQS="6"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
             THOR_TARGET_MODEL_REASONING="false"

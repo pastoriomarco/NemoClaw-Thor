@@ -153,7 +153,7 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat-nothink.jinja"
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat-nothink.jinja"
             THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_MODS=fix-flashinfer-non-causal,fix-kv-page-unify,debug-dflash"
+                "-e" "VLLM_MODS=fix-flashinfer-non-causal,fix-kv-page-unify,fix-dflash-sdpa"
             )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
