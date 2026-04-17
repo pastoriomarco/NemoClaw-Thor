@@ -343,7 +343,7 @@ RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
     if [ "$PRE_TRANSFORMERS" = "1" ]; then \
         echo "transformers>=5.0.0" > /tmp/tf-override.txt && \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin) --override /tmp/tf-override.txt && \
-        uv pip install "transformers==5.5.0" --override /tmp/tf-override.txt; \
+        uv pip install "transformers>=5.5.4" --override /tmp/tf-override.txt; \
     else \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin); \
     fi
