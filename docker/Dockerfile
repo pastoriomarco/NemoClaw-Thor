@@ -47,13 +47,18 @@ RUN apt update && \
     && pip install uv
 
 # PyTorch nightly (cu130 — matches host CUDA 13.0 driver, avoids PTX version mismatch)
+# Versions pinned to the 2026-04-15 nightly dropped in the v6 build.
 ENV UV_HTTP_TIMEOUT=300
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-     uv pip install torch triton \
+     uv pip install \
+         "torch==2.12.0.dev20260415+cu130" \
+         "triton==3.7.0+gitb4e20bbe" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-     uv pip install torchvision torchaudio \
+     uv pip install \
+         "torchvision==0.27.0.dev20260415+cu130" \
+         "torchaudio==2.11.0.dev20260415+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-     uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi<0.2" filelock pynvml requests tqdm
+     uv pip install "nvidia-nvshmem-cu13==3.4.5" "apache-tvm-ffi==0.1.10" filelock pynvml requests tqdm
 
 # Ccache
 ENV PATH=/usr/lib/ccache:$PATH
@@ -319,13 +324,17 @@ RUN mkdir -p tiktoken_encodings && \
 ARG PRE_TRANSFORMERS=1
 ENV UV_HTTP_TIMEOUT=300
 
-# PyTorch (cu130 — matches host CUDA 13.0 driver)
+# PyTorch (cu130 — matches host CUDA 13.0 driver) — pinned to 2026-04-15 nightly
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-     uv pip install torch triton \
+     uv pip install \
+         "torch==2.12.0.dev20260415+cu130" \
+         "triton==3.7.0+gitb4e20bbe" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-     uv pip install torchvision torchaudio \
+     uv pip install \
+         "torchvision==0.27.0.dev20260415+cu130" \
+         "torchaudio==2.11.0.dev20260415+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-     uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi<0.2"
+     uv pip install "nvidia-nvshmem-cu13==3.4.5" "apache-tvm-ffi==0.1.10"
 
 # Install FlashInfer + vLLM wheels (bind-mounted from host ./wheels/)
 # Exclude flashinfer_cubin wheel: precompiled cubins are downloaded from upstream
@@ -345,7 +354,7 @@ RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
     if [ "$PRE_TRANSFORMERS" = "1" ]; then \
         echo "transformers>=5.0.0" > /tmp/tf-override.txt && \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin) --override /tmp/tf-override.txt && \
-        uv pip install "transformers>=5.5.4" --override /tmp/tf-override.txt; \
+        uv pip install "transformers==5.5.4" --override /tmp/tf-override.txt; \
     else \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin); \
     fi
@@ -371,9 +380,9 @@ COPY mods/ /workspace/mods/
 #   Enables --attention-backend flash_attn for DFlash on SM110 (head_dim=256).
 #   Requires nvidia-cutlass-dsl >= 4.4.x
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv pip install fastsafetensors instanttensor && \
-    uv pip install "triattention @ git+https://github.com/WeianMao/triattention.git" && \
-    uv pip install "flash-attn-4>=4.0.0.beta9" "nvidia-cutlass-dsl>=4.4"
+    uv pip install "fastsafetensors==0.2.2" "instanttensor==0.1.8" && \
+    uv pip install "triattention @ git+https://github.com/WeianMao/triattention.git@91bb3c27e5000aa2e1f5abb3f247376597f2b5af" && \
+    uv pip install "flash-attn-4==4.0.0b9" "nvidia-cutlass-dsl==4.4.2"
 
 # flash_attn shim: merge vendored vllm_flash_attn modules into the flash-attn-4
 # package. flash-attn-4 only provides cute/, but vLLM also imports flash_attn.ops

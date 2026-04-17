@@ -26,15 +26,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ── Defaults ────────────────────────────────────────────────────────
-VLLM_REF="main"
-FLASHINFER_REF="main"
+# Pinned to the validated v6 build (2026-04-17). Override with --vllm-ref / etc.
+# Reset to "main" when starting a new development stint.
+VLLM_REF="9965f501a89204769a53c86cdee2528947373747"
+FLASHINFER_REF="25b324dbad53942a695a1f00cd7837800de25634"
 BUILD_JOBS=8
 CUDA_BASE="nvidia/cuda:13.0.0-devel-ubuntu24.04"
 TORCH_CUDA_ARCH_LIST="11.0a"
 FLASHINFER_CUDA_ARCH_LIST="11.0a"
 IMAGE_NAME="nemoclaw-thor/vllm"
 IMAGE_TAG=""  # auto-generated if empty
-VLLM_PRS=""
+# PR #39931 adds TQFullAttentionSpec. Only new-file hunks apply cleanly; the
+# in-place edits are replayed by docker/mods/fix-pr39931-turboquant at runtime.
+VLLM_PRS="39931"
 PRE_TRANSFORMERS=0
 SKIP_FLASHINFER=0
 SKIP_VLLM=0
