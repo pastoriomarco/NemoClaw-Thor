@@ -36,9 +36,12 @@ TORCH_CUDA_ARCH_LIST="11.0a"
 FLASHINFER_CUDA_ARCH_LIST="11.0a"
 IMAGE_NAME="nemoclaw-thor/vllm"
 IMAGE_TAG=""  # auto-generated if empty
-# PR #39931 adds TQFullAttentionSpec. Only new-file hunks apply cleanly; the
-# in-place edits are replayed by docker/mods/fix-pr39931-turboquant at runtime.
-VLLM_PRS="39931"
+# No PRs applied at build time by default. PR #39931's changes (TurboQuant
+# hybrid support) are replayed at runtime by docker/mods/fix-pr39931-turboquant
+# — applying the PR at build time would be fragile (the PR is unmerged and
+# can change upstream without warning, and git apply often rejects the
+# in-place edits anyway due to context drift).
+VLLM_PRS=""
 PRE_TRANSFORMERS=0
 SKIP_FLASHINFER=0
 SKIP_VLLM=0

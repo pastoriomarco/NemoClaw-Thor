@@ -50,14 +50,19 @@ curl ... | git apply -v --exclude='tests/*' || \
 ```
 
 For PR #39931, the `--exclude='tests/*'` apply failed on context drift. The
-fallback `git apply --reject` silently dropped all in-place edits, keeping
-only the new-file additions.
+fallback `git apply --reject` silently dropped all in-place edits. (Correction
+to earlier analysis: `TQFullAttentionSpec` is not added by this PR at all —
+it was already in vLLM main at our pinned commit. The PR only modifies 4
+existing files, all of which failed to apply.)
 
-**Resulting image state**:
+**As of commit `fc33d58`+, `VLLM_PRS=""` at build time** — the PR is delivered
+entirely via the runtime mod. See `docker/NOTES.md` for the full rationale.
+
+**Historical image state (before the mod)**:
 
 | Change | Applied? | File |
 |--------|---------|------|
-| `TQFullAttentionSpec` class | ✓ | `vllm/v1/kv_cache_interface.py` (new class, no context) |
+| `TQFullAttentionSpec` class | pre-existing | `vllm/v1/kv_cache_interface.py` — already in main @ 9965f501a, NOT from this PR |
 | Gate removal | ✗ | `vllm/engine/arg_utils.py` |
 | `get_boundary_skip_layers(model_config)` signature + hybrid logic | ✗ | `vllm/model_executor/layers/quantization/turboquant/config.py` |
 | `_get_full_attention_layer_indices` helper | ✗ | same |

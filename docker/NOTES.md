@@ -34,7 +34,7 @@ The `build.sh` defaults and `Dockerfile` pip installs were pinned on
 |-------|--------------|
 | **CUDA base** | `nvidia/cuda:13.0.0-devel-ubuntu24.04` |
 | **vLLM ref** | `9965f501a89204769a53c86cdee2528947373747` (main @ 2026-04-16) |
-| **vLLM PRs** | `39931` (see "PR #39931 state" below) |
+| **vLLM PRs** | (none — see "PR #39931 state" below) |
 | **FlashInfer ref** | `25b324dbad53942a695a1f00cd7837800de25634` |
 | **PyTorch nightly (cu130)** | `torch==2.12.0.dev20260415+cu130` |
 | | `torchvision==0.27.0.dev20260415+cu130` |
@@ -49,31 +49,47 @@ The `build.sh` defaults and `Dockerfile` pip installs were pinned on
 | **nvidia-nvshmem-cu13** | `3.4.5` |
 | **apache-tvm-ffi** | `0.1.10` |
 
-### PR #39931 state (partial apply + runtime mod)
+### PR #39931 state (fully delivered via runtime mod)
 
-**Short answer**: PR #39931 is **partially baked into the image**. The full PR
-is delivered via a runtime mod (`fix-pr39931-turboquant`) that completes the
-missing hunks at container start.
+**Short answer**: PR #39931 is **not applied at build time**. The full PR is
+replayed by a runtime mod (`fix-pr39931-turboquant`) that applies all 5
+in-place edits at container start.
 
-#### What landed in the image
+#### Why no build-time apply
 
-The Dockerfile applies `VLLM_PRS="39931"` using `git apply -v --exclude='tests/*'
-|| git apply --reject -v`. The **`--reject` fallback silently dropped hunks
-that conflicted with our older vLLM commit** (`9965f501a` is 22 commits behind
-the PR's base `bf9a5ddb24`). Net result in the baked image:
+Earlier builds tried `VLLM_PRS="39931"` which used `git apply -v
+--exclude='tests/*' || git apply --reject -v`. The `--reject` fallback
+silently dropped hunks that conflicted with our pinned vLLM commit
+`9965f501a` (which is 22 commits behind the PR's base `bf9a5ddb24`). Net
+result: all 5 in-place edits were rejected, so `VLLM_PRS="39931"` added
+nothing to the image.
 
-| PR hunk | Applied? |
-|--------|---------|
-| `TQFullAttentionSpec` class (new block in `kv_cache_interface.py`) | ✓ |
-| Gate removal in `arg_utils.py` | ✗ |
-| `get_boundary_skip_layers(model_config)` signature | ✗ |
-| `_get_full_attention_layer_indices` helper in `config.py` | ✗ |
-| TQ-aware `_align_hybrid_block_size` in `platforms/interface.py` | ✗ |
-| Flash_attn `out=` kwarg shim in `turboquant_attn.py` | ✗ |
+Additional concern: the PR is **unmerged and open**. Upstream can rebase or
+force-push to change its contents. A `curl pull/39931.diff | git apply`
+invocation would pull whatever state the PR is in on that day, making the
+"pinned" build non-deterministic.
+
+`VLLM_PRS=""` avoids both problems — the build only uses the pinned vLLM
+commit, nothing fetched from a non-pinned source.
+
+Note on `TQFullAttentionSpec`: this class is sometimes attributed to PR #39931
+but actually already exists in vLLM main at commit `9965f501a`. It was merged
+via a different code path and is present in our pinned vLLM regardless of any
+PR application. The PR diff does not touch `kv_cache_interface.py`.
+
+#### What the PR adds (all handled by the mod)
+
+| PR hunk | File |
+|---------|------|
+| Gate removal (hybrid model allowed) | `vllm/engine/arg_utils.py` |
+| `get_boundary_skip_layers(model_config)` signature | `vllm/engine/arg_utils.py` + `.../turboquant/config.py` |
+| Hybrid-aware layer selection + `_get_full_attention_layer_indices` helper | `.../turboquant/config.py` |
+| TQ-aware `_align_hybrid_block_size` | `vllm/platforms/interface.py` |
+| Flash_attn `out=` kwarg shim | `vllm/v1/attention/backends/turboquant_attn.py` |
 
 #### The runtime mod
 
-`docker/mods/fix-pr39931-turboquant/run.sh` replays the 5 rejected hunks as
+`docker/mods/fix-pr39931-turboquant/run.sh` applies all 5 hunks as
 exact-string `str.replace` operations with verify + idempotent markers. It is
 **not baked into the image** — it lives in the NemoClaw-Thor repo and is
 delivered at container start via launch.sh's bind mount:
@@ -83,9 +99,9 @@ delivered at container start via launch.sh's bind mount:
 docker_mount_args+=(-v "${THOR_MODS_HOST_DIR}:/workspace/mods:ro")
 ```
 
-The image's baked-in `/workspace/mods/` (copied from an older version of the
-repo) is overlaid by this bind mount at runtime. Profiles that need the mod
-opt in via `VLLM_MODS=fix-pr39931-turboquant` in their env args:
+The image's baked-in `/workspace/mods/` is overlaid by this bind mount at
+runtime. Profiles that need the mod opt in via
+`VLLM_MODS=fix-pr39931-turboquant` in their env args:
 
 - `qwen3.6-35b-a3b-nvfp4-tq-mtp`
 - `qwen3.6-35b-a3b-fp8-turboquant`
@@ -93,19 +109,25 @@ opt in via `VLLM_MODS=fix-pr39931-turboquant` in their env args:
 The entrypoint (`/workspace/entrypoint.sh`) reads `VLLM_MODS` and runs each
 named mod's `run.sh` before `exec`-ing into vllm.
 
-#### Why this split (image vs mod)
+#### Why mod-only (no build-time apply)
 
-- PR #39931's new-file class lives in the image — it's pure code addition,
-  no context-sensitive edits, safe to bake
-- The 5 in-place edits live in the mod — they're context-sensitive and would
-  need to be re-derived whenever vLLM main moves. Keeping them in the repo
-  means we can update them without rebuilding the (30-60 min) image
-- Future: next rebuild should either pin `VLLM_REF` to PR #39931's base
-  commit (so `git apply` works cleanly) or use `git fetch + merge` so
-  3-way merge handles drift
+- **Deterministic builds**: nothing fetched from an unmerged upstream PR
+- **Hot-swappable**: mod can be updated without rebuilding the 30-60 min image
+- **Context-resilient**: `str.replace` with explicit OLD/NEW blocks is less
+  fragile than `git apply` when vLLM main drifts
+- **Fail-loud**: the mod errors if any pattern doesn't match exactly once —
+  no silent hunk drops
+
+#### When the PR merges upstream
+
+If vLLM merges PR #39931 and we bump `VLLM_REF` to a commit that includes
+the changes: the mod's OLD strings won't match any more. The mod will fail
+with "pattern not found" — a loud signal that it's no longer needed. At
+that point, delete the mod, remove `VLLM_MODS=fix-pr39931-turboquant` from
+launch.sh, and the build is cleanly on upstream.
 
 See `DFLASH-INVESTIGATION.md` "Known Problems" section for the full
-chronology of why the PR partially failed and the mod's design rationale.
+chronology of the investigation.
 
 ### Key runtime env vars
 
@@ -121,7 +143,7 @@ chronology of why the PR partially failed and the mod's design rationale.
 | Change | Why |
 |--------|-----|
 | vLLM 0.19.1rc1.dev338 (commit 9965f501a, pinned) | Qwen3.6 + DFlash + TurboQuant support |
-| PR #39931 applied (partial) + runtime mod | TurboQuant on hybrid (DeltaNet) models |
+| PR #39931 replayed via runtime mod (no build-time apply) | TurboQuant on hybrid (DeltaNet) models |
 | transformers pinned to 5.5.4 | Qwen3.6 model class support |
 | All v4/v5 runtime mods removed from launch.sh | head_dim=128 on Qwen3.6 means flash_attn works natively; most fixes no longer needed |
 | New runtime mod: `fix-pr39931-turboquant` | Completes the partial PR application |
