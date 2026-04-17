@@ -167,7 +167,9 @@ RUN if [ -n "$VLLM_PRS" ]; then \
         echo "Applying PRs: $VLLM_PRS"; \
         for pr in $VLLM_PRS; do \
             echo "Fetching and applying PR #$pr..."; \
-            curl -fL "https://github.com/vllm-project/vllm/pull/${pr}.diff" | git apply -v; \
+            curl -fL "https://github.com/vllm-project/vllm/pull/${pr}.diff" | git apply -v --exclude='tests/*' || \
+            (echo "WARNING: PR #$pr partial apply (excluding tests)..." && \
+             curl -fL "https://github.com/vllm-project/vllm/pull/${pr}.diff" | git apply --reject -v 2>&1; true); \
         done; \
     fi
 

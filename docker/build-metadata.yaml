@@ -1,5 +1,5 @@
-build_date: 2026-04-17T05:36:51Z
-script_commit: b49b237fc8bfb1768f4b55532932cbdf3bdc2257
+build_date: 2026-04-17T10:35:29Z
+script_commit: d70534bc3eb0bc24ab405506597036f300d172f6
 vllm_ref: main
 vllm_commit: 219bb5b8c0dcc6a5d5f894e9168fa5b8c2f8255a
 flashinfer_ref: main
@@ -10,4 +10,4 @@ platform: jetson-thor-sm110
 build_args:
   build_jobs: 8
   pre_transformers: 1
-  vllm_prs: ""
+  vllm_prs: "39931"
