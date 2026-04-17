@@ -1,8 +1,60 @@
 # DFlash Speculative Decoding on Jetson AGX Thor (SM110)
 
-**Date**: 2026-04-15 — 2026-04-16
-**Target model**: Qwen3.5-9B-FP8 (`lovedheart/Qwen3.5-9B-FP8`)
-**Drafter model**: z-lab/Qwen3.5-9B-DFlash (1B params, BF16)
+**Date**: 2026-04-15 — 2026-04-17
+**Target model**: Qwen3.6-35B-A3B-FP8 (production), Qwen3.5-9B-FP8 (investigation)
+**Drafter model**: z-lab/Qwen3.6-35B-A3B-DFlash (matched), z-lab/Qwen3.5-9B-DFlash (9B)
+
+---
+
+## 🚀 BREAKTHROUGH: 47.6 tok/s on Qwen3.6-35B-A3B-FP8 (2026-04-17)
+
+**Key discovery**: Qwen3.6-35B-A3B has `head_dim=128` (not 256 like the 9B model).
+FA2 works natively on SM110 for head_dim≤128 → DFlash with `--attention-backend
+flash_attn` works **without any runtime mods**, matching z-lab's tested configuration.
+
+With the matched z-lab/Qwen3.6-35B-A3B-DFlash drafter:
+- **47.6 tok/s average, 94 tok/s peak** (single sequence, DFlash-15)
+- **34-48% acceptance**, mean length 5.3-8.3 tokens
+- **4.1x speedup** over 35B baseline (11.6 tok/s)
+
+### Full Results Table (Qwen3.6-35B-A3B-FP8 on v6 container)
+
+| Config | Tok/s | Acceptance | Mean Len | Notes |
+|--------|-------|-----------|----------|-------|
+| Baseline (no spec) | 11.6 | — | 1.0 | |
+| MTP N=4 | 29.9 | 77.7% | 4.1 | Built-in heads, no drafter |
+| DFlash-3 (mismatched) | 22.1 | 66.3% | 3.0 | Qwen3.5 drafter on 3.6 target |
+| DFlash-8 (mismatched) | 26.8 | 27.3% | 3.2 | |
+| DFlash-15 (mismatched) | 30.7 | 19.0% | 3.9 | |
+| DDTree k=3 (mismatched) | 26.6 | 29.3% | 3.3 | Tree overhead not worth it |
+| **DFlash-15 (MATCHED)** | **47.6 avg (94 peak)** | **34-48%** | **5.3-8.3** | **z-lab/Qwen3.6 drafter** |
+| DFlash-15 × 8 concurrent | 110.3 | — | — | 3.7x scaling (mismatched) |
+
+### Production Config
+
+```bash
+VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel,CutlassFp8BlockScaledMMKernel
+vllm serve Qwen/Qwen3.6-35B-A3B-FP8 \
+  --attention-backend flash_attn \
+  --enforce-eager --language-model-only \
+  --gpu-memory-utilization 0.8 --kv-cache-dtype bfloat16 \
+  --speculative-config '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
+```
+
+Image: `nemoclaw-thor/vllm-v6:latest` (vLLM dev356, clean, no mods)
+HF token required for gated drafter model.
+
+### Why head_dim Matters
+
+| Model | hidden_size | Q heads | KV heads | head_dim | FA2 on SM110 |
+|-------|-----------|---------|----------|----------|-------------|
+| Qwen3.5-9B | 4096 | 16 | 4 | **256** | ❌ Crashes |
+| Qwen3.6-35B-A3B | 2048 | 16 | 2 | **128** | ✅ Works |
+| DFlash drafter (35B) | 2048 | 32 | 4 | **64** | ✅ Works |
+
+---
+
+## Previous Investigation (Qwen3.5-9B, FlashInfer)
 **Platform**: Jetson AGX Thor, SM110 (Blackwell), 128 GB unified memory
 **vLLM**: 0.19.1rc1.dev195 (commit e281cb721)
 **FlashInfer**: 0.6.7 (commit 904fa8cbc)
