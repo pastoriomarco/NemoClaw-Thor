@@ -12,7 +12,7 @@
 #   ./build.sh --build-jobs 6        # lower parallelism on constrained host
 
 # ── Build tunables ──────────────────────────────────────────────────
-ARG BUILD_JOBS=8
+ARG BUILD_JOBS=12
 ARG CUDA_BASE=nvidia/cuda:13.0.0-devel-ubuntu24.04
 
 # =========================================================
@@ -286,7 +286,7 @@ COPY --from=vllm-builder /workspace/wheels /
 # =========================================================
 FROM ${CUDA_BASE} AS runner
 
-ARG BUILD_JOBS=8
+ARG BUILD_JOBS=12
 ENV MAX_JOBS=${BUILD_JOBS}
 ENV CMAKE_BUILD_PARALLEL_LEVEL=${BUILD_JOBS}
 ENV NINJAFLAGS="-j${BUILD_JOBS}"

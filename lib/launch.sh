@@ -447,6 +447,10 @@ run_thor_vllm_container() {
         ${HF_TOKEN:+-e "HF_TOKEN=${HF_TOKEN}"} \
         -e TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 \
         -e TORCHINDUCTOR_CACHE_DIR=/root/.cache/torch/inductor \
+        -e "MAX_JOBS=${THOR_MAX_JOBS:-12}" \
+        -e "NINJAFLAGS=-j${THOR_MAX_JOBS:-12}" \
+        -e "MAKEFLAGS=-j${THOR_MAX_JOBS:-12}" \
+        -e "CMAKE_BUILD_PARALLEL_LEVEL=${THOR_MAX_JOBS:-12}" \
         -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface" \
         -v "${HOME}/.cache/huggingface:/root/.cache/huggingface" \
         -v "${THOR_VLLM_CACHE_DIR}:/root/.cache/vllm" \
