@@ -6,11 +6,11 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| NemoClaw | v0.0.13 | `~/NemoClaw` (origin/main) |
+| NemoClaw | v0.0.13+ | `~/NemoClaw` (origin/main) |
 | OpenShell | 0.0.26 | Auto-upgraded by NemoClaw installer |
 | OpenClaw | 2026.3.11 | Pinned in NemoClaw's Dockerfile.base |
-| vLLM | 0.19.1rc1 | Custom SM110 image with FlashInfer CUTLASS |
-| Sandbox | `thor-v5` | Landlock + seccomp + netns |
+| vLLM | v6 (dev356 + PR #39931) | Custom SM110 image, clean install, no runtime mods |
+| Sandbox | `my-assistant` (or `thor-v5`) | Landlock + seccomp + netns |
 | Provider | `vllm-local` | Direct HTTP to host vLLM (`:8000`) or ManyForge mux mode (`:8888`) |
 
 ## Scripts
@@ -29,12 +29,12 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
 
 # Terminal 1: start vLLM
-./start-model.sh qwen3.5-27b-claude-distilled-v2-nvfp4
+./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
 
 # Terminal 2: configure and verify
-./configure-local-provider.sh qwen3.5-27b-claude-distilled-v2-nvfp4
+./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-dflash
 ./status.sh
-nemoclaw thor-v5 connect
+nemoclaw my-assistant connect
 ```
 
 ### ManyForge-integrated mode
@@ -43,7 +43,7 @@ If the OpenClaw main agent must reach ManyForge tools through the verified
 workspace-plugin path, switch the provider to the muxed route first:
 
 ```bash
-./configure-local-provider.sh --with-manyforge-mux qwen3.5-27b-claude-distilled-v2-nvfp4
+./configure-local-provider.sh --with-manyforge-mux qwen3.6-35b-a3b-nvfp4-dflash
 ./status.sh
 ```
 
@@ -79,27 +79,35 @@ automatically freed.
 
 ## Model profiles
 
-| Profile | Model | Seqs | Agents | Notes |
-|---------|-------|------|--------|-------|
-| `qwen3.5-122b-a10b-nvfp4-resharded` | 122B MoE | 4 | 1 | Most capable, local resharded weights |
-| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v2 distilled, best for coding |
-| `qwen3.5-27b-claude-distilled-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v1 distilled |
-| `qwopus3.5-27b-nvfp4` | 27B DeltaNet | 9 | 3 | Opus-distilled, NVFP4 |
-| `qwen3.5-27b-fp8` | 27B dense | 8 | 2 | FP8 quantized |
-| `qwen3.5-35b-a3b-fp8` | 35B MoE | 22 | 5 | FP8, highest concurrency |
-| `qwen3.5-35b-a3b-nvfp4` | 35B MoE | 26 | 6 | NVFP4, highest concurrency |
-| `gemma4-31b-it-nvfp4` | 31B dense | 6 | 6 | Vision+text, NVFP4 |
-| `gemma4-26b-a4b-it` | 26B MoE | 17 | 4 | Vision+text, BF16 |
+### Qwen3.6 (v6 container, production)
 
-**Seqs** = max concurrent sequences in vLLM. **Agents** = max concurrent
-OpenClaw main agents (subagents fill remaining slots automatically).
+| Profile | Tok/s | KV Tokens | Seqs | Spec Method | Notes |
+|---------|-------|-----------|------|-------------|-------|
+| `qwen3.6-35b-a3b-nvfp4-dflash` | **45.7 / 192.5@8** | 678K | 5 | DFlash-15 | FASTEST, 256K ctx |
+| `qwen3.6-35b-a3b-fp8-dflash` | **47.6** | ~700K | 4 | DFlash-15 | Best FP8 |
+| `qwen3.6-35b-a3b-nvfp4-tq-mtp` | 28.6 | 2.22M | 8 | MTP N=4 | MAX CONTEXT, 153 tok/s @ 8-conc |
+| `qwen3.6-35b-a3b-fp8-mtp-fp8kv` | 25.7 | 1.44M | 8 | MTP N=4 | FP8+FP8 KV |
+| `qwen3.6-35b-a3b-fp8-turboquant` | 26.2 | 1.89M | 6 | MTP N=4 | FP8+TQ KV |
+
+### Legacy / other
+
+| Profile | Model | Seqs | Notes |
+|---------|-------|------|-------|
+| `qwen3.5-122b-a10b-nvfp4` | 122B MoE | 3 | Most capable |
+| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | Claude v2 distilled |
+| `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | Multimodal |
+| `gemma4-e4b-it` | 8B MoE | 12 | Vision+text+audio |
+| `gemma4-31b-it-nvfp4` | 31B dense | 6 | Vision+text, NVFP4 |
+| `gemma4-26b-a4b-it` | 26B MoE | 17 | Vision+text, BF16 |
+
+**Default profile**: `qwen3.6-35b-a3b-fp8-dflash`.
 
 ## Architecture
 
 ```
 Host (Jetson AGX Thor)
-├── vLLM container (Docker, --network host, port 8000)
-│   └── Model serving with SM110 NVFP4 + FlashInfer CUTLASS
+├── vLLM v6 container (Docker, --network host, port 8000)
+│   └── Model serving: Qwen3.6 DFlash/MTP + flash_attn/FlashInfer
 ├── OpenShell gateway (K3s, openshell-cluster-nemoclaw)
 │   ├── L7 proxy (10.200.0.1:3128) — TLS termination, policy enforcement
 │   └── Inference route:
@@ -155,4 +163,5 @@ NemoClaw-Thor/
 - [NemoClaw](https://github.com/NVIDIA/NemoClaw) — sandbox framework
 - [OpenShell](https://github.com/NVIDIA/OpenShell) — container orchestration
 - [OpenClaw](https://github.com/openclaw/openclaw) — agent runtime
-- [PLAN-v5-transition.md](PLAN-v5-transition.md) — upgrade plan and architecture notes
+- [PLAN-v5-transition.md](PLAN-v5-transition.md) — v5 upgrade plan (historical)
+- [DFLASH-INVESTIGATION.md](DFLASH-INVESTIGATION.md) — DFlash speculative decoding investigation and results

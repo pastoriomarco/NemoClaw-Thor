@@ -149,11 +149,12 @@ resolve_thor_sandbox_name() {
 print_supported_model_profiles() {
     cat <<'EOF'
 Supported model profiles:
-  qwen3.5-122b-a10b-nvfp4-resharded
-  qwen3.5-27b-claude-distilled-nvfp4  (DeltaNet hybrid, reasoning-distilled)
+  qwen3.6-35b-a3b-nvfp4-dflash    (DFlash-15, 45.7 single / 192.5 @8-conc, 256K ctx) ★★ FASTEST
+  qwen3.6-35b-a3b-fp8-dflash      (DFlash-15, 47.6 tok/s, ~700K KV) ★ MAX THROUGHPUT FP8
+  qwen3.6-35b-a3b-nvfp4-tq-mtp   (TQ K8V4 + MTP, 28.6 single / 153.6 @8-conc, 256K ctx) ★ MAX CONTEXT
+  qwen3.6-35b-a3b-fp8-mtp-fp8kv   (MTP N=4 + FP8 KV, 25.7 tok/s, 1.44M KV)
+  qwen3.6-35b-a3b-fp8-turboquant  (TQ K8V4 + MTP, 26.2 tok/s, 1.89M KV)
   qwen3.5-9b-claude-distilled-nvfp4  (DeltaNet hybrid, 9B Opus-distilled NVFP4)
-  qwen3.5-9b-dflash               (base 9B FP8 + DFlash spec decode)
-  qwen3.5-35b-a3b-nvfp4
   gemma4-e4b-it             (vLLM, BF16 MoE, 8B/4B-active, vision+text+tools)
   gemma4-31b-it-nvfp4       (vLLM, NVFP4 quantized, vision+text+tools)
   gemma4-26b-a4b-it         (vLLM, BF16 MoE 128E/8A, vision+text+tools)
@@ -166,7 +167,7 @@ normalize_model_profile() {
 
 resolve_model_profile() {
     local requested
-    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.5-27b-claude-distilled-nvfp4}}")
+    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-fp8-dflash}}")
 
     case "${requested}" in
         qwen3.5-122b-a10b-nvfp4)
@@ -175,16 +176,6 @@ resolve_model_profile() {
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="3"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.5-122b-a10b-nvfp4-resharded)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-122B-A10B-NVFP4-resharded"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
@@ -199,36 +190,6 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="false"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
-        qwen3.5-9b-dflash)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-9B-FP8-DFlash"
-            THOR_TARGET_MAX_MODEL_LEN="131072"
-            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
-            THOR_TARGET_MAX_NUM_SEQS="6"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="false"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.5-9b-bf16-dflash)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-9B-BF16-DFlash"
-            THOR_TARGET_MAX_MODEL_LEN="32768"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="4"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
-            THOR_TARGET_MODEL_REASONING="false"
-            THOR_TARGET_MAX_TOKENS="8192"
-            ;;
-        qwen3.5-27b-claude-distilled-nvfp4)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="9"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
         qwen3.5-27b-claude-distilled-v2-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-v2-NVFP4"
@@ -239,16 +200,68 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
-        qwen3.5-35b-a3b-nvfp4)
+        qwen3.6-35b-a3b-fp8-dflash)
+            # ~700K KV tokens at 0.8 (BF16 KV + DFlash drafter overhead)
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-35B-A3B-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="26"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="6"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-FP8-DFlash"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
+        qwen3.6-35b-a3b-fp8-mtp-fp8kv)
+            # 1.44M KV tokens at 0.8 (FP8 KV, ~2x compression)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-FP8-MTP-FP8KV"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.6-35b-a3b-fp8-turboquant)
+            # 1.89M KV tokens at 0.8 (TQ K8V4, ~2.6x compression)
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-FP8-TQ"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="turboquant_k8v4"
+            THOR_TARGET_MAX_NUM_SEQS="6"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.6-35b-a3b-nvfp4-dflash)
+            # ★★ FASTEST: 45.71 tok/s single, 192.45 aggregate at 8-concurrent.
+            # 678K KV tokens at 256K context → ~2 full-context concurrent, more at shorter.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-DFlash"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
+            THOR_TARGET_MAX_NUM_SEQS="5"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.6-35b-a3b-nvfp4-tq-mtp)
+            # ★ MAX CONTEXT: 28.0 tok/s, 79% acceptance, 2.22M KV tokens
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-TQ-MTP"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="turboquant_k8v4"
+            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv removed — crashes under 8-concurrent
+        # (CUDA illegal memory in MoE autotuner at M=128 on SM110). Superseded
+        # by qwen3.6-35b-a3b-nvfp4-tq-mtp which is strictly better: larger KV
+        # budget (2.22M vs 1.68M), higher concurrency (29x vs 10x), works
+        # under load (153 tok/s aggregate at 8 concurrent).
+        # qwen3.5-35b-a3b-nvfp4 removed — superseded by qwen3.6
         gemma4-e4b-it)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="gemma-4-E4B-it"
@@ -297,6 +310,7 @@ resolve_model_profile() {
     THOR_LOCAL_PROVIDER_NAME="${THOR_LOCAL_PROVIDER_NAME:-vllm-local}"
     THOR_MANYFORGE_MUX_ENABLED="${THOR_MANYFORGE_MUX_ENABLED:-false}"
     THOR_MANYFORGE_MUX_PORT="${THOR_MANYFORGE_MUX_PORT:-8888}"
+    THOR_DASHBOARD_PORT="${THOR_DASHBOARD_PORT:-${NEMOCLAW_DASHBOARD_PORT:-18789}}"
 
     # The sandbox/OpenClaw client should always talk to inference.local. The
     # underlying OpenShell provider target is what changes between direct vLLM

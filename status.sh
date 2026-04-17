@@ -361,18 +361,20 @@ if [[ -z "${sandbox_name}" ]]; then
     warn "Skipping sandbox gateway check because no sandbox is resolved"
     record 2
 else
+    dashboard_port="${THOR_DASHBOARD_PORT:-18789}"
     forward_line=$(openshell forward list 2>/dev/null \
         | sed 's/\x1b\[[0-9;]*m//g' \
-        | awk -v name="${sandbox_name}" '$1 == name && $3 == "18789" && /running/ {found=1} END {print found+0}')
+        | awk -v name="${sandbox_name}" -v port="${dashboard_port}" '$1 == name && $3 == port && /running/ {found=1} END {print found+0}')
 
     if [[ "${forward_line}" == "1" ]]; then
         # Send a WebSocket upgrade request to verify the actual gateway process
         # is running, not just the SSH tunnel (which accepts TCP but resets).
         gateway_probe=$(python3 -c "
 import socket, sys
+port = int(sys.argv[1])
 try:
-    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
-    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
+    s = socket.create_connection(('127.0.0.1', port), timeout=5)
+    s.sendall(f'GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'.encode())
     s.settimeout(5)
     data = s.recv(1024)
     s.close()
@@ -389,21 +391,21 @@ except ConnectionResetError:
     print('reset')
 except Exception as e:
     print('error')
-" 2>/dev/null || echo "error")
+" "${dashboard_port}" 2>/dev/null || echo "error")
 
         if [[ "${gateway_probe}" == "ok" ]]; then
-            pass "OpenClaw gateway is reachable via host forward on port 18789"
+            pass "OpenClaw gateway is reachable via host forward on port ${dashboard_port}"
             record 0
         else
-            warn "Host forward on port 18789 is active but OpenClaw gateway is not responding"
+            warn "Host forward on port ${dashboard_port} is active but OpenClaw gateway is not responding"
             info "The gateway process may not be running inside the sandbox."
             fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             fix "Or inside the sandbox: HOME=/sandbox openclaw gateway run &"
             record 2
         fi
     else
-        info "No active host forward on port 18789 — gateway check skipped"
-        info "To enable this check: openshell forward start 18789 ${sandbox_name} --background"
+        info "No active host forward on port ${dashboard_port} — gateway check skipped"
+        info "To enable this check: openshell forward start ${dashboard_port} ${sandbox_name} --background"
         record 0
     fi
 fi

@@ -373,13 +373,14 @@ ensure_sandbox_gateway_running() {
 
     # Ensure the host forward is active.
     local forward_running=""
+    local dashboard_port="${THOR_DASHBOARD_PORT:-18789}"
     forward_running=$(openshell forward list 2>/dev/null \
         | sed 's/\x1b\[[0-9;]*m//g' \
-        | awk -v name="${sandbox_name}" '$1 == name && $3 == "18789" && /running/ {found=1} END {print found+0}')
+        | awk -v name="${sandbox_name}" -v port="${dashboard_port}" '$1 == name && $3 == port && /running/ {found=1} END {print found+0}')
 
     if [[ "${forward_running}" != "1" ]]; then
-        openshell forward stop 18789 "${sandbox_name}" 2>/dev/null || true
-        openshell forward start 18789 "${sandbox_name}" --background >/dev/null 2>&1 || true
+        openshell forward stop "${dashboard_port}" "${sandbox_name}" 2>/dev/null || true
+        openshell forward start "${dashboard_port}" "${sandbox_name}" --background >/dev/null 2>&1 || true
     fi
 
     # Everything below runs in a single SSH session inside the sandbox.
@@ -494,7 +495,7 @@ print("pre-paired")
 PY
 
 # 3. Start the gateway.
-nohup openclaw gateway run --auth none > "$GW_LOG" 2>&1 &
+nohup openclaw gateway run --auth none --port 18789 > "$GW_LOG" 2>&1 &
 disown
 GW_PID=$!
 sleep 3
@@ -525,10 +526,11 @@ fi
         sleep 2
         local probe_result=""
         probe_result=$(python3 -c "
-import socket
+import socket, sys
+port = int(sys.argv[1])
 try:
-    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
-    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\n\r\n')
+    s = socket.create_connection(('127.0.0.1', port), timeout=5)
+    s.sendall(f'GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n'.encode())
     s.settimeout(5)
     data = s.recv(1024)
     s.close()
@@ -537,7 +539,7 @@ except ConnectionResetError:
     print('reset')
 except Exception:
     print('error')
-" 2>/dev/null || echo "error")
+" "${dashboard_port}" 2>/dev/null || echo "error")
 
         if [[ "${probe_result}" == "ok" ]]; then
             probe_ok=true
@@ -563,7 +565,7 @@ for pid_dir in /proc/[0-9]*; do
     case "$comm" in openclaw*) kill "$pid" 2>/dev/null || true ;; esac
 done
 sleep 2
-nohup openclaw gateway run --auth none > /sandbox/openclaw-gateway.log 2>&1 &
+nohup openclaw gateway run --auth none --port 18789 > /sandbox/openclaw-gateway.log 2>&1 &
 disown
 sleep 3
 kill -0 $! 2>/dev/null && echo "restarted" || echo "failed"
@@ -573,10 +575,11 @@ kill -0 $! 2>/dev/null && echo "restarted" || echo "failed"
         sleep 2
         local retry_result=""
         retry_result=$(python3 -c "
-import socket
+import socket, sys
+port = int(sys.argv[1])
 try:
-    s = socket.create_connection(('127.0.0.1', 18789), timeout=5)
-    s.sendall(b'GET / HTTP/1.1\r\nHost: 127.0.0.1:18789\r\n\r\n')
+    s = socket.create_connection(('127.0.0.1', port), timeout=5)
+    s.sendall(f'GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n'.encode())
     s.settimeout(5)
     data = s.recv(1024)
     s.close()
@@ -585,7 +588,7 @@ except ConnectionResetError:
     print('reset')
 except Exception:
     print('error')
-" 2>/dev/null || echo "error")
+" "${dashboard_port}" 2>/dev/null || echo "error")
 
         if [[ "${retry_result}" == "ok" ]]; then
             pass "OpenClaw gateway started successfully (after retry)"
@@ -705,11 +708,10 @@ from datetime import datetime, timezone
 provider_name = os.environ["THOR_LOCAL_PROVIDER_NAME"]
 provider_label = "Local vLLM" if provider_name == "vllm-local" else provider_name
 onboard_path = Path("/sandbox/.nemoclaw/config.json")
-if onboard_path.exists():
+onboard_cfg = {}
+if onboard_path.exists() and onboard_path.stat().st_size > 0:
     with onboard_path.open(encoding="utf-8") as f:
         onboard_cfg = json.load(f)
-else:
-    onboard_cfg = {}
 onboard_cfg.update({
     "endpointType": "custom",
     "endpointUrl": os.environ.get("THOR_OPENCLAW_BASE_URL", "https://inference.local/v1"),
@@ -839,12 +841,35 @@ subagents_cfg["maxSpawnDepth"] = int(os.environ.get("THOR_EFFECTIVE_OPENCLAW_SUB
 # if not cron_jobs.exists():
 #     cron_jobs.write_text("{}\n")
 
+# --- OpenClaw compat fields for Qwen models (2026.4.2+) ---
+# thinkingFormat: "qwen" enables native Qwen thinking token handling.
+# supportsTools: explicit tool support declaration.
+for model in inference.get("models", []):
+    if isinstance(model, dict):
+        compat = model.setdefault("compat", {})
+        compat["supportsTools"] = True
+        mid_lower = model.get("id", "").lower()
+        if "qwen" in mid_lower:
+            compat["thinkingFormat"] = "qwen"
+
 # --- Write openclaw.json ---
+# NemoClaw v0.0.18+ sets chattr +i on openclaw.json at boot.
+# Must remove immutable bit before writing, then restore it after.
+import subprocess, hashlib
+hash_path = openclaw_path.parent / ".config-hash"
+subprocess.run(["chattr", "-i", str(openclaw_path)], capture_output=True)
+subprocess.run(["chattr", "-i", str(hash_path)], capture_output=True)
 os.chmod(openclaw_path, 0o644)
 with openclaw_path.open("w", encoding="utf-8") as f:
     json.dump(openclaw_cfg, f, indent=2)
     f.write("\n")
+# Recompute config hash so the entrypoint doesn't reject our changes.
+content_hash = hashlib.sha256(openclaw_path.read_bytes()).hexdigest()
+hash_path.write_text(f"{content_hash}  {openclaw_path.name}\n")
+os.chmod(hash_path, 0o444)
 os.chmod(openclaw_path, 0o444)
+subprocess.run(["chattr", "+i", str(openclaw_path)], capture_output=True)
+subprocess.run(["chattr", "+i", str(hash_path)], capture_output=True)
 PY
 SH
 }

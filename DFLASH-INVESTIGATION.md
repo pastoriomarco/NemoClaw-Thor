@@ -6,6 +6,156 @@
 
 ---
 
+## NemoClaw-routed Benchmark Results (2026-04-17 evening)
+
+Measured through the NemoClaw pipeline (sandbox → OpenShell proxy → vLLM),
+complex coding task (1200-token async rate-limited HTTP client implementation),
+temperature 0.2, `/no_think`.
+
+| Profile | Single req | N-concurrent | Notes |
+|---------|-----------|-------------|-------|
+| `qwen3.6-35b-a3b-nvfp4-dflash` | **40.77 / 45.71 tok/s** (cold/warm) | **120.51 @ 4-seqs** / **192.45 @ 8-seqs** | Peak per-req 36, mean 25-32 |
+| `qwen3.6-35b-a3b-nvfp4-tq-mtp` | **28.58 tok/s** (single, N=4) | **153.62 @ 8-seqs** | ~19-20 tok/s per req. Requires `fix-pr39931-turboquant` mod |
+| ~~`qwen3.6-35b-a3b-nvfp4-mtp-fp8kv`~~ | 29.02 tok/s (single) | **CRASH** — CUDA illegal memory at 8-concurrent | Profile **removed** — superseded by tq-mtp on every axis |
+
+**Key observations**:
+- **DFlash wins throughput at every concurrency level** (45.7 → 192.5 tok/s scaling 1→8)
+- TQ-MTP wins **max context capacity** (262K ctx with ~29x max concurrency = 7.6M token budget vs DFlash's ~1.3M)
+- DFlash default now `max_num_seqs=5` + `max_model_len=262144` to expose full 256K context
+- NVFP4+MTP+FP8KV removed: TQ-MTP beats it on single throughput (noise), concurrent (works vs crashes), KV capacity (2.22M vs 1.68M), context (262K vs 131K)
+
+**Note on vLLM's max-concurrency reporting**: The log line
+`Maximum concurrency for N tokens per request: Mx` is NOT simply
+`available_kv / N`. vLLM factors in prefix caching, block reuse, and
+scheduling heuristics, so the reported M can exceed the naive
+`kv_tokens / ctx_tokens` ratio (e.g. 678K KV / 131K ctx = 5.17x naive
+vs 10.09x reported).
+
+### Known Problems (2026-04-17)
+
+**1. PR #39931 partially failed to apply at image build** ✓ Fixed via mod
+
+### Root cause
+
+Our image's vLLM commit (`9965f501a`, Apr 16 morning) is **22 commits behind**
+the PR's base commit (`bf9a5ddb24`, Apr 16 evening). The PR diff's context lines
+around each hunk don't match our older vLLM file state, so `git apply` rejected
+the in-place edits.
+
+The `d25dbf1` commit changed the Dockerfile's PR apply logic to tolerate
+partial failures:
+```dockerfile
+curl ... | git apply -v --exclude='tests/*' || \
+(echo "WARNING: partial apply..." && curl ... | git apply --reject -v)
+```
+
+For PR #39931, the `--exclude='tests/*'` apply failed on context drift. The
+fallback `git apply --reject` silently dropped all in-place edits, keeping
+only the new-file additions.
+
+**Resulting image state**:
+
+| Change | Applied? | File |
+|--------|---------|------|
+| `TQFullAttentionSpec` class | ✓ | `vllm/v1/kv_cache_interface.py` (new class, no context) |
+| Gate removal | ✗ | `vllm/engine/arg_utils.py` |
+| `get_boundary_skip_layers(model_config)` signature + hybrid logic | ✗ | `vllm/model_executor/layers/quantization/turboquant/config.py` |
+| `_get_full_attention_layer_indices` helper | ✗ | same |
+| TQ-aware page-size alignment | ✗ | `vllm/platforms/interface.py` |
+| Flash_attn `out=` kwarg compat shim | ✗ | `vllm/v1/attention/backends/turboquant_attn.py` |
+
+### Fix: `fix-pr39931-turboquant` runtime mod
+
+`docker/mods/fix-pr39931-turboquant/run.sh` replays all 5 rejected edits as
+verbatim Python `str.replace` operations against the installed vLLM at
+container start. Key properties:
+
+- **Not `git apply`** — uses exact-string matching, immune to context drift
+  around the hunks
+- **Each replacement verified**: must match exactly once (errors loudly
+  otherwise), with `idempotent_marker` so re-applying is a no-op
+- **All 5 hunks ported** (both arg_utils.py edits, 4 config.py changes incl.
+  the new helper function, platforms/interface.py TQ branch,
+  turboquant_attn.py FA shim)
+
+### Verification
+
+```bash
+./start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
+# [entrypoint] Applying mod: fix-pr39931-turboquant
+# Applying PR #39931 (TurboQuant hybrid support) — replaying rejected hunks...
+#   [arg_utils.py] patched ...
+#   [config.py imports] patched ...
+#   [config.py get_boundary_skip_layers] patched ...
+#   [config.py from_cache_dtype] patched ...
+#   [config.py helper] appended _get_full_attention_layer_indices
+#   [platforms/interface.py] patched ...
+#   [turboquant_attn.py] patched ...
+# All PR #39931 hunks applied successfully.
+#
+# INFO [config.py:185] TQ hybrid: full-attention layers [3, 7, 11, 15, 19, 23, 27, 31, 35, 39]
+# INFO Available KV cache memory: 70.78 GiB
+# INFO GPU KV cache size: 2,225,328 tokens
+# INFO Maximum concurrency for 262,144 tokens per request: 29.05x
+```
+
+The "TQ hybrid: full-attention layers" log line confirms the PR's hybrid-aware
+logic is running — it correctly identified Qwen3.6-35B-A3B's 10 attention
+layers (every 4th of 40 total, the DeltaNet layers are excluded from TQ
+compression as intended).
+
+### Wired into launch.sh
+
+Both profiles that use TurboQuant get the mod via `VLLM_MODS`:
+- `qwen3.6-35b-a3b-nvfp4-tq-mtp` — NVFP4 weights + TQ K8V4 + MTP N=4
+- `qwen3.6-35b-a3b-fp8-turboquant` — FP8 weights + TQ K8V4 + MTP N=4
+
+### Long-term upstream fix
+
+Options for the next image rebuild:
+1. **Pin `VLLM_REF=bf9a5ddb24`** (PR base commit) — PR applies cleanly but
+   we lose 22 commits of unrelated upstream fixes
+2. **Use `git fetch origin pull/39931/head` + `git merge`** — 3-way merge
+   handles context drift; fails loudly on real conflicts
+3. **Revert d25dbf1's `--reject` fallback** to make partial applies fail the
+   build (the current fallback silently ships broken images)
+4. **Keep the runtime mod** as the canonical path; decouple from upstream PR
+   application entirely
+
+**2. MTP-FP8KV crashes under 8-concurrent load** ⚠️
+
+Single-request worked at 29 tok/s. Under 8 parallel requests, engine crashed:
+```
+CUDA error: an illegal memory access was encountered
+Unsupported tile (128, 64, 64) and cluster (1, 2, 1) shape combination for arch 100
+```
+
+Root cause: MoE grouped GEMM autotuner picks different kernel tiles at larger
+M dimension (batch 128 from 8 seqs × spec tokens). Some tile/cluster combos
+valid on SM100 fail on SM110. The initial single-request autotune pass at
+smaller M avoids the bad tile, so first run works.
+
+**Potential workarounds to investigate**:
+- Reduce `max_num_seqs` to 4 for MTP profiles (limits M dimension)
+- Use `VLLM_USE_FLASHINFER_MOE_FP4=0` (falls back to alternative MoE backend)
+- Pre-warm with concurrent batch before serving (forces autotuner to reject
+  bad tiles early — might still crash)
+- Upstream fix: restrict MoE autotuner tile candidates on SM110
+
+**3. TriAttention plugin auto-activates and crashes** ✓ Fixed
+
+TriAttention v0.1.0 is installed as a vLLM `general_plugin` entry point.
+Auto-registers at vLLM startup, monkey-patches the worker, then crashes at
+first inference call without a calibration stats file
+(`TRIATTN_FATAL_TRITON_SCORING_REQUIRED:stats_path_not_set`).
+
+**Fix applied**: `ENABLE_TRIATTENTION=0` in launch.sh (official off switch).
+Upstream CUDA calibration script exists (`scripts/calibrate.py`) but Qwen3.6
+is not in the supported-model matrix — porting would require DeltaNet-hybrid
+layer support upstream.
+
+---
+
 ## 🚀 BREAKTHROUGH: 47.6 tok/s on Qwen3.6-35B-A3B-FP8 (2026-04-17)
 
 **Key discovery**: Qwen3.6-35B-A3B has `head_dim=128` (not 256 like the 9B model).

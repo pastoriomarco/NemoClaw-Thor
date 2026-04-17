@@ -35,8 +35,16 @@ prepare_thor_launch_profile() {
     # SM110 (Thor): CUTLASS sm100 kernels are incompatible — disable them.
     # CutlassFp8BlockScaledMMKernel: uses enable_sm100f_only, crashes SM110 (Xid 43).
     # FlashInfer FP8 is re-enabled: JIT cache has sm_110a GEMM kernels.
+    #
+    # ENABLE_TRIATTENTION=0: disable TriAttention plugin (official off switch).
+    # TriAttention auto-registers and crashes at inference time without a
+    # sparse_stats_path (TRIATTN_FATAL_TRITON_SCORING_REQUIRED:stats_path_not_set).
+    # Qwen3.6-35B-A3B is not in TriAttention's supported-model matrix — it would
+    # require porting the CUDA calibration script for DeltaNet hybrid layers.
+    # Revisit only if upstream adds Qwen3.6 support.
     THOR_DOCKER_ENV_ARGS+=(
         -e "VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel,CutlassFp8BlockScaledMMKernel"
+        -e "ENABLE_TRIATTENTION=0"
     )
 
     case "${profile}" in
@@ -65,51 +73,107 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
             ;;
-        qwen3.5-122b-a10b-nvfp4-resharded)
-            THOR_LAUNCH_MODEL_SOURCE="/data/models/huggingface/hub/qwen-3.5-122b-a10b-nvfp4-resharded/resharded"
-            THOR_LAUNCH_HOST_MODEL_PATH="${THOR_HF_CACHE_DIR}/hub/qwen-3.5-122b-a10b-nvfp4-resharded/resharded"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
-            THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS="${THOR_MAX_NUM_BATCHED_TOKENS:-8192}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            # SM110 NVFP4: FlashInfer CUTLASS for GEMM + MoE, FlashInfer for attention.
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
-                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
-                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
-            )
+        # qwen3.5-122b-a10b-nvfp4-resharded removed
+        qwen3.6-35b-a3b-fp8-dflash)
+            # ★ BEST THROUGHPUT: 47.6 tok/s avg, 94 tok/s peak with matched z-lab drafter.
+            # Qwen3.6-35B-A3B has head_dim=128 → FA2 works natively on SM110.
+            # DFlash-15 with flash_attn backend. No runtime mods needed.
+            # z-lab/Qwen3.6-35B-A3B-DFlash is gated — requires HF token.
+            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.6-35B-A3B-FP8"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
             THOR_VLLM_ARGS+=(
-                "--attention-backend" "flashinfer"
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flash_attn"
+                "--enforce-eager"
                 "--language-model-only"
-                "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--enable-prefix-caching"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
             )
             ;;
-        qwen3.5-35b-a3b-nvfp4)
-            THOR_LAUNCH_MODEL_SOURCE="Kbenkhaled/Qwen3.5-35B-A3B-NVFP4"
+        qwen3.6-35b-a3b-fp8-mtp-fp8kv)
+            # MTP N=4 + FP8 KV: 25.7 tok/s, 80% acceptance, 1.44M KV tokens.
+            # No PR needed. Simpler alternative to TurboQuant.
+            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.6-35B-A3B-FP8"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            # SM110 NVFP4: FlashInfer CUTLASS for GEMM + MoE, FlashInfer for attention.
-            # FlashInfer v0.6.7 FMHA works on SM110 (verified on 27B distilled, +38% vs triton_attn).
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--enforce-eager"
+                "--language-model-only"
+                "--kv-cache-dtype" "fp8"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
+            )
+            ;;
+        qwen3.6-35b-a3b-fp8-turboquant)
+            # TurboQuant K8V4 + MTP N=4: 26.2 tok/s, 78% acceptance, 1.89M KV tokens at 0.8.
+            # Best KV compression (~2.6x). Requires vLLM with PR #39931 (baked in v6 image)
+            # + fix-pr39931-turboquant mod (full PR replay — gate removal +
+            # TQFullAttentionSpec presence).
+            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.6-35B-A3B-FP8"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.5}"
             THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
-                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
-                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
+                "-e" "VLLM_MODS=fix-pr39931-turboquant"
             )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "flashinfer"
+                "--enforce-eager"
                 "--language-model-only"
-                "--reasoning-parser" "qwen3"
+                "--kv-cache-dtype" "turboquant_k8v4"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--enable-prefix-caching"
                 "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
             )
             ;;
+        qwen3.6-35b-a3b-nvfp4-dflash)
+            # ★★ FASTEST: 54.7 tok/s, 66% acceptance. NVFP4 weights + DFlash-15.
+            # head_dim=128 → flash_attn works natively on SM110.
+            # z-lab/Qwen3.6-35B-A3B-DFlash is gated — requires HF token.
+            THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flash_attn"
+                "--enforce-eager"
+                "--language-model-only"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
+            )
+            ;;
+        qwen3.6-35b-a3b-nvfp4-tq-mtp)
+            # ★ MAX CONTEXT: 28.0 tok/s, 79% acceptance, 2.22M KV tokens.
+            # NVFP4 weights + TurboQuant K8V4 KV + MTP N=4.
+            # Requires vLLM with PR #39931 (baked in v6 image) + fix-pr39931-turboquant (runtime mod replaying PR
+            # mod (makes hybrid-model gate conditional on TQFullAttentionSpec presence).
+            THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
+                "-e" "VLLM_MODS=fix-pr39931-turboquant"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--enforce-eager"
+                "--language-model-only"
+                "--kv-cache-dtype" "turboquant_k8v4"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
+            )
+            ;;
+        # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv removed — crashes under 8-concurrent
+        # (MoE autotuner picks invalid SM110 tile at M=128). Superseded by
+        # qwen3.6-35b-a3b-nvfp4-tq-mtp which is strictly better on all axes.
+        # qwen3.5-35b-a3b-nvfp4 removed — superseded by qwen3.6
         qwen3.5-9b-claude-distilled-nvfp4)
             # Qwen3.5-9B VLM: DeltaNet hybrid (linear_attention + full_attention) with visual encoder.
             # Claude 4.6 Opus reasoning-distilled, NVFP4 MLP-only + FP8 KV. Visual encoder kept bf16.
@@ -143,76 +207,9 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
             ;;
-        qwen3.5-9b-dflash)
-            # DFlash with Qwen3.5-9B FP8 + FlashInfer backend.
-            # FA4/FA2 cannot work on SM110 for head_dim=256 (Xid 43 GPU hang).
-            # FlashInfer handles head_dim=256 on SM110 correctly.
-            # Non-causal attention for DFlash via fix-flashinfer-non-causal mod.
-            THOR_LAUNCH_MODEL_SOURCE="lovedheart/Qwen3.5-9B-FP8"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.4}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat-nothink.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat-nothink.jinja"
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_MODS=fix-flashinfer-non-causal,fix-kv-page-unify,fix-dflash-sdpa"
-            )
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "flashinfer"
-                "--enforce-eager"
-                "--language-model-only"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "4096"
-                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.5-9B-DFlash","num_speculative_tokens":8}'
-            )
-            ;;
-        qwen3.5-9b-bf16-dflash)
-            # BF16 target + DFlash drafter — diagnostic profile to isolate FP8 as
-            # a variable in the 0% acceptance investigation. BF16 is the reference
-            # configuration that DFlash was trained and validated against.
-            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.5-9B"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.5}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat-nothink.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat-nothink.jinja"
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_MODS=fix-flashinfer-non-causal,fix-kv-page-unify,debug-dflash"
-            )
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "flashinfer"
-                "--enforce-eager"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--mm-encoder-attn-backend" "TORCH_SDPA"
-                "--max-num-batched-tokens" "4096"
-                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.5-9B-DFlash","num_speculative_tokens":8}'
-            )
-            ;;
-        qwen3.5-27b-claude-distilled-nvfp4)
-            # Qwen3.5-27B DeltaNet hybrid: 48 linear_attention + 16 full_attention layers.
-            # Mixed NVFP4 (W4A4 for gate/up/o_proj) + FP8 (down_proj, QKV) + BF16 (lm_head).
-            # Only the 16 full_attention layers use KV cache — much smaller KV footprint than pure dense.
-            # FlashInfer v0.6.7 FMHA works on SM110 (+38% vs triton_attn, verified).
-            # No MoE — VLLM_USE_FLASHINFER_MOE_FP4 not applicable.
-            # linear_attention layers handled by GatedDeltaNetAttention (vllm built-in).
-            THOR_LAUNCH_MODEL_SOURCE="mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
-            )
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "flashinfer"
-                "--language-model-only"
-                "--reasoning-parser" "qwen3"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--enable-prefix-caching"
-                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
-            )
-            ;;
+        # qwen3.5-9b-dflash removed
+        # qwen3.5-9b-bf16-dflash removed
+        # qwen3.5-27b-claude-distilled-nvfp4 removed
         qwen3.5-27b-claude-distilled-v2-nvfp4)
             # Qwen3.5-27B DeltaNet hybrid: same architecture as v1.
             # v2 distillation from mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-NVFP4.
@@ -447,9 +444,11 @@ run_thor_vllm_container() {
         -e HF_HOME=/data/models/huggingface \
         -e HF_HUB_CACHE=/data/models/huggingface/hub \
         -e TRANSFORMERS_CACHE=/data/models/huggingface/hub \
+        ${HF_TOKEN:+-e "HF_TOKEN=${HF_TOKEN}"} \
         -e TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 \
         -e TORCHINDUCTOR_CACHE_DIR=/root/.cache/torch/inductor \
         -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface" \
+        -v "${HOME}/.cache/huggingface:/root/.cache/huggingface" \
         -v "${THOR_VLLM_CACHE_DIR}:/root/.cache/vllm" \
         -v "${THOR_TORCH_CACHE_DIR}:/root/.cache/torch" \
         -v "${THOR_FLASHINFER_CACHE_DIR}:/root/.cache/flashinfer" \

@@ -116,6 +116,49 @@ fi
 save_thor_runtime_config
 pass "Saved runtime config to ${THOR_CONFIG_FILE}"
 
+# Update the host-side NemoClaw registry so `nemoclaw connect` doesn't
+# swap the inference route back to the onboard-time cloud provider.
+# NemoClaw v0.0.18+ reads provider/model from ~/.nemoclaw/sandboxes.json
+# and auto-corrects the route on connect if it doesn't match.
+if [[ -n "${sandbox_name}" ]]; then
+    local_registry="${HOME}/.nemoclaw/sandboxes.json"
+    if [[ -f "${local_registry}" ]]; then
+        python3 - "${local_registry}" "${sandbox_name}" "${THOR_LOCAL_PROVIDER_NAME}" "${THOR_MODEL_ID}" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+reg_path = Path(sys.argv[1])
+sandbox_name = sys.argv[2]
+provider_name = sys.argv[3]
+model_id = sys.argv[4]
+
+data = json.loads(reg_path.read_text(encoding="utf-8"))
+sandboxes = data.get("sandboxes", {})
+
+if sandbox_name in sandboxes:
+    entry = sandboxes[sandbox_name]
+    if isinstance(entry, dict):
+        entry["provider"] = provider_name
+        entry["model"] = model_id
+    reg_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    print(f"  Registry updated: {sandbox_name} → {provider_name}/{model_id}")
+else:
+    print(f"  Registry: sandbox '{sandbox_name}' not found (skipped)")
+PYEOF
+    fi
+fi
+
+# Apply local-inference policy preset so the sandbox can reach vLLM.
+# NemoClaw v0.0.18+ includes the local-inference preset which allows
+# egress to host.openshell.internal:8000 (vLLM) and :11434 (Ollama).
+if [[ -n "${sandbox_name}" ]]; then
+    if nemoclaw "${sandbox_name}" policy-add local-inference 2>/dev/null; then
+        pass "Applied local-inference policy preset"
+    else
+        info "local-inference preset already applied or unavailable"
+    fi
+fi
+
 info "Ensuring OpenClaw gateway is running inside the sandbox..."
 ensure_sandbox_gateway_running "${sandbox_name}" || true
 echo ""

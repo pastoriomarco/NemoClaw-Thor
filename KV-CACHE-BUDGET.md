@@ -7,27 +7,44 @@ divide actual available by the KV/seq column to get the correct max_num_seqs.
 ## Platform constants
 
 - Total memory: 128 GiB (Jetson AGX Thor unified)
-- gpu_memory_utilization: 0.80 (all models except 122B which uses 0.85)
-- KV cache dtype: fp8 (1 byte per element)
+- gpu_memory_utilization: 0.80 (most models), 0.85 (122B), 0.50 (FP8 TQ)
+- KV cache dtype: varies by profile (BF16, FP8, TurboQuant K8V4)
 - CUDA/framework overhead: ~9 GiB (measured from gemma4-26b vLLM log)
-- Target max_model_len: 262144 (256K) for all models
+- Target max_model_len: 131072 (DFlash) or 262144 (MTP/TQ/legacy)
 
 ## Architecture details
 
-All Qwen 3.5 models are **DeltaNet hybrids** with `full_attention_interval=4`.
-Only 25% of layers (every 4th) use traditional KV cache. The other 75% use
-DeltaNet linear attention with a fixed-size recurrent state (~1 MB/layer/seq),
-which does NOT grow with sequence length.
+**Qwen 3.6-35B-A3B** is an MoE hybrid with `full_attention_interval=4`.
+Only 25% of layers (every 4th, 10 of 40) use traditional KV cache. The other
+75% use DeltaNet linear attention with a fixed-size recurrent state (~1 MB/layer/seq).
+Key difference from Qwen 3.5: **head_dim=128** (vs 256), enabling native FA2 on SM110.
 
-Gemma 4 models use **hybrid SWA + global attention**. Pattern: 5 SWA layers
+**Qwen 3.5 models** are DeltaNet hybrids with `full_attention_interval=4`,
+same structure as 3.6 but with head_dim=256 (FA2 incompatible on SM110).
+
+**Gemma 4 models** use hybrid SWA + global attention. Pattern: 5 SWA layers
 then 1 global, repeating. SWA layers cache only 1024 tokens (sliding window),
-global layers cache the full context. Gemma 4 also uses asymmetric head
-dimensions: global layers have head_dim=512 with fewer KV heads, SWA layers
-have head_dim=256 with more KV heads.
+global layers cache the full context. Asymmetric head dimensions: global
+layers have head_dim=512, SWA layers have head_dim=256.
 
-## Per-model KV cache per sequence at 256K context (fp8)
+## Per-model KV cache per sequence
 
-### Qwen 3.5 DeltaNet models
+### Qwen 3.6-35B-A3B (production profiles)
+
+Formula: `full_attn_layers x 2(K+V) x kv_heads x head_dim x dtype_bytes x max_model_len`
+
+| KV dtype | Bytes/elem | KV/seq @131K | KV/seq @256K | Notes |
+|----------|-----------|-------------|-------------|-------|
+| BF16 | 2 | 1.25 GiB | 2.5 GiB | DFlash profiles |
+| FP8 | 1 | 0.625 GiB | 1.25 GiB | MTP+FP8KV profiles |
+| TQ K8V4 | ~0.75 | ~0.47 GiB | ~0.94 GiB | TurboQuant ~2.6x compression |
+
+Math (BF16 @131K): 10 x 2 x 2 x 128 x 2 x 131072 = 1,342,177,280 bytes = 1.25 GiB
+Math (FP8 @131K): 10 x 2 x 2 x 128 x 1 x 131072 = 671,088,640 bytes = 0.625 GiB
+
+Model details: 40 total layers, 10 full attention (every 4th), 2 KV heads, head_dim=128.
+
+### Qwen 3.5 DeltaNet models (legacy)
 
 Formula: `full_attn_layers x 2(K+V) x kv_heads x head_dim x 1(fp8) x 262144`
 
@@ -66,14 +83,26 @@ Model weight sizes are estimates (marked ~). Verify by reading the
 "Available KV cache memory: XX.XX GiB" line from vLLM startup logs,
 then divide by KV/seq above to get exact max_num_seqs.
 
-| Profile | Quant | Est weights | gpu_mem_util | Usable GiB | Est KV avail | KV/seq @256K | max_num_seqs |
-|---------|-------|-------------|--------------|------------|--------------|--------------|--------------|
-| qwen3.5-122b-a10b-nvfp4 | NVFP4 | **75.2 GiB** (incl MTP) | 0.85 | 104.4 | **24.05 GiB** | 3.0 GiB | 8 |
-| qwopus3.5-27b-nvfp4 | NVFP4 | ~20 GiB | 0.80 | 102.4 | ~73 GiB | 8.0 GiB | 9 |
-| qwen3.5-27b-claude-nvfp4 | NVFP4 | ~20 GiB | 0.80 | 102.4 | ~73 GiB | 8.0 GiB | 9 |
-| qwen3.5-27b-fp8 | FP8 | ~28 GiB | 0.80 | 102.4 | ~65 GiB | 8.0 GiB | 8 |
-| qwen3.5-35b-a3b-fp8 | FP8 | ~36 GiB | 0.80 | 102.4 | ~57 GiB | 2.5 GiB | 22 |
-| qwen3.5-35b-a3b-nvfp4 | NVFP4 | ~26 GiB | 0.80 | 102.4 | ~67 GiB | 2.5 GiB | 26 |
+### Qwen3.6 profiles (v6 container, measured)
+
+| Profile | Quant | KV dtype | gpu_mem | max_model_len | KV tokens | max_num_seqs | Tok/s |
+|---------|-------|----------|---------|---------------|-----------|--------------|-------|
+| qwen3.6-35b-a3b-nvfp4-dflash | NVFP4 | BF16 | 0.80 | 262144 | 678K | 5 | **45.7 / 192.5 @ 8-conc** |
+| qwen3.6-35b-a3b-fp8-dflash | FP8 | BF16 | 0.80 | 131072 | ~700K | 4 | **47.6** |
+| qwen3.6-35b-a3b-nvfp4-tq-mtp | NVFP4 | TQ K8V4 | 0.80 | 262144 | 2.22M | 8 | 28.6 (153 @ 8-conc) |
+| qwen3.6-35b-a3b-fp8-mtp-fp8kv | FP8 | FP8 | 0.80 | 131072 | 1.44M | 8 | 25.7 |
+| qwen3.6-35b-a3b-fp8-turboquant | FP8 | TQ K8V4 | 0.50 | 262144 | 1.89M | 6 | 26.2 |
+
+DFlash profiles include ~0.9 GiB drafter model overhead. KV token counts are
+measured from vLLM startup logs, not estimated.
+
+### Legacy profiles
+
+| Profile | Quant | Est weights | gpu_mem | Usable GiB | Est KV avail | KV/seq @256K | max_num_seqs |
+|---------|-------|-------------|---------|------------|--------------|--------------|--------------|
+| qwen3.5-122b-a10b-nvfp4 | NVFP4 | **75.2 GiB** (incl MTP) | 0.85 | 104.4 | **24.05 GiB** | 3.0 GiB | 3 |
+| qwen3.5-27b-claude-distilled-v2-nvfp4 | NVFP4 | ~20 GiB | 0.80 | 102.4 | ~73 GiB | 8.0 GiB | 9 |
+| qwen3.5-9b-claude-distilled-nvfp4 | NVFP4 | ~7 GiB | 0.40 | 51.2 | ~35 GiB | — | 8 |
 | gemma4-31b-it-nvfp4 | NVFP4 | **31 GiB** | 0.80 | 102.4 | **64.2 GiB** | 10.4 GiB | 6 |
 | gemma4-26b-a4b-it | BF16 | ~48.5 GiB | 0.80 | 102.4 | ~45 GiB | 2.6 GiB | 17 |
 
@@ -119,15 +148,23 @@ Slots are split between main agents and subagents. maxChildrenPerAgent
 is capped at min(4, ceil(subagent_slots / main)) for fair distribution —
 no single agent can hog all subagent slots.
 
+### Qwen3.6 profiles
+
 | Profile | Slots | Main agents | Subagent slots | Children/agent | Depth |
 |---------|-------|-------------|----------------|----------------|-------|
-| qwen3.5-122b-a10b | 8 | 8 | 0 | — | — |
-| qwen3.5-27b-fp8 | 8 | 2 | 6 | 3 | 1 |
-| qwen3.5-27b NVFP4 variants | 9 | 3 | 6 | 2 | 1 |
+| qwen3.6 DFlash profiles | 4 | 1 | 3 | 3 | 1 |
+| qwen3.6 MTP/TQ profiles (8 seqs) | 8 | 2 | 6 | 3 | 1 |
+| qwen3.6-35b-a3b-fp8-turboquant | 6 | 2 | 4 | 2 | 1 |
+
+### Legacy profiles
+
+| Profile | Slots | Main agents | Subagent slots | Children/agent | Depth |
+|---------|-------|-------------|----------------|----------------|-------|
+| qwen3.5-122b-a10b | 3 | 1 | 2 | 2 | 1 |
+| qwen3.5-27b-claude-distilled-v2-nvfp4 | 9 | 3 | 6 | 2 | 1 |
+| qwen3.5-9b-claude-distilled-nvfp4 | 8 | 2 | 6 | 3 | 1 |
 | gemma4-31b-nvfp4 | 6 | 2 | 4 | 2 | 1 |
 | gemma4-26b-a4b | 17 | 4 | 13 | 4 | 1 |
-| qwen3.5-35b-a3b-fp8 | 22 | 5 | 17 | 4 | 1 |
-| qwen3.5-35b-a3b-nvfp4 | 26 | 6 | 20 | 4 | 1 |
 
 Override main concurrency at launch:
 `THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT=N ./configure-local-provider.sh`

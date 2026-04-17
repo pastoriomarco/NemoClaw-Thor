@@ -1,4 +1,4 @@
-# User Quickstart Manual — NemoClaw-Thor v5
+# User Quickstart Manual — NemoClaw-Thor v6
 
 Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor with NemoClaw v0.0.13+
 and OpenShell v0.0.26.
@@ -8,9 +8,9 @@ Validated baseline:
 - NemoClaw: v0.0.13+
 - OpenShell: 0.0.26
 - OpenClaw: 2026.3.11
-- vLLM: 0.19.1rc1 (custom SM110 image)
+- vLLM: v6 build (dev356, vLLM main + PR #39931 for TurboQuant hybrid)
 - Gateway: `nemoclaw`
-- Sandbox: `thor-v5`
+- Sandbox: `my-assistant` (or `thor-v5`)
 - Provider: `vllm-local` (direct `:8000` by default, muxed `:8888` for ManyForge mode)
 
 Important rule:
@@ -102,7 +102,7 @@ vLLM inference — `configure-local-provider.sh` fixes them (see Section 11).
 3. Start the model server and leave it running in that terminal:
 
 ```bash
-./start-model.sh qwen3.5-27b-claude-distilled-v2-nvfp4
+./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
 ```
 
 4. In a second terminal, configure and verify:
@@ -110,7 +110,7 @@ vLLM inference — `configure-local-provider.sh` fixes them (see Section 11).
 ```bash
 ./configure-local-provider.sh
 ./status.sh
-nemoclaw thor-v5 connect
+nemoclaw my-assistant connect
 ```
 
 If you are enabling ManyForge tool access for the embedded OpenClaw agent, use:
@@ -127,7 +127,7 @@ Same sequence every time — no special reboot handling needed:
 1. Start the model server:
 
 ```bash
-./start-model.sh qwen3.5-27b-claude-distilled-v2-nvfp4
+./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
 ```
 
 2. Rebind the provider and patch the sandbox:
@@ -146,7 +146,7 @@ To restore direct local inference after using ManyForge mode:
 
 ```bash
 ./status.sh
-nemoclaw thor-v5 connect
+nemoclaw my-assistant connect
 ```
 
 If `./status.sh` says the sandbox is missing, re-run `nemoclaw onboard`.
@@ -158,8 +158,8 @@ reconfigure:
 
 ```bash
 sudo sync && sudo sysctl -w vm.drop_caches=3
-./start-model.sh qwen3.5-35b-a3b-nvfp4
-./configure-local-provider.sh qwen3.5-35b-a3b-nvfp4
+./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
+./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-dflash
 ```
 
 Always drop caches between model switches — Thor's unified memory is not
@@ -167,25 +167,41 @@ automatically freed.
 
 ## 6. Model Profiles
 
+### Qwen3.6 profiles (v6 container, production)
+
+| Profile | Tok/s | KV Tokens | Seqs | KV dtype | Spec Method | Notes |
+|---------|-------|-----------|------|----------|-------------|-------|
+| `qwen3.6-35b-a3b-nvfp4-dflash` | **45.7 / 192.5@8** | 678K | 5 | BF16 | DFlash-15 | FASTEST. 256K ctx, peak aggregate 192 tok/s |
+| `qwen3.6-35b-a3b-fp8-dflash` | **47.6** | ~700K | 4 | BF16 | DFlash-15 | Best FP8 throughput |
+| `qwen3.6-35b-a3b-nvfp4-tq-mtp` | 28.6 | 2.22M | 8 | TQ K8V4 | MTP N=4 | MAX CONTEXT, 153 tok/s @ 8-conc. Requires PR #39931 mod |
+| `qwen3.6-35b-a3b-fp8-mtp-fp8kv` | 25.7 | 1.44M | 8 | FP8 | MTP N=4 | FP8 weights + FP8 KV |
+| `qwen3.6-35b-a3b-fp8-turboquant` | 26.2 | 1.89M | 6 | TQ K8V4 | MTP N=4 | FP8 weights + TQ KV |
+
+All Qwen3.6 profiles use `--attention-backend flash_attn` (DFlash) or FlashInfer
+(MTP/TQ), `--enable-auto-tool-choice --tool-call-parser qwen3_xml`, and
+`--enforce-eager`. DFlash profiles require HF token for the gated drafter model
+(z-lab/Qwen3.6-35B-A3B-DFlash).
+
+### Legacy Qwen3.5 profiles (v4/v5 container)
+
 | Profile | Model | Seqs | Agents | Notes |
 |---------|-------|------|--------|-------|
-| `qwen3.5-122b-a10b-nvfp4-resharded` | 122B MoE | 4 | 1 | Most capable, local resharded weights |
+| `qwen3.5-122b-a10b-nvfp4` | 122B MoE | 3 | 1 | Most capable, Sehyo weights |
 | `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v2 distilled, best for coding |
-| `qwen3.5-27b-claude-distilled-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v1 distilled |
 | `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | 2 | Claude distilled, multimodal, 0.4 GPU mem |
-| `qwopus3.5-27b-nvfp4` | 27B DeltaNet | 9 | 3 | Opus-distilled, NVFP4 |
-| `qwen3.5-27b-fp8` | 27B dense | 8 | 2 | FP8 quantized |
-| `qwen3.5-35b-a3b-fp8` | 35B MoE | 22 | 5 | FP8, highest concurrency |
-| `qwen3.5-35b-a3b-nvfp4` | 35B MoE | 26 | 6 | NVFP4, highest concurrency |
-| `qwen3.5-9b-claude-distilled-nvfp4-dflash` | 9B VLM | 5 | 2 | DFlash spec decode, FA4, BF16 KV |
-| `qwen3.5-35b-a3b-nvfp4-dflash` | 35B MoE | 16 | 5 | DFlash spec decode, FA4, BF16 KV |
-| `qwen3.5-27b-claude-distilled-v2-nvfp4-dflash` | 27B DeltaNet | 6 | 2 | DFlash spec decode, FA4, BF16 KV |
+
+### Gemma 4 profiles (all containers)
+
+| Profile | Model | Seqs | Agents | Notes |
+|---------|-------|------|--------|-------|
 | `gemma4-e4b-it` | 8B MoE (4B active) | 12 | 3 | Vision+text+audio, BF16, 0.4 GPU mem |
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | 4 | Vision+text, BF16 |
 
 **Seqs** = max concurrent sequences in vLLM. **Agents** = max concurrent
 OpenClaw main agents (subagents fill remaining slots automatically).
+
+**Default profile**: `qwen3.6-35b-a3b-fp8-dflash` (best overall for agentic work).
 
 ### Launcher overrides
 
@@ -219,26 +235,34 @@ Profiles ending in `-dflash` use block diffusion speculative decoding with
 a ~0.5B drafter model that generates 15 tokens in a single diffusion step.
 The target model then verifies the draft in one forward pass.
 
-These profiles require:
+**Key architecture advantage**: Qwen3.6-35B-A3B has `head_dim=128` (unlike
+Qwen3.5 which had `head_dim=256`). FA2 works natively on SM110 for
+head_dim<=128, so DFlash runs with `--attention-backend flash_attn` without
+any runtime mods — matching z-lab's tested configuration exactly.
 
-- **FlashInfer attention backend with non-causal support** — DFlash needs
-  non-causal attention (`causal=False`). FA4 (CuTe DSL) can't handle
-  head_dim=256 layers in Qwen3.5 DeltaNet models (TMEM hardware limit,
-  falls back to FA2 which crashes on SM110). FlashInfer handles head_dim=256
-  natively. The `fix-flashinfer-non-causal` runtime mod patches FlashInfer
-  to advertise and propagate non-causal support (applied automatically).
-- **InstantTensor** — fast safetensors loading for quicker model startup.
-  Requires overlay image build (see Section 7).
-- **BF16 KV cache** — FP8 KV cache is not compatible with DFlash verification.
-  DFlash profiles use `--kv-cache-dtype bfloat16` explicitly.
-- **Reduced max_num_seqs** — BF16 KV + drafter model (~0.9 GB) uses more memory.
+DFlash profile requirements:
+- **flash_attn attention backend** — works natively on SM110 with head_dim=128
+- **BF16 KV cache** — FP8 KV is incompatible with DFlash non-causal verification
+- **HF token** — z-lab/Qwen3.6-35B-A3B-DFlash is gated (mount `~/.cache/huggingface`)
+- **Reduced max_num_seqs** — BF16 KV + drafter model uses more memory (4 seqs)
 
-DFlash profiles have fewer concurrent sequences than their base variants but
-should produce higher per-request throughput via speculative decoding.
+DFlash profiles have fewer concurrent sequences but 4-5x higher per-request
+throughput (54.7 tok/s vs 11.6 baseline).
 
-Gemma 4 models do NOT have DFlash profiles — their head_dim=256/512 is
-incompatible with FlashInfer's attention kernels, and no DFlash drafters
-exist for them.
+### MTP + KV compression profiles
+
+Profiles with `-mtp` use built-in Multi-Token Prediction heads (zero drafter
+overhead). Combined with FP8 KV or TurboQuant K8V4 for KV cache compression:
+
+- **MTP N=4**: 4 speculative tokens per step, ~76% acceptance
+- **FP8 KV**: ~2x KV compression (1.44-1.68M tokens)
+- **TurboQuant K8V4**: ~2.6x KV compression (1.89-2.22M tokens), requires
+  vLLM with PR #39931 (baked in v6 image)
+
+MTP profiles maximize context capacity at moderate throughput (25-28 tok/s).
+
+Gemma 4 models do NOT have DFlash or MTP profiles — no DFlash drafters exist,
+and head_dim=256/512 is incompatible with flash_attn on SM110.
 
 ## 7. Image Builds
 
@@ -448,15 +472,19 @@ The script patches these via `kubectl exec` into the sandbox. This bypasses
 Landlock (kubectl exec starts a new process, not a child of the sandbox
 entrypoint) and DAC restrictions (runs as root).
 
-## 13. Key Differences From v4
+## 13. Key Differences From v5
 
-| Aspect | v4 | v5 |
+| Aspect | v5 | v6 |
 |--------|----|----|
-| NemoClaw | v0.0.6 | v0.0.13 |
-| OpenShell | 0.0.22 | 0.0.26 |
-| Sandbox | `thor-v4` | `thor-v5` |
-| Sandbox survival | Untested | OpenShell 0.0.26 supports pod persistence |
-| Sandbox policy | Manual preset selection | `nemoclaw onboard` with interactive preset TUI |
-| Default model | `qwopus3.5-27b-nvfp4` | `qwen3.5-27b-claude-distilled-v2-nvfp4` |
-| Egress firewall | Manual iptables script | Removed (OpenShell policy handles network) |
-| Restream proxy | Retired in v4 | N/A |
+| vLLM image | 0.19.1rc1.dev195 (e281cb721) | dev356 + PR #39931 (TurboQuant hybrid) |
+| Default model | `qwen3.5-27b-claude-distilled-v2-nvfp4` | `qwen3.6-35b-a3b-fp8-dflash` |
+| Best throughput | ~12 tok/s (27B NVFP4, MTP N=1) | **54.7 tok/s** (35B NVFP4, DFlash-15) |
+| DFlash backend | FlashInfer + 35 runtime mods | flash_attn native (head_dim=128, no mods) |
+| Runtime mods | 35 mods in docker/mods/ | **All deleted** — clean install |
+| KV compression | FP8 only | FP8, TurboQuant K8V4 (2.6x), BF16 |
+| MTP tokens | N=1-2 (`qwen3_next_mtp`) | N=4 (`mtp` method) |
+| Tool parser | `qwen3_xml` + `--reasoning-parser qwen3` | `qwen3_xml` only |
+| Chat template | `qwen3-tool-call-compat.jinja` (all Qwen) | Removed for Qwen3.6 (native support) |
+| HF token mount | Not present | Added for gated DFlash drafter |
+| VLLM_DISABLED_KERNELS | 2 kernels | 3 kernels (+CutlassFp8BlockScaledMMKernel) |
+| transformers | ==5.5.0 | >=5.5.4 (Qwen3.6 support) |

@@ -5,7 +5,30 @@ Adapted from [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker) (SM1
 
 ---
 
-## Current Working Configuration (v2, 2026-03-28)
+## Current Working Configuration (v6, 2026-04-17)
+
+**Image**: `nemoclaw-thor/vllm:latest` (v6 build)
+**vLLM**: dev356 (main branch + PR #39931 for TurboQuant hybrid model support)
+**Performance**: **54.7 tok/s** on Qwen3.6-35B-A3B-NVFP4 + DFlash-15 (4.7x over baseline)
+**Features**: Native SM110 NVFP4/FP8, DFlash speculative decoding, MTP N=4,
+TurboQuant K8V4 KV cache, flash_attn (head_dim=128), tool calling (qwen3_xml)
+**Runtime mods**: None (all 35 mods deleted — clean install)
+**transformers**: >=5.5.4 (Qwen3.6 support)
+
+### Key changes from v2/v4/v5
+
+| Change | Why |
+|--------|-----|
+| PR #39931 baked in | TurboQuant KV cache on hybrid (DeltaNet) models |
+| `--exclude='tests/*'` in git apply | PR #39931 test files conflict with main |
+| transformers >=5.5.4 | Qwen3.6 model support |
+| All 35 runtime mods deleted | Clean install, no monkey-patches needed |
+| `CutlassFp8BlockScaledMMKernel` disabled | Prevents Xid 43 GPU crash on FP8 models |
+| HF token mount | `-v ~/.cache/huggingface:/root/.cache/huggingface` for gated drafter |
+
+---
+
+## Previous Working Configuration (v2, 2026-03-28)
 
 **Image**: `nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132`
 **vLLM commit**: `58a249bc6` (main branch, includes PR #38126 — cross-suffix `cuda_archs_loose_intersection` fix)
