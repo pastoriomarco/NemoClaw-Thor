@@ -5,26 +5,129 @@ Adapted from [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker) (SM1
 
 ---
 
-## Current Working Configuration (v6, 2026-04-17)
+## Current Working Configuration (v6, pinned 2026-04-17)
 
-**Image**: `nemoclaw-thor/vllm:latest` (v6 build)
-**vLLM**: dev356 (main branch + PR #39931 for TurboQuant hybrid model support)
-**Performance**: **54.7 tok/s** on Qwen3.6-35B-A3B-NVFP4 + DFlash-15 (4.7x over baseline)
+**Image tags**:
+- `nemoclaw-thor/vllm:latest` — primary tag used by launch.sh
+- `nemoclaw-thor/vllm:main-g9965f501a-thor-sm110-cu132` — SHA-based, auto-generated
+- `nemoclaw-thor/vllm:v6-pinned-2026-04-17` — explicit safekeeping tag
+
+All three point to the same image layer (built 2026-04-16 11:40 UTC).
+
+**Benchmark results** (through NemoClaw pipeline, 1200-token coding task):
+
+| Profile | Single | 8-concurrent | Max context |
+|---------|--------|-------------|-------------|
+| Qwen3.6-35B-A3B-NVFP4 + DFlash-15 | 45.7 tok/s | **192.5 tok/s aggregate** | 256K (5 seqs) |
+| Qwen3.6-35B-A3B-NVFP4 + TQ-MTP N=4 | 28.6 tok/s | 153.6 tok/s aggregate | 256K (29x budget) |
+
 **Features**: Native SM110 NVFP4/FP8, DFlash speculative decoding, MTP N=4,
-TurboQuant K8V4 KV cache, flash_attn (head_dim=128), tool calling (qwen3_xml)
-**Runtime mods**: None (all 35 mods deleted — clean install)
-**transformers**: >=5.5.4 (Qwen3.6 support)
+TurboQuant K8V4 KV cache, flash_attn (head_dim=128), tool calling (qwen3_xml).
+
+### Pinned versions
+
+The `build.sh` defaults and `Dockerfile` pip installs were pinned on
+2026-04-17 (commit `fc33d58`) so a fresh rebuild produces the same image.
+**Reset to `main`/unpinned when starting the next development stint.**
+
+| Layer | Pinned value |
+|-------|--------------|
+| **CUDA base** | `nvidia/cuda:13.0.0-devel-ubuntu24.04` |
+| **vLLM ref** | `9965f501a89204769a53c86cdee2528947373747` (main @ 2026-04-16) |
+| **vLLM PRs** | `39931` (see "PR #39931 state" below) |
+| **FlashInfer ref** | `25b324dbad53942a695a1f00cd7837800de25634` |
+| **PyTorch nightly (cu130)** | `torch==2.12.0.dev20260415+cu130` |
+| | `torchvision==0.27.0.dev20260415+cu130` |
+| | `torchaudio==2.11.0.dev20260415+cu130` |
+| **triton** | `3.7.0+gitb4e20bbe` |
+| **transformers** | `5.5.4` |
+| **fastsafetensors** | `0.2.2` |
+| **instanttensor** | `0.1.8` |
+| **triattention** | `git@91bb3c27e5000aa2e1f5abb3f247376597f2b5af` |
+| **flash-attn-4** | `4.0.0b9` |
+| **nvidia-cutlass-dsl** | `4.4.2` |
+| **nvidia-nvshmem-cu13** | `3.4.5` |
+| **apache-tvm-ffi** | `0.1.10` |
+
+### PR #39931 state (partial apply + runtime mod)
+
+**Short answer**: PR #39931 is **partially baked into the image**. The full PR
+is delivered via a runtime mod (`fix-pr39931-turboquant`) that completes the
+missing hunks at container start.
+
+#### What landed in the image
+
+The Dockerfile applies `VLLM_PRS="39931"` using `git apply -v --exclude='tests/*'
+|| git apply --reject -v`. The **`--reject` fallback silently dropped hunks
+that conflicted with our older vLLM commit** (`9965f501a` is 22 commits behind
+the PR's base `bf9a5ddb24`). Net result in the baked image:
+
+| PR hunk | Applied? |
+|--------|---------|
+| `TQFullAttentionSpec` class (new block in `kv_cache_interface.py`) | ✓ |
+| Gate removal in `arg_utils.py` | ✗ |
+| `get_boundary_skip_layers(model_config)` signature | ✗ |
+| `_get_full_attention_layer_indices` helper in `config.py` | ✗ |
+| TQ-aware `_align_hybrid_block_size` in `platforms/interface.py` | ✗ |
+| Flash_attn `out=` kwarg shim in `turboquant_attn.py` | ✗ |
+
+#### The runtime mod
+
+`docker/mods/fix-pr39931-turboquant/run.sh` replays the 5 rejected hunks as
+exact-string `str.replace` operations with verify + idempotent markers. It is
+**not baked into the image** — it lives in the NemoClaw-Thor repo and is
+delivered at container start via launch.sh's bind mount:
+
+```bash
+# From lib/launch.sh
+docker_mount_args+=(-v "${THOR_MODS_HOST_DIR}:/workspace/mods:ro")
+```
+
+The image's baked-in `/workspace/mods/` (copied from an older version of the
+repo) is overlaid by this bind mount at runtime. Profiles that need the mod
+opt in via `VLLM_MODS=fix-pr39931-turboquant` in their env args:
+
+- `qwen3.6-35b-a3b-nvfp4-tq-mtp`
+- `qwen3.6-35b-a3b-fp8-turboquant`
+
+The entrypoint (`/workspace/entrypoint.sh`) reads `VLLM_MODS` and runs each
+named mod's `run.sh` before `exec`-ing into vllm.
+
+#### Why this split (image vs mod)
+
+- PR #39931's new-file class lives in the image — it's pure code addition,
+  no context-sensitive edits, safe to bake
+- The 5 in-place edits live in the mod — they're context-sensitive and would
+  need to be re-derived whenever vLLM main moves. Keeping them in the repo
+  means we can update them without rebuilding the (30-60 min) image
+- Future: next rebuild should either pin `VLLM_REF` to PR #39931's base
+  commit (so `git apply` works cleanly) or use `git fetch + merge` so
+  3-way merge handles drift
+
+See `DFLASH-INVESTIGATION.md` "Known Problems" section for the full
+chronology of why the PR partially failed and the mod's design rationale.
+
+### Key runtime env vars
+
+| Env var | Value | Why |
+|---------|-------|-----|
+| `VLLM_DISABLED_KERNELS` | `CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel,CutlassFp8BlockScaledMMKernel` | Prevents SM110 Xid 43 crash on FP8 models |
+| `ENABLE_TRIATTENTION` | `0` | Disable TriAttention plugin (auto-crashes without calibration stats) |
+| `HF_TOKEN` | mounted from host | Gated drafter download (z-lab/Qwen3.6-35B-A3B-DFlash) |
+| `VLLM_MODS` | per-profile | Runtime mod opt-in (e.g. `fix-pr39931-turboquant` for TQ profiles) |
 
 ### Key changes from v2/v4/v5
 
 | Change | Why |
 |--------|-----|
-| PR #39931 baked in | TurboQuant KV cache on hybrid (DeltaNet) models |
-| `--exclude='tests/*'` in git apply | PR #39931 test files conflict with main |
-| transformers >=5.5.4 | Qwen3.6 model support |
-| All 35 runtime mods deleted | Clean install, no monkey-patches needed |
-| `CutlassFp8BlockScaledMMKernel` disabled | Prevents Xid 43 GPU crash on FP8 models |
-| HF token mount | `-v ~/.cache/huggingface:/root/.cache/huggingface` for gated drafter |
+| vLLM 0.19.1rc1.dev338 (commit 9965f501a, pinned) | Qwen3.6 + DFlash + TurboQuant support |
+| PR #39931 applied (partial) + runtime mod | TurboQuant on hybrid (DeltaNet) models |
+| transformers pinned to 5.5.4 | Qwen3.6 model class support |
+| All v4/v5 runtime mods removed from launch.sh | head_dim=128 on Qwen3.6 means flash_attn works natively; most fixes no longer needed |
+| New runtime mod: `fix-pr39931-turboquant` | Completes the partial PR application |
+| `CutlassFp8BlockScaledMMKernel` added to disabled list | Prevents Xid 43 GPU crash on FP8 models |
+| HF token mount + env var | Required for gated drafter model download |
+| `ENABLE_TRIATTENTION=0` | TriAttention plugin added to image but not usable (no Qwen3.6 calibration) |
 
 ---
 
