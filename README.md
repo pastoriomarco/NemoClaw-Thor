@@ -6,9 +6,9 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| NemoClaw | v0.0.13+ | `~/NemoClaw` (origin/main) |
-| OpenShell | 0.0.26 | Auto-upgraded by NemoClaw installer |
-| OpenClaw | 2026.3.11 | Pinned in NemoClaw's Dockerfile.base |
+| NemoClaw | v0.0.18-10-g946c52b7 (2026-04-17 validated) | `~/NemoClaw` (origin/main) — **not pinned** |
+| OpenShell | 0.0.31 (2026-04-17 validated) | `curl ... install.sh` — **not pinned** |
+| OpenClaw | 2026.4.2 | Pinned upstream in NemoClaw's Dockerfile.base |
 | vLLM | v6 (dev356 + PR #39931) | Custom SM110 image, clean install, no runtime mods |
 | Sandbox | `my-assistant` (or `thor-v5`) | Landlock + seccomp + netns |
 | Provider | `vllm-local` | Direct HTTP to host vLLM (`:8000`) or ManyForge mux mode (`:8888`) |

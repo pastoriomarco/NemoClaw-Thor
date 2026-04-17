@@ -1,17 +1,22 @@
 # User Quickstart Manual — NemoClaw-Thor v6
 
-Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor with NemoClaw v0.0.13+
-and OpenShell v0.0.26.
+Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor with NemoClaw v0.0.18+
+and OpenShell v0.0.31.
 
-Validated baseline:
+Validated baseline (2026-04-17):
 
-- NemoClaw: v0.0.13+
-- OpenShell: 0.0.26
-- OpenClaw: 2026.3.11
-- vLLM: v6 build (dev356, vLLM main + PR #39931 for TurboQuant hybrid)
+- NemoClaw: **v0.0.18-10-g946c52b7** (installed via `git pull origin main`, not pinned)
+- OpenShell: **0.0.31** (installed via `curl ... install.sh`, not pinned)
+- OpenClaw: **2026.4.2** (pinned upstream in NemoClaw's `Dockerfile.base`)
+- vLLM image: **v6-pinned-2026-04-17** (commit `9965f501a`, all pip versions pinned
+  in our Dockerfile; PR #39931 replayed at runtime via `fix-pr39931-turboquant` mod)
 - Gateway: `nemoclaw`
 - Sandbox: `my-assistant` (or `thor-v5`)
 - Provider: `vllm-local` (direct `:8000` by default, muxed `:8888` for ManyForge mode)
+
+**Only the vLLM container is fully pinned.** NemoClaw and OpenShell install
+from their respective upstream `main` / latest-release. For reproducibility
+across hosts, manually install the same versions (see commands in section 3).
 
 Important rule:
 
@@ -86,7 +91,34 @@ Use this on a fresh Thor or after a full reinstall.
 1. Install NemoClaw and OpenShell upstream (if not done):
 
 ```bash
+# Latest main (what works for us today)
 cd ~/NemoClaw && git pull origin main && npm install && npm link
+```
+
+**For reproducing the 2026-04-17 validated versions exactly:**
+
+```bash
+# Pin NemoClaw to v0.0.18-10-g946c52b7
+cd ~/NemoClaw
+git fetch origin
+git checkout 946c52b7
+npm install && npm link
+
+# Pin OpenShell to v0.0.31
+curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh \
+    | OPENSHELL_VERSION=v0.0.31 sh
+
+# OpenClaw (2026.4.2) is pinned automatically by NemoClaw v0.0.18's Dockerfile.base —
+# it gets installed into the sandbox image during `nemoclaw onboard`.
+```
+
+Verify:
+```bash
+nemoclaw --version        # nemoclaw v0.0.18-10-g946c52b7
+openshell --version       # openshell 0.0.31
+# After onboard, check OpenClaw inside sandbox:
+docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c agent -- openclaw --version
+# OpenClaw 2026.4.2
 ```
 
 2. Run the NemoClaw onboard wizard:
