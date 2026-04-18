@@ -213,10 +213,14 @@ prepare_thor_launch_profile() {
         qwen3.5-27b-claude-distilled-v2-nvfp4)
             # Qwen3.5-27B DeltaNet hybrid: same architecture as v1.
             # v2 distillation from mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-NVFP4.
+            # Tool-call format: this Claude-distilled variant emits hermes-style JSON inside
+            # <tool_call>…</tool_call> (per the model's own chat_template.jinja), NOT the XML
+            # function/parameter syntax the qwen3_xml parser expects. Using qwen3_xml here
+            # yields empty tool-name extractions and "Tool  not found" loops in agents.
+            # Chat template: use the model's baked-in template (no --chat-template arg) —
+            # the custom compat template dir was removed in d25dbf1.
             THOR_LAUNCH_MODEL_SOURCE="mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-NVFP4"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
             THOR_DOCKER_ENV_ARGS+=(
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
             )
@@ -226,7 +230,7 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
+                "--tool-call-parser" "hermes"
                 "--enable-prefix-caching"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )

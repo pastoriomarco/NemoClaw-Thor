@@ -148,7 +148,7 @@ automatically freed.
 | Profile | Model | Seqs | Notes |
 |---------|-------|------|-------|
 | `qwen3.5-122b-a10b-nvfp4` | 122B MoE | 3 | Most capable |
-| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | Claude v2 distilled |
+| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | Claude v2 distilled (hermes tool parser) |
 | `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | Multimodal |
 | `gemma4-e4b-it` | 8B MoE | 12 | Vision+text+audio |
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | Vision+text, NVFP4 |

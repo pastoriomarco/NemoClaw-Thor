@@ -219,7 +219,7 @@ All Qwen3.6 profiles use `--attention-backend flash_attn` (DFlash) or FlashInfer
 | Profile | Model | Seqs | Agents | Notes |
 |---------|-------|------|--------|-------|
 | `qwen3.5-122b-a10b-nvfp4` | 122B MoE | 3 | 1 | Most capable, Sehyo weights |
-| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v2 distilled, best for coding |
+| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v2 distilled, best for coding. Uses `hermes` tool parser (JSON-in-tags) — not `qwen3_xml`. |
 | `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | 2 | Claude distilled, multimodal, 0.4 GPU mem |
 
 ### Gemma 4 profiles (all containers)
