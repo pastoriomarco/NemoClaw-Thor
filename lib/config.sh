@@ -167,7 +167,10 @@ normalize_model_profile() {
 
 resolve_model_profile() {
     local requested
-    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-fp8-dflash}}")
+    # Default profile: NVFP4 + DFlash-15 (FASTEST — 45.7 tok/s single, 192.5 @ 8-concurrent,
+    # 256K context). Users without an HF token for the gated drafter can override via
+    # THOR_MODEL_PROFILE or arg, e.g. `./start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
+    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-nvfp4-dflash}}")
 
     case "${requested}" in
         qwen3.5-122b-a10b-nvfp4)

@@ -2,6 +2,30 @@
 
 Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwell).
 
+## Quick start
+
+From scratch, using the validated v6-pinned image and default profile
+(NVFP4 + DFlash-15 — **45.7 tok/s single, 192.5 tok/s @ 8-concurrent**):
+
+```bash
+# Terminal 1: start the fastest model
+cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
+./start-model.sh
+
+# Terminal 2: wire the sandbox + sanity-check
+./configure-local-provider.sh
+./status.sh
+nemoclaw my-assistant connect          # inside sandbox: `openclaw tui`
+```
+
+`./start-model.sh` with no args picks up the default profile
+`qwen3.6-35b-a3b-nvfp4-dflash`. For other profiles see
+[Model profiles](#model-profiles) below.
+
+Prerequisites: 32 GiB swap active, HF token at `~/.cache/huggingface/token`
+(for the gated DFlash drafter), NemoClaw+OpenShell installed (see
+[Usage](#usage) for install commands).
+
 ## Stack
 
 | Component | Version | Notes |
@@ -28,14 +52,17 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 ```bash
 cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
 
-# Terminal 1: start vLLM
-./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
+# Terminal 1: start vLLM with the default (fastest) profile
+./start-model.sh                       # loads qwen3.6-35b-a3b-nvfp4-dflash
 
 # Terminal 2: configure and verify
-./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-dflash
+./configure-local-provider.sh          # picks up the same default
 ./status.sh
 nemoclaw my-assistant connect
 ```
+
+Pass a profile name to either script to pick a non-default (e.g.
+`./start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp` for max context).
 
 ### ManyForge-integrated mode
 
@@ -100,7 +127,12 @@ automatically freed.
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | Vision+text, BF16 |
 
-**Default profile**: `qwen3.6-35b-a3b-fp8-dflash`.
+**Default profile**: `qwen3.6-35b-a3b-nvfp4-dflash` — what `./start-model.sh`
+(no args) loads. FASTEST in single-req and 8-concurrent benchmarks. Requires
+HF token for the gated drafter model.
+
+If you can't use NVFP4 (e.g. no HF token, or prefer FP8 weights), run:
+`./start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
 
 ## Architecture
 
