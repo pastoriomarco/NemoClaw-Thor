@@ -53,9 +53,16 @@ Prerequisites: 32 GiB swap active, HF token at `~/.cache/huggingface/token`
 | NemoClaw | v0.0.18-10-g946c52b7 (2026-04-17 validated) | `~/NemoClaw` (origin/main) — **not pinned** |
 | OpenShell | 0.0.31 (2026-04-17 validated) | `curl ... install.sh` — **not pinned** |
 | OpenClaw | 2026.4.2 | Pinned upstream in NemoClaw's Dockerfile.base |
-| vLLM | v6 (dev356 + PR #39931) | Custom SM110 image, clean install, no runtime mods |
+| vLLM | v6 (dev338 pinned, commit `9965f501a`) | Custom SM110 image, fully pinned — see docker/NOTES.md |
 | Sandbox | `my-assistant` (or `thor-v5`) | Landlock + seccomp + netns |
 | Provider | `vllm-local` | Direct HTTP to host vLLM (`:8000`) or ManyForge mux mode (`:8888`) |
+
+**Authoritative version references**:
+- **vLLM image pins** (CUDA base, vLLM/FlashInfer commits, every pip package) — see
+  [docker/NOTES.md → Pinned versions](docker/NOTES.md#pinned-versions)
+- **NemoClaw pipeline versions + install commands to reproduce** — see
+  [USER_QUICKSTART_MANUAL.md → Validated baseline](USER_QUICKSTART_MANUAL.md#user-quickstart-manual--nemoclaw-thor-v6)
+  and section 3 for the exact `git checkout` / `OPENSHELL_VERSION=` commands
 
 ## Scripts
 
