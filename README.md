@@ -19,8 +19,19 @@ nemoclaw my-assistant connect          # inside sandbox: `openclaw tui`
 ```
 
 `./start-model.sh` with no args picks up the default profile
-`qwen3.6-35b-a3b-nvfp4-dflash`. For other profiles see
-[Model profiles](#model-profiles) below.
+`qwen3.6-35b-a3b-nvfp4-dflash` (best for low-latency single-user work).
+
+For **many concurrent sequences or huge context**, use the TQ-MTP variant:
+
+```bash
+./start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
+./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
+```
+
+Trade-off: 28.6 tok/s single (vs 45.7) but **2.22M KV tokens**, 29x
+concurrency at 256K context, and 154.7 tok/s aggregate at 8-concurrent.
+Requires the `fix-pr39931-turboquant` runtime mod (auto-applied). See
+[Model profiles](#model-profiles) below for the full comparison.
 
 Prerequisites: 32 GiB swap active, HF token at `~/.cache/huggingface/token`
 (for the gated DFlash drafter), NemoClaw+OpenShell installed (see
