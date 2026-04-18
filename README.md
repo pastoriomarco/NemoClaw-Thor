@@ -2,6 +2,15 @@
 
 Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwell).
 
+> **📖 Operator manual**: this README is a landing page / quickstart.
+> For the full step-by-step procedure — swap setup, image rebuild, JIT
+> compile expectations, sandbox workflows, cleanup procedure,
+> troubleshooting — see
+> [**USER_QUICKSTART_MANUAL.md**](USER_QUICKSTART_MANUAL.md).
+> Additional deep-dive docs: [KV-CACHE-BUDGET.md](KV-CACHE-BUDGET.md),
+> [DFLASH-INVESTIGATION.md](DFLASH-INVESTIGATION.md),
+> [docker/NOTES.md](docker/NOTES.md).
+
 ## Quick start
 
 From scratch, using the validated v6-pinned image and default profile
