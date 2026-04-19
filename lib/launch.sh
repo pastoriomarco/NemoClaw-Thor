@@ -48,6 +48,28 @@ prepare_thor_launch_profile() {
     )
 
     case "${profile}" in
+        minimax-m2.7-139b-a10b-nvfp4)
+            # MiniMax-M2.7 REAP-pruned 139B/10B. 62 all-attention layers,
+            # head_dim=128 → flash_attn works natively on SM110. NVFP4 W4A4.
+            # Needs --trust-remote-code for custom MiniMaxM2ForCausalLM class.
+            # FlashInfer MoE backend: latency (TRTLLM) — throughput (CUTLASS)
+            # hit "Unsupported tile 256/256/128" on 122B's MoE shapes, so start
+            # conservative here. Revisit if the model uses different MoE shapes.
+            THOR_LAUNCH_MODEL_SOURCE="dervig/m51Lab-MiniMax-M2.7-REAP-139B-A10B-NVFP4-GB10"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS="${THOR_MAX_NUM_BATCHED_TOKENS:-8192}"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=latency"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--trust-remote-code"
+                "--attention-backend" "flashinfer"
+                "--enforce-eager"
+            )
+            ;;
         qwen3.5-122b-a10b-nvfp4)
             THOR_LAUNCH_MODEL_SOURCE="/data/models/huggingface/hub/models--Sehyo--Qwen3.5-122B-A10B-NVFP4"
             THOR_LAUNCH_HOST_MODEL_PATH="${THOR_HF_CACHE_DIR}/hub/models--Sehyo--Qwen3.5-122B-A10B-NVFP4"
@@ -59,7 +81,7 @@ prepare_thor_launch_profile() {
             THOR_DOCKER_ENV_ARGS+=(
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
-                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=latency"
             )
             # MTP speculative decoding: model has mtp_num_hidden_layers=1.
             # HackMD Spark guide uses num_speculative_tokens=3; start with 1 (safe).
@@ -183,7 +205,7 @@ prepare_thor_launch_profile() {
             THOR_DOCKER_ENV_ARGS+=(
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
-                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=latency"
                 "-e" "VLLM_MODS=fix-pr39931-turboquant"
             )
             THOR_VLLM_ARGS+=(

@@ -174,13 +174,31 @@ resolve_model_profile() {
     requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-nvfp4-dflash}}")
 
     case "${requested}" in
+        minimax-m2.7-139b-a10b-nvfp4)
+            # REAP-pruned MiniMax-M2.7 (139B total / 10B active, 154/256 experts kept).
+            # 62 all-attention layers (no hybrid), head_dim=128 → FA2 works on SM110.
+            # NVFP4 W4A4 pack-quantized, ~75 GB weights. Context pinned to 32K per
+            # model card's recommendation (native is 196K but KV budget prohibits).
+            # Requires --trust-remote-code (custom MiniMaxM2 modeling class).
+            # No MTP / speculative decoding available.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="MiniMax-M2.7-REAP-139B-A10B-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="32768"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="3"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
         qwen3.5-122b-a10b-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Sehyo/Qwen3.5-122B-A10B-NVFP4"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="3"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
+            # Main max concurrent matches max_num_seqs — lets OpenClaw fire 3
+            # main agents in parallel (no subagent slots on this profile).
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
