@@ -150,6 +150,7 @@ print_supported_model_profiles() {
     cat <<'EOF'
 Supported model profiles:
   qwen3.6-35b-a3b-nvfp4-dflash    (DFlash-15, 45.7 single / 192.5 @8-conc, 256K ctx) ★★ FASTEST
+  qwen3.6-35b-a3b-nvfp4-dflash-vl (DFlash + vision enabled, experimental)
   qwen3.6-35b-a3b-fp8-dflash      (DFlash-15, 47.6 tok/s, ~700K KV) ★ MAX THROUGHPUT FP8
   qwen3.6-35b-a3b-nvfp4-tq-mtp   (TQ K8V4 + MTP, 28.6 single / 153.6 @8-conc, 256K ctx) ★ MAX CONTEXT
   qwen3.6-35b-a3b-fp8-mtp-fp8kv   (MTP N=4 + FP8 KV, 25.7 tok/s, 1.44M KV)
@@ -241,6 +242,19 @@ resolve_model_profile() {
             # 678K KV tokens at 256K context → ~2 full-context concurrent, more at shorter.
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-DFlash"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
+            THOR_TARGET_MAX_NUM_SEQS="5"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.6-35b-a3b-nvfp4-dflash-vl)
+            # EXPERIMENTAL: DFlash with vision enabled. Validated 2026-04-19:
+            # ViT works on SM110 with TORCH_SDPA, DFlash drafter coexists with
+            # multimodal prompts, ~2s latency per vision request after warmup.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-DFlash-VL"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
             THOR_TARGET_MAX_NUM_SEQS="5"

@@ -108,6 +108,33 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
             )
             ;;
+        qwen3.6-35b-a3b-nvfp4-dflash-vl)
+            # EXPERIMENTAL: same as qwen3.6-35b-a3b-nvfp4-dflash but with vision enabled.
+            # Removes --language-model-only so the ViT is initialized.
+            # Adds --mm-encoder-attn-backend TORCH_SDPA for the SM110 ViT FA2 PTX crash
+            # workaround (vllm #38411) — same workaround used by qwen3.5-9b VLM profile.
+            # Validated 2026-04-19:
+            #   1. DFlash drafter coexists with multimodal prompts — spec_decode keeps
+            #      drafting (3.5 accepted tokens/round avg across text+vision requests).
+            #   2. Qwen3.6 ViT works on SM110 with TORCH_SDPA (head_dim=128 fits TMEM).
+            #   3. Single model serves agentic coding, bounded semantic selection, and
+            #      vision-aware selection queries with ~2s latency per vision request.
+            # Cold-start first decode is slow (~108s) due to CUDA graph + drafter JIT
+            # warmup; subsequent requests run at ~20 tok/s.
+            # z-lab/Qwen3.6-35B-A3B-DFlash remains gated — requires HF token.
+            THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flash_attn"
+                "--enforce-eager"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
+            )
+            ;;
         qwen3.6-35b-a3b-fp8-turboquant)
             # TurboQuant K8V4 + MTP N=4: 26.2 tok/s, 78% acceptance, 1.89M KV tokens at 0.8.
             # Best KV compression (~2.6x). Requires vLLM with PR #39931 (baked in v6 image)
