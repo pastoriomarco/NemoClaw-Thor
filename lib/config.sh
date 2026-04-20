@@ -155,7 +155,10 @@ Supported model profiles:
   qwen3.6-35b-a3b-nvfp4-tq-mtp   (TQ K8V4 + MTP, 28.6 single / 153.6 @8-conc, 256K ctx) ★ MAX CONTEXT
   qwen3.6-35b-a3b-fp8-mtp-fp8kv   (MTP N=4 + FP8 KV, 25.7 tok/s, 1.44M KV)
   qwen3.6-35b-a3b-fp8-turboquant  (TQ K8V4 + MTP, 26.2 tok/s, 1.89M KV)
+  qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge  (★ ManyForge production: TQ+MTP-2, 3×64K, gpu_mem_util 0.32, co-serves w/ Cosmos)
   qwen3.5-9b-claude-distilled-nvfp4  (DeltaNet hybrid, 9B Opus-distilled NVFP4)
+  cosmos-reason2-2b         (NVIDIA physical-AI VLM, Qwen3-VL-2B base, 32K ctx, 2-conc)
+  cosmos-reason2-8b         (NVIDIA physical-AI VLM, Qwen3-VL-8B base, 32K ctx, 3-conc)
   gemma4-e4b-it             (vLLM, BF16 MoE, 8B/4B-active, vision+text+tools)
   gemma4-31b-it-nvfp4       (vLLM, NVFP4 quantized, vision+text+tools)
   gemma4-26b-a4b-it         (vLLM, BF16 MoE 128E/8A, vision+text+tools)
@@ -297,6 +300,47 @@ resolve_model_profile() {
         # budget (2.22M vs 1.68M), higher concurrency (29x vs 10x), works
         # under load (153 tok/s aggregate at 8 concurrent).
         # qwen3.5-35b-a3b-nvfp4 removed — superseded by qwen3.6
+        qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge)
+            # Production ManyForge profile: 3×64K context, TQ K8V4 + MTP N=2,
+            # gpu_mem_util 0.32 so we can co-serve cosmos-reason2-2b on Thor.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_KV_CACHE_DTYPE="turboquant_k8v4"
+            THOR_TARGET_MAX_NUM_SEQS="3"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="8192"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        cosmos-reason2-2b)
+            # NVIDIA Cosmos Reason 2 (2B), Qwen3-VL-2B base, VLM physical-AI reasoner.
+            # Sized for 2×32K concurrent context with FP8 KV (see launch.sh comment).
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Cosmos-Reason2-2B"
+            THOR_TARGET_MAX_MODEL_LEN="32768"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="2"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        cosmos-reason2-8b)
+            # NVIDIA Cosmos Reason 2 (8B), Qwen3-VL-8B base, VLM physical-AI reasoner.
+            # Model supports up to 262144 tokens natively (text_config.max_position_embeddings).
+            # Sized for 64K context to accommodate OpenClaw's ~16K system prompt + 16K output
+            # (32K ceiling was too tight: prompt+output overflows). FP8 KV keeps footprint low.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Cosmos-Reason2-8B"
+            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="3"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
         gemma4-e4b-it)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="gemma-4-E4B-it"

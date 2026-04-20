@@ -157,6 +157,66 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
             )
             ;;
+        cosmos-reason2-2b)
+            # NVIDIA Cosmos Reason 2 (2B) — VLM for physical AI reasoning,
+            # post-trained from Qwen3-VL-2B-Instruct. Qwen3VLForConditionalGeneration
+            # architecture, model_type qwen3_vl.
+            # LLM: head_dim=128 → flash_attn works on SM110.
+            # ViT: head_dim=64, 24 layers, patch=16, spatial-merge=2.
+            # TORCH_SDPA added for ViT as a conservative SM110 workaround
+            # (same pattern as the 9B VLM profile; head_dim=64 is small enough
+            # that FlashInfer may work too, but TORCH_SDPA is known-safe).
+            # No matched drafter available — no speculative decoding.
+            # BF16 native weights (no NVFP4/FP8 release yet).
+            # Chat template is bundled in the repo (chat_template.json) — vLLM
+            # auto-loads it; no --chat-template override needed.
+            # Sized for 2×32K concurrent context: FP8 KV + 0.12 gpu_mem_util
+            # gives ~15 GB total reservation (weights 4.3 + KV ~8 + buffers ~2.5).
+            # Prior measurement at 0.20 / BF16 KV / max_num_seqs=8 used ~22 GB
+            # and allocated 140K KV tokens — overkill for BT reasoning loops.
+            # Tool-call format: Cosmos emits hermes-style <tool_call>{...}</tool_call>
+            # tags (inherited from Qwen3-VL-2B-Instruct post-training), NOT Qwen3.6's
+            # XML-attribute format. Must use `hermes` parser, not `qwen3_xml`.
+            THOR_LAUNCH_MODEL_SOURCE="nvidia/Cosmos-Reason2-2B"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.12}"
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--enforce-eager"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--kv-cache-dtype" "fp8"
+                "--max-num-batched-tokens" "4096"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "hermes"
+            )
+            ;;
+        cosmos-reason2-8b)
+            # NVIDIA Cosmos Reason 2 (8B) — VLM for physical AI reasoning,
+            # post-trained from Qwen3-VL-8B. Qwen3VLForConditionalGeneration,
+            # model_type qwen3_vl. LLM: 36 layers, hidden 4096, 32 heads,
+            # 8 KV heads, head_dim=128 → flash_attn compatible on SM110
+            # (but FP8 KV requires flashinfer regardless).
+            # Tool parser: `hermes` (same hermes-format tool calls as the 2B
+            # variant — verified empirically 2026-04-19; qwen3_xml does not match).
+            # ViT: same pattern as 2B (TORCH_SDPA workaround for SM110).
+            # Sized for 3×32K concurrent context: FP8 KV needs ~7 GB for 96K
+            # tokens, weights ~16 GB (bf16), ViT ~1.5 GB, activations ~2 GB
+            # → ~27 GB → gpu_mem_util 0.25 on Thor. Leaves room to co-serve
+            # with the Qwen3.6 manyforge profile (0.32 + 0.25 = 0.57).
+            # Gated repo — HF_TOKEN required (start-duo.sh auto-reads it).
+            THOR_LAUNCH_MODEL_SOURCE="nvidia/Cosmos-Reason2-8B"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.25}"
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flashinfer"
+                "--enforce-eager"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--kv-cache-dtype" "fp8"
+                "--max-num-batched-tokens" "4096"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "hermes"
+            )
+            ;;
         qwen3.6-35b-a3b-fp8-turboquant)
             # TurboQuant K8V4 + MTP N=4: 26.2 tok/s, 78% acceptance, 1.89M KV tokens at 0.8.
             # Best KV compression (~2.6x). Requires vLLM with PR #39931 (baked in v6 image)
@@ -223,6 +283,36 @@ prepare_thor_launch_profile() {
         # (MoE autotuner picks invalid SM110 tile at M=128). Superseded by
         # qwen3.6-35b-a3b-nvfp4-tq-mtp which is strictly better on all axes.
         # qwen3.5-35b-a3b-nvfp4 removed — superseded by qwen3.6
+
+        qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge)
+            # ★ MANYFORGE PRODUCTION: NVFP4 weights + TurboQuant K8V4 KV + MTP N=2.
+            # Validated 2026-04-19 via 7-test reliability battery (stress study):
+            # 100% pass on JSON schema / tool call / multi-turn / 60K needle /
+            # 3-concurrent / 2K sustained decode; MTP acceptance 97-99% across
+            # 5 consecutive requests (no vllm#38182 collapse).
+            # Throughput: 18.5 tok/s single, 46 tok/s at 3-concurrent aggregate.
+            # Sized for 3×64K context with moderate KV headroom (~2.6× minimum).
+            # gpu_mem_util=0.32 → ~500K KV tokens vs 192K needed for 3×64K.
+            # Leaves ~70% of Thor free to co-serve a second model (cosmos-reason2-2b).
+            THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.32}"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=latency"
+                "-e" "VLLM_MODS=fix-pr39931-turboquant"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--enforce-eager"
+                "--language-model-only"
+                "--kv-cache-dtype" "turboquant_k8v4"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--max-num-batched-tokens" "4096"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":2}'
+            )
+            ;;
         qwen3.5-9b-claude-distilled-nvfp4)
             # Qwen3.5-9B VLM: DeltaNet hybrid (linear_attention + full_attention) with visual encoder.
             # Claude 4.6 Opus reasoning-distilled, NVFP4 MLP-only + FP8 KV. Visual encoder kept bf16.
@@ -475,9 +565,18 @@ print_thor_launch_summary() {
 run_thor_vllm_container() {
     local docker_tty_args=()
     local docker_mount_args=()
+    local docker_name_args=()
 
-    if [[ -t 0 && -t 1 ]]; then
+    # THOR_DETACH=1: run container in background, return immediately.
+    # THOR_CONTAINER_NAME=<name>: pin the container name (for duo-serve).
+    if [[ "${THOR_DETACH:-0}" == "1" ]]; then
+        docker_tty_args=(-d)
+    elif [[ -t 0 && -t 1 ]]; then
         docker_tty_args=(-i -t)
+    fi
+
+    if [[ -n "${THOR_CONTAINER_NAME:-}" ]]; then
+        docker_name_args=(--name "${THOR_CONTAINER_NAME}")
     fi
 
     if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH}" ]]; then
@@ -489,8 +588,14 @@ run_thor_vllm_container() {
         docker_mount_args+=(-v "${THOR_MODS_HOST_DIR}:/workspace/mods:ro")
     fi
 
-    docker run --rm \
+    local docker_rm_args=(--rm)
+    if [[ "${THOR_NO_RM:-0}" == "1" ]]; then
+        docker_rm_args=()
+    fi
+
+    docker run "${docker_rm_args[@]}" \
         "${docker_tty_args[@]}" \
+        "${docker_name_args[@]}" \
         --runtime nvidia --gpus all \
         --ipc=host --network host \
         -e NVIDIA_DISABLE_REQUIRE=true \
