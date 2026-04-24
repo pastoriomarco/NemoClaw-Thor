@@ -149,8 +149,10 @@ resolve_thor_sandbox_name() {
 print_supported_model_profiles() {
     cat <<'EOF'
 Supported model profiles:
-  qwen3.6-35b-a3b-nvfp4-dflash    (DFlash-15, 45.7 single / 192.5 @8-conc, 256K ctx) ★★ FASTEST
+  qwen3.6-35b-a3b-prismaquant-dflash (mixed-precision 4.75bpp + DFlash-15) ★★ DEFAULT
+  qwen3.6-35b-a3b-nvfp4-dflash    (uniform NVFP4 + DFlash-15, fallback for max-context)
   qwen3.6-35b-a3b-nvfp4-dflash-vl (DFlash + vision enabled, experimental)
+  qwen3.6-27b-fp8-mtp-kvfp8       (dense 27B FP8 + MTP + FP8 KV, EXPERIMENTAL)
   qwen3.6-35b-a3b-fp8-dflash      (DFlash-15, 47.6 tok/s, ~700K KV) ★ MAX THROUGHPUT FP8
   qwen3.6-35b-a3b-nvfp4-tq-mtp   (TQ K8V4 + MTP, 28.6 single / 153.6 @8-conc, 256K ctx) ★ MAX CONTEXT
   qwen3.6-35b-a3b-fp8-mtp-fp8kv   (MTP N=4 + FP8 KV, 25.7 tok/s, 1.44M KV)
@@ -174,37 +176,14 @@ resolve_model_profile() {
     # Default profile: NVFP4 + DFlash-15 (FASTEST — 45.7 tok/s single, 192.5 @ 8-concurrent,
     # 256K context). Users without an HF token for the gated drafter can override via
     # THOR_MODEL_PROFILE or arg, e.g. `./start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
-    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-nvfp4-dflash}}")
+    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-prismaquant-dflash}}")
 
     case "${requested}" in
-        minimax-m2.7-139b-a10b-nvfp4)
-            # REAP-pruned MiniMax-M2.7 (139B total / 10B active, 154/256 experts kept).
-            # 62 all-attention layers (no hybrid), head_dim=128 → FA2 works on SM110.
-            # NVFP4 W4A4 pack-quantized, ~75 GB weights. Context pinned to 32K per
-            # model card's recommendation (native is 196K but KV budget prohibits).
-            # Requires --trust-remote-code (custom MiniMaxM2 modeling class).
-            # No MTP / speculative decoding available.
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="MiniMax-M2.7-REAP-139B-A10B-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="32768"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="3"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.5-122b-a10b-nvfp4)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Sehyo/Qwen3.5-122B-A10B-NVFP4"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="3"
-            # Main max concurrent matches max_num_seqs — lets OpenClaw fire 3
-            # main agents in parallel (no subagent slots on this profile).
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
+        # minimax-m2.7-139b-a10b-nvfp4 profile removed 2026-04-23.
+        # Investigation preserved at MINIMAX-M27-INVESTIGATION.md.
+        # W4A4 NVFP4 MoE is blocked on SM110 — every fast kernel gated off, MARLIN
+        # fallback produced 12 tok/s with degraded output. Not viable for production.
+        # qwen3.5-122b-a10b-nvfp4 profile removed 2026-04-24 — superseded by qwen3.6.
         qwen3.5-9b-claude-distilled-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="Qwen3.5-9B-Claude-Distilled-NVFP4"
@@ -215,9 +194,25 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="false"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
-        qwen3.5-27b-claude-distilled-v2-nvfp4)
+        # qwen3.5-27b-claude-distilled-v2-nvfp4 profile removed 2026-04-24 — superseded by qwen3.6.
+        qwen3.6-27b-fp8-mtp-kvfp8)
+            # EXPERIMENTAL: Qwen/Qwen3.6-27B-FP8 (official FP8 release) +
+            # MTP N=1 + FP8 KV cache.
+            #
+            # Why this over NVFP4 variants: llm-compressor's NVFP4 toolchain
+            # silently strips MTP head tensors during quantization
+            # (sakamakismile, stepnivlk, prithivMLmods, selimaktas, Abiray all
+            # showed 0 MTP tensors). Only the official FP8 release and
+            # mmangkad's ModelOpt NVFP4 preserve MTP heads. FP8 is the safer
+            # pick: mainstream format, proven Thor kernel path
+            # (TritonFp8BlockScaledMMKernel via VLLM_DISABLED_KERNELS), same
+            # ~27 GB weight footprint as stepnivlk.
+            #
+            # Dense hybrid: 64 layers, full_attention_interval=4, head_dim=256
+            # on the 16 full-attn layers, 48 DeltaNet linear_attn layers.
+            # head_dim=256 forces FlashInfer attention (FA2 crashes SM110).
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-27B-Claude-Distilled-v2-NVFP4"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-27B-FP8-MTP-KVFP8"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="9"
@@ -278,6 +273,46 @@ resolve_model_profile() {
             THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-DFlash-VL"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
+            THOR_TARGET_MAX_NUM_SEQS="5"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.6-35b-a3b-prismaquant-dflash)
+            # ★★ DEFAULT — promoted 2026-04-22 after matched-methodology bench.
+            # rdtand/Qwen3.6-35B-A3B-PrismaQuant-4.75bit-vllm.
+            # Mixed-precision compressed-tensors (per-layer NVFP4/FP8/BF16
+            # allocated by Fisher-sensitivity knapsack). ~22 GB weights, ~3 GB
+            # more than RedHatAI NVFP4 baseline. Quality claim: −0.56 pp vs BF16
+            # (uniform NVFP4 is −2.21 pp) — ~4× closer on commonsense benchmarks.
+            # Backends reuse the existing dflash stack (FlashInfer CUTLASS NVFP4
+            # MoE + CutlassFP8 dense + flash_attn + DFlash-15 drafter). No new
+            # kernels, no runtime mods.
+            #
+            # Matched-methodology benchmark (coding prompts, temp=0.2,
+            # enable_thinking=false, 1200 toks, today's drafter main):
+            #   single peak 50.66 / avg 39.80 tok/s
+            #   aggregate N=4 119.22 tok/s, N=5 142.35 tok/s
+            # Beats nvfp4-dflash on every axis (+11–16% at low-to-mid concurrency,
+            # tie at saturation).
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-PrismaQuant-DFlash"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
+            THOR_TARGET_MAX_NUM_SEQS="5"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.6-35b-a3b-nvfp4-mtp-fp8kv)
+            # EXPERIMENTAL (re-added 2026-04-23 for tool-eval-bench quality testing).
+            # NVFP4 weights + MTP N=2 + FP8 KV. MTP N=2 mirrors the 27B-FP8 winning
+            # config. Older sibling with MTP N=4 crashed under 8-concurrent; this
+            # N=2 variant reduces crash risk but still carries the same dtype mix.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-MTP-FP8KV"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="5"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
             THOR_TARGET_MODEL_REASONING="true"

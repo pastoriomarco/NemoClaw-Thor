@@ -4,6 +4,15 @@
 **Target model**: Qwen3.6-35B-A3B-FP8 (production), Qwen3.5-9B-FP8 (investigation)
 **Drafter model**: z-lab/Qwen3.6-35B-A3B-DFlash (matched), z-lab/Qwen3.5-9B-DFlash (9B)
 
+> **⚠ Methodology note (added 2026-04-22)**: the 47.6 tok/s and 45.71 tok/s
+> headline numbers in this doc were measured under a specific benchmark
+> methodology — **coding prompts**, **temperature 0.2**, **`/no_think` /
+> `chat_template_kwargs: {enable_thinking: false}`**, **~1200-token
+> outputs**, drafter revision at-the-time (unpinned).
+> A naive benchmark with generic prompts at temperature 0 and default
+> thinking mode produces ~30 tps on the same stack. The drafter is also
+> unpinned, so upstream z-lab changes will shift these numbers day to day.
+
 ---
 
 ## NemoClaw-routed Benchmark Results (2026-04-17 evening)

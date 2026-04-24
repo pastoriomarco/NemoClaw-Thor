@@ -50,13 +50,10 @@ Formula: `full_attn_layers x 2(K+V) x kv_heads x head_dim x 1(fp8) x 262144`
 
 | Model | Layers (full/total) | KV heads | head_dim | KV/seq (fp8) | DeltaNet state |
 |-------|---------------------|----------|----------|--------------|----------------|
-| qwen3.5-27b (all 27B variants) | 16 / 64 | 4 | 256 | 8.0 GiB | 48 MB |
+| qwen3.5-9b (VLM) | see 9B profile | — | — | — | — |
 | qwen3.5-35b-a3b | 10 / 40 | 2 | 256 | 2.5 GiB | 30 MB |
-| qwen3.5-122b-a10b | 12 / 48 | 2 | 256 | 3.0 GiB | 36 MB |
 
-Math for 27B: 16 x 2 x 4 x 256 x 1 x 262144 = 8,589,934,592 bytes = 8.0 GiB
 Math for 35B: 10 x 2 x 2 x 256 x 1 x 262144 = 2,684,354,560 bytes = 2.5 GiB
-Math for 122B: 12 x 2 x 2 x 256 x 1 x 262144 = 3,221,225,472 bytes = 3.0 GiB
 
 ### Gemma 4 hybrid SWA + global models
 
@@ -100,8 +97,6 @@ measured from vLLM startup logs, not estimated.
 
 | Profile | Quant | Est weights | gpu_mem | Usable GiB | Est KV avail | KV/seq @256K | max_num_seqs |
 |---------|-------|-------------|---------|------------|--------------|--------------|--------------|
-| qwen3.5-122b-a10b-nvfp4 | NVFP4 | **75.2 GiB** (incl MTP) | 0.85 | 104.4 | **24.05 GiB** | 3.0 GiB | 3 |
-| qwen3.5-27b-claude-distilled-v2-nvfp4 | NVFP4 | ~20 GiB | 0.80 | 102.4 | ~73 GiB | 8.0 GiB | 9 |
 | qwen3.5-9b-claude-distilled-nvfp4 | NVFP4 | ~7 GiB | 0.40 | 51.2 | ~35 GiB | — | 8 |
 | gemma4-31b-it-nvfp4 | NVFP4 | **31 GiB** | 0.80 | 102.4 | **64.2 GiB** | 10.4 GiB | 6 |
 | gemma4-26b-a4b-it | BF16 | ~48.5 GiB | 0.80 | 102.4 | ~45 GiB | 2.6 GiB | 17 |
@@ -160,8 +155,6 @@ no single agent can hog all subagent slots.
 
 | Profile | Slots | Main agents | Subagent slots | Children/agent | Depth |
 |---------|-------|-------------|----------------|----------------|-------|
-| qwen3.5-122b-a10b | 3 | 1 | 2 | 2 | 1 |
-| qwen3.5-27b-claude-distilled-v2-nvfp4 | 9 | 3 | 6 | 2 | 1 |
 | qwen3.5-9b-claude-distilled-nvfp4 | 8 | 2 | 6 | 3 | 1 |
 | gemma4-31b-nvfp4 | 6 | 2 | 4 | 2 | 1 |
 | gemma4-26b-a4b | 17 | 4 | 13 | 4 | 1 |

@@ -134,7 +134,7 @@ vLLM inference — `configure-local-provider.sh` fixes them (see Section 11).
 3. Start the model server and leave it running in that terminal:
 
 ```bash
-./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
+./start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
 ```
 
 4. In a second terminal, configure and verify:
@@ -159,7 +159,7 @@ Same sequence every time — no special reboot handling needed:
 1. Start the model server:
 
 ```bash
-./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
+./start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
 ```
 
 2. Rebind the provider and patch the sandbox:
@@ -190,8 +190,8 @@ reconfigure:
 
 ```bash
 sudo sync && sudo sysctl -w vm.drop_caches=3
-./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
-./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-dflash
+./start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
+./configure-local-provider.sh qwen3.6-35b-a3b-prismaquant-dflash
 ```
 
 Always drop caches between model switches — Thor's unified memory is not
@@ -201,10 +201,16 @@ automatically freed.
 
 ### Qwen3.6 profiles (v6 container, production)
 
+Tok/s = **single peak / aggregate@N-concurrent** under matched methodology
+(coding prompts, `enable_thinking: false`, temp 0.2, 1200-tok outputs, 2026-04-22
+drafter main). The drafter is unpinned — numbers shift with upstream z-lab
+releases.
+
 | Profile | Tok/s | KV Tokens | Seqs | KV dtype | Spec Method | Notes |
 |---------|-------|-----------|------|----------|-------------|-------|
-| `qwen3.6-35b-a3b-nvfp4-dflash` | **45.7 / 192.5@8** | 678K | 5 | BF16 | DFlash-15 | FASTEST. 256K ctx, peak aggregate 192 tok/s |
-| `qwen3.6-35b-a3b-fp8-dflash` | **47.6** | ~700K | 4 | BF16 | DFlash-15 | Best FP8 throughput |
+| `qwen3.6-35b-a3b-prismaquant-dflash` | **50.7 / 142.4@5** | 938K | 5 | BF16 | DFlash-15 | **★★ DEFAULT**. Mixed-precision 4.75 bpp, claimed −0.56 pp vs BF16 |
+| `qwen3.6-35b-a3b-nvfp4-dflash` | 44.6 / 140.2@5 | 678K | 5 | BF16 | DFlash-15 | Uniform NVFP4 fallback. Lighter weights (~19 GB) |
+| `qwen3.6-35b-a3b-fp8-dflash` | **47.6** | ~700K | 4 | BF16 | DFlash-15 | Best FP8 throughput (historical — re-measure) |
 | `qwen3.6-35b-a3b-nvfp4-tq-mtp` | 28.6 | 2.22M | 8 | TQ K8V4 | MTP N=4 | MAX CONTEXT, 153 tok/s @ 8-conc. Requires PR #39931 mod |
 | `qwen3.6-35b-a3b-fp8-mtp-fp8kv` | 25.7 | 1.44M | 8 | FP8 | MTP N=4 | FP8 weights + FP8 KV |
 | `qwen3.6-35b-a3b-fp8-turboquant` | 26.2 | 1.89M | 6 | TQ K8V4 | MTP N=4 | FP8 weights + TQ KV |
@@ -214,12 +220,10 @@ All Qwen3.6 profiles use `--attention-backend flash_attn` (DFlash) or FlashInfer
 `--enforce-eager`. DFlash profiles require HF token for the gated drafter model
 (z-lab/Qwen3.6-35B-A3B-DFlash).
 
-### Legacy Qwen3.5 profiles (v4/v5 container)
+### Legacy Qwen3.5 profile
 
 | Profile | Model | Seqs | Agents | Notes |
 |---------|-------|------|--------|-------|
-| `qwen3.5-122b-a10b-nvfp4` | 122B MoE | 3 | 1 | Most capable, Sehyo weights |
-| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | 3 | Claude v2 distilled, best for coding. Uses `hermes` tool parser (JSON-in-tags) — not `qwen3_xml`. |
 | `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | 2 | Claude distilled, multimodal, 0.4 GPU mem |
 
 ### Gemma 4 profiles (all containers)
@@ -252,7 +256,7 @@ THOR_MAX_MODEL_LEN=65536 \
 THOR_KV_CACHE_DTYPE=fp8 \
 THOR_MAX_NUM_SEQS=20 \
 THOR_GPU_MEMORY_UTILIZATION=0.80 \
-./start-model.sh qwen3.5-35b-a3b-nvfp4
+./start-model.sh qwen3.6-35b-a3b-nvfp4-mtp-fp8kv
 ```
 
 Persistent defaults are saved in:

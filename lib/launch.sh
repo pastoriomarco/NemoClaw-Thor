@@ -48,53 +48,12 @@ prepare_thor_launch_profile() {
     )
 
     case "${profile}" in
-        minimax-m2.7-139b-a10b-nvfp4)
-            # MiniMax-M2.7 REAP-pruned 139B/10B. 62 all-attention layers,
-            # head_dim=128 → flash_attn works natively on SM110. NVFP4 W4A4.
-            # Needs --trust-remote-code for custom MiniMaxM2ForCausalLM class.
-            # FlashInfer MoE backend: latency (TRTLLM) — throughput (CUTLASS)
-            # hit "Unsupported tile 256/256/128" on 122B's MoE shapes, so start
-            # conservative here. Revisit if the model uses different MoE shapes.
-            THOR_LAUNCH_MODEL_SOURCE="dervig/m51Lab-MiniMax-M2.7-REAP-139B-A10B-NVFP4-GB10"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS="${THOR_MAX_NUM_BATCHED_TOKENS:-8192}"
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
-                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
-                "-e" "VLLM_FLASHINFER_MOE_BACKEND=latency"
-            )
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--trust-remote-code"
-                "--attention-backend" "flashinfer"
-                "--enforce-eager"
-            )
-            ;;
-        qwen3.5-122b-a10b-nvfp4)
-            THOR_LAUNCH_MODEL_SOURCE="/data/models/huggingface/hub/models--Sehyo--Qwen3.5-122B-A10B-NVFP4"
-            THOR_LAUNCH_HOST_MODEL_PATH="${THOR_HF_CACHE_DIR}/hub/models--Sehyo--Qwen3.5-122B-A10B-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS="${THOR_MAX_NUM_BATCHED_TOKENS:-8192}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen3-tool-call-compat.jinja"
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen3-tool-call-compat.jinja"
-            # SM110 NVFP4: FlashInfer CUTLASS for GEMM + MoE, FlashInfer for attention.
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
-                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
-                "-e" "VLLM_FLASHINFER_MOE_BACKEND=latency"
-            )
-            # MTP speculative decoding: model has mtp_num_hidden_layers=1.
-            # HackMD Spark guide uses num_speculative_tokens=3; start with 1 (safe).
-            THOR_VLLM_ARGS+=(
-                "--attention-backend" "flashinfer"
-                "--language-model-only"
-                "--reasoning-parser" "qwen3"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--enable-prefix-caching"
-                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
-            )
-            ;;
+        # minimax-m2.7-139b-a10b-nvfp4 profile removed 2026-04-23.
+        # See MINIMAX-M27-INVESTIGATION.md for the why — W4A4 NVFP4 MoE on SM110
+        # has no fast kernel path; MARLIN fallback gave degraded output at 12 tok/s.
+        # Runtime mod fix-nvfp4-moe-scale-merge is still shipped for potential
+        # reuse with other NVFP4 split-scale checkpoints.
+        # qwen3.5-122b-a10b-nvfp4 profile removed 2026-04-24 — superseded by qwen3.6.
         # qwen3.5-122b-a10b-nvfp4-resharded removed
         qwen3.6-35b-a3b-fp8-dflash)
             # ★ BEST THROUGHPUT: 47.6 tok/s avg, 94 tok/s peak with matched z-lab drafter.
@@ -110,7 +69,7 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
             )
             ;;
@@ -126,7 +85,7 @@ prepare_thor_launch_profile() {
                 "--kv-cache-dtype" "fp8"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
             )
             ;;
@@ -153,7 +112,7 @@ prepare_thor_launch_profile() {
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
             )
             ;;
@@ -185,7 +144,7 @@ prepare_thor_launch_profile() {
                 "--enforce-eager"
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
                 "--kv-cache-dtype" "fp8"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "hermes"
             )
@@ -212,7 +171,7 @@ prepare_thor_launch_profile() {
                 "--enforce-eager"
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
                 "--kv-cache-dtype" "fp8"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "hermes"
             )
@@ -234,12 +193,13 @@ prepare_thor_launch_profile() {
                 "--kv-cache-dtype" "turboquant_k8v4"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
             )
             ;;
         qwen3.6-35b-a3b-nvfp4-dflash)
-            # ★★ FASTEST: 54.7 tok/s, 66% acceptance. NVFP4 weights + DFlash-15.
+            # NVFP4 weights + DFlash-8 (was -15 — reduced 2026-04-23 following 27B tool-eval-bench
+            # finding that lower spec-decode N improves quality on edge-case scenarios).
             # head_dim=128 → flash_attn works natively on SM110.
             # z-lab/Qwen3.6-35B-A3B-DFlash is gated — requires HF token.
             THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
@@ -251,8 +211,51 @@ prepare_thor_launch_profile() {
                 "--language-model-only"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "4096"
-                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
+                "--max-num-batched-tokens" "32768"
+                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":8}'
+            )
+            ;;
+        qwen3.6-35b-a3b-prismaquant-dflash)
+            # EXPERIMENTAL: PrismaQuant 4.75-bit mixed-precision + DFlash-8 (reduced from 15
+            # following 27B tool-eval-bench finding). Same backend stack as
+            # qwen3.6-35b-a3b-nvfp4-dflash: flash_attn + FlashInfer CUTLASS NVFP4 MoE +
+            # CutlassFP8 dense. Loader dispatches per-layer format automatically
+            # (compressed-tensors format field resolved per config_group).
+            THOR_LAUNCH_MODEL_SOURCE="rdtand/Qwen3.6-35B-A3B-PrismaQuant-4.75bit-vllm"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--attention-backend" "flash_attn"
+                "--enforce-eager"
+                "--language-model-only"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--max-num-batched-tokens" "32768"
+                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":8}'
+            )
+            ;;
+        qwen3.6-35b-a3b-nvfp4-mtp-fp8kv)
+            # EXPERIMENTAL (re-added 2026-04-23 for tool-eval-bench quality testing).
+            # NVFP4 weights + MTP N=2 + FP8 KV. Same MTP N=2 that gave +4 tool-eval-bench
+            # points on 27B-FP8 (88 vs 84 at N=3).
+            #
+            # CAVEAT: an earlier version at MTP N=4 was removed because it crashed
+            # under 8-concurrent load (CUDA illegal memory at M=128 in MoE autotuner).
+            # N=2 reduces M growth, and tool-eval-bench is single-concurrent, so the
+            # crash condition should not trigger. Fail-fast on cudaErrorIllegalInstruction
+            # if the autotuner path has changed.
+            THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--enforce-eager"
+                "--language-model-only"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_xml"
+                "--reasoning-parser" "qwen3"
+                "--enable-prefix-caching"
+                "--max-num-batched-tokens" "32768"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":2}'
             )
             ;;
         qwen3.6-35b-a3b-nvfp4-tq-mtp)
@@ -275,7 +278,7 @@ prepare_thor_launch_profile() {
                 "--kv-cache-dtype" "turboquant_k8v4"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
             )
             ;;
@@ -309,7 +312,7 @@ prepare_thor_launch_profile() {
                 "--kv-cache-dtype" "turboquant_k8v4"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":2}'
             )
             ;;
@@ -342,36 +345,33 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "qwen3_xml"
                 "--enable-prefix-caching"
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
-                "--max-num-batched-tokens" "4096"
+                "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
             )
             ;;
         # qwen3.5-9b-dflash removed
         # qwen3.5-9b-bf16-dflash removed
         # qwen3.5-27b-claude-distilled-nvfp4 removed
-        qwen3.5-27b-claude-distilled-v2-nvfp4)
-            # Qwen3.5-27B DeltaNet hybrid: same architecture as v1.
-            # v2 distillation from mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-NVFP4.
-            # Tool-call format: this Claude-distilled variant emits hermes-style JSON inside
-            # <tool_call>…</tool_call> (per the model's own chat_template.jinja), NOT the XML
-            # function/parameter syntax the qwen3_xml parser expects. Using qwen3_xml here
-            # yields empty tool-name extractions and "Tool  not found" loops in agents.
-            # Chat template: use the model's baked-in template (no --chat-template arg) —
-            # the custom compat template dir was removed in d25dbf1.
-            THOR_LAUNCH_MODEL_SOURCE="mconcat/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-NVFP4"
+        # qwen3.5-27b-claude-distilled-v2-nvfp4 removed 2026-04-24 — superseded by qwen3.6.
+        qwen3.6-27b-fp8-mtp-kvfp8)
+            # EXPERIMENTAL: Qwen/Qwen3.6-27B-FP8 (official FP8) + MTP + FP8 KV.
+            # Official FP8 release preserves the 22 MTP head tensors that all
+            # community NVFP4 quantizations strip via llm-compressor.
+            # head_dim=256 forces FlashInfer attention. VLLM_DISABLED_KERNELS
+            # (set higher up) routes FP8 GEMM through Triton fallback to dodge
+            # the Xid 43 CutlassFp8BlockScaledMMKernel crash on SM110.
+            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.6-27B-FP8"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
-            )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--attention-backend" "flashinfer"
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "hermes"
+                "--tool-call-parser" "qwen3_xml"
                 "--enable-prefix-caching"
-                "--speculative-config" '{"method":"mtp","num_speculative_tokens":1}'
+                "--max-num-batched-tokens" "32768"
+                "--speculative-config" '{"method":"qwen3_next_mtp","num_speculative_tokens":2}'
             )
             ;;
         gemma4-e4b-it)

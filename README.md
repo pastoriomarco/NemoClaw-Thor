@@ -9,12 +9,22 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 > [**USER_QUICKSTART_MANUAL.md**](USER_QUICKSTART_MANUAL.md).
 > Additional deep-dive docs: [KV-CACHE-BUDGET.md](KV-CACHE-BUDGET.md),
 > [DFLASH-INVESTIGATION.md](DFLASH-INVESTIGATION.md),
+> [TOOL-EVAL-BENCH-THOR.md](TOOL-EVAL-BENCH-THOR.md),
 > [docker/NOTES.md](docker/NOTES.md).
+
+> **⚠ Benchmark methodology**: DFlash throughput numbers in this repo
+> were all measured with **coding prompts**, **`enable_thinking: false`**,
+> **temperature ≈ 0.2**, and **~1200-token outputs**. Running naive prompts
+> with default thinking mode produces ~30 tps on a profile that can do 45+
+> tps under the intended workload. Always record the drafter SHA
+> (`z-lab/Qwen3.6-35B-A3B-DFlash` is unpinned, so numbers drift with
+> upstream).
 
 ## Quick start
 
 From scratch, using the validated v6-pinned image and default profile
-(NVFP4 + DFlash-15 — **45.7 tok/s single, 192.5 tok/s @ 8-concurrent**):
+(PrismaQuant + DFlash-15 — **50.7 tok/s single peak, 142.4 tok/s aggregate @ 5-concurrent**,
+matched methodology: coding prompts + `enable_thinking: false` + temp 0.2):
 
 ```bash
 # Terminal 1: start the fastest model
@@ -28,7 +38,19 @@ nemoclaw my-assistant connect          # inside sandbox: `openclaw tui`
 ```
 
 `./start-model.sh` with no args picks up the default profile
-`qwen3.6-35b-a3b-nvfp4-dflash` (best for low-latency single-user work).
+`qwen3.6-35b-a3b-prismaquant-dflash` (mixed-precision 4.75 bpp, claimed
+quality within −0.56 pp of BF16 vs uniform NVFP4's −2.21 pp).
+
+For **lower weight memory** or **max-context / low-latency-critical** paths, the
+uniform NVFP4 variant is a close fallback:
+
+```bash
+./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
+./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-dflash
+```
+
+Numbers (matched methodology): 44.6 tok/s single peak, 140.2 @ 5-concurrent.
+~11–16% behind PrismaQuant at low-to-mid concurrency; tied at saturation.
 
 For **many concurrent sequences or huge context**, use the TQ-MTP variant:
 
@@ -37,9 +59,9 @@ For **many concurrent sequences or huge context**, use the TQ-MTP variant:
 ./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
 ```
 
-Trade-off: 28.6 tok/s single (vs 45.7) but **2.22M KV tokens**, 29x
-concurrency at 256K context, and 154.7 tok/s aggregate at 8-concurrent.
-Requires the `fix-pr39931-turboquant` runtime mod (auto-applied). See
+Trade-off: 28.6 tok/s single but **2.22M KV tokens**, 29× concurrency at 256K
+context, and 154.7 tok/s aggregate at 8-concurrent. Requires the
+`fix-pr39931-turboquant` runtime mod (auto-applied). See
 [Model profiles](#model-profiles) below for the full comparison.
 
 Prerequisites: 32 GiB swap active, HF token at `~/.cache/huggingface/token`
@@ -79,8 +101,8 @@ Prerequisites: 32 GiB swap active, HF token at `~/.cache/huggingface/token`
 ```bash
 cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
 
-# Terminal 1: start vLLM with the default (fastest) profile
-./start-model.sh                       # loads qwen3.6-35b-a3b-nvfp4-dflash
+# Terminal 1: start vLLM with the default profile
+./start-model.sh                       # loads qwen3.6-35b-a3b-prismaquant-dflash
 
 # Terminal 2: configure and verify
 ./configure-local-provider.sh          # picks up the same default
@@ -97,7 +119,7 @@ If the OpenClaw main agent must reach ManyForge tools through the verified
 workspace-plugin path, switch the provider to the muxed route first:
 
 ```bash
-./configure-local-provider.sh --with-manyforge-mux qwen3.6-35b-a3b-nvfp4-dflash
+./configure-local-provider.sh --with-manyforge-mux qwen3.6-35b-a3b-prismaquant-dflash
 ./status.sh
 ```
 
@@ -135,10 +157,17 @@ automatically freed.
 
 ### Qwen3.6 (v6 container, production)
 
+Tok/s columns are **single peak / aggregate at N-conc** under matched
+methodology (coding prompts, `enable_thinking: false`, temp 0.2, 1200-tok
+outputs). Numbers are against the 2026-04-22 drafter main — drafter is
+unpinned so these shift with upstream z-lab releases; always re-measure
+after a version bump.
+
 | Profile | Tok/s | KV Tokens | Seqs | Spec Method | Notes |
 |---------|-------|-----------|------|-------------|-------|
-| `qwen3.6-35b-a3b-nvfp4-dflash` | **45.7 / 192.5@8** | 678K | 5 | DFlash-15 | FASTEST, 256K ctx |
-| `qwen3.6-35b-a3b-fp8-dflash` | **47.6** | ~700K | 4 | DFlash-15 | Best FP8 |
+| `qwen3.6-35b-a3b-prismaquant-dflash` | **50.7 / 142.4@5** | 938K | 5 | DFlash-15 | **★★ DEFAULT** — mixed-precision 4.75 bpp, best on every axis, −0.56 pp vs BF16 claimed |
+| `qwen3.6-35b-a3b-nvfp4-dflash` | 44.6 / 140.2@5 | 678K | 5 | DFlash-15 | Uniform NVFP4, fallback (lighter weights, max concurrent seqs can stretch to 8) |
+| `qwen3.6-35b-a3b-fp8-dflash` | **47.6** | ~700K | 4 | DFlash-15 | Best FP8 (historical — re-measure) |
 | `qwen3.6-35b-a3b-nvfp4-tq-mtp` | 28.6 | 2.22M | 8 | MTP N=4 | MAX CONTEXT, 153 tok/s @ 8-conc |
 | `qwen3.6-35b-a3b-fp8-mtp-fp8kv` | 25.7 | 1.44M | 8 | MTP N=4 | FP8+FP8 KV |
 | `qwen3.6-35b-a3b-fp8-turboquant` | 26.2 | 1.89M | 6 | MTP N=4 | FP8+TQ KV |
@@ -147,18 +176,24 @@ automatically freed.
 
 | Profile | Model | Seqs | Notes |
 |---------|-------|------|-------|
-| `qwen3.5-122b-a10b-nvfp4` | 122B MoE | 3 | Most capable |
-| `qwen3.5-27b-claude-distilled-v2-nvfp4` | 27B DeltaNet | 9 | Claude v2 distilled (hermes tool parser) |
-| `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | Multimodal |
+| `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | Multimodal, Claude-distilled |
 | `gemma4-e4b-it` | 8B MoE | 12 | Vision+text+audio |
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | Vision+text, BF16 |
 
-**Default profile**: `qwen3.6-35b-a3b-nvfp4-dflash` — what `./start-model.sh`
-(no args) loads. FASTEST in single-req and 8-concurrent benchmarks. Requires
-HF token for the gated drafter model.
+**Default profile**: `qwen3.6-35b-a3b-prismaquant-dflash` — what
+`./start-model.sh` (no args) loads. Beats the uniform NVFP4 variant on
+single-stream and all tested concurrency levels (matched methodology, today's
+drafter). ~22 GB weights + the DFlash drafter (gated — HF token required).
 
-If you can't use NVFP4 (e.g. no HF token, or prefer FP8 weights), run:
+If you need max context or fewer weight GB (e.g. when running other services
+alongside vLLM), fall back to the uniform-NVFP4 variant:
+
+```bash
+./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
+```
+
+If you can't use NVFP4 at all (no HF token, or prefer FP8 weights), run:
 `./start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
 
 ## Architecture
