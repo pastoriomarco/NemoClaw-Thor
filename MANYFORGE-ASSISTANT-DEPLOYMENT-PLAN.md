@@ -86,6 +86,59 @@ keeps orchestration simple.
 reasoning, AND the slimming to fit 40 GB is achievable without breaking
 either role's quality threshold.
 
+### Outcome D: Nemotron 3 Nano Omni (added 2026-04-28 — released same day)
+
+| Aspect | Value |
+|---|---|
+| Profile | new — `nemotron3-nano-omni-30b-a3b-nvfp4` (TBD) |
+| HF repo | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` (open license, no gated access) |
+| Weights | NVFP4 (~20.9 GB on disk, 4.98 effective bpw — −0.38 pts vs BF16 across 9 multimodal benchmarks) |
+| Architecture | 30B-A3B hybrid Mamba-Transformer MoE — same family as the (text-only) Nemotron 3 Nano we tested earlier |
+| Native modalities | **vision (C-RADIOv4-H), video (EVS frame compression), audio (NVIDIA Parakeet, ≥8 kHz, up to 1 h), text** |
+| Context | 16K → 49K → **262K** native (32K Thor recipe, 131K Spark recipe — pick by deployment) |
+| KV at 32K, FP8 KV | ~10 GB |
+| Activations | ~3-5 GB (vision + audio buffers) |
+| **Estimated steady-state on Orin (40 GB target)** | weights 21 + KV 10 + activations 4 ≈ **~35 GB** at `--max-model-len 32768`, `gpu_memory_utilization 0.6` (vs Thor's recommended 0.65 on its 122 GB pool) |
+| Headroom inside 40 GB | ~5 GB (12%) — tight but feasible |
+| Thor TEB / IFEval | not yet benched; the text-only Nemotron 3 Nano scored TEB 67 on our Thor v7 bench — the Omni variant may behave differently due to multimodal pretraining |
+| Strengths | Single endpoint for vision + audio + text; built-in reasoning mode with explicit `thinking_token_budget`; Jetson AI Lab has an official Thor recipe; NVFP4 quant officially supported on Blackwell (SM110); commercial-friendly license |
+| Risks | Same architecture class as the Nano text model that scored 67/100 on agentic — quality may not match Qwen3.6-MTP. C-RADIOv4-H vision encoder is new (different from SigLIP2 in Cosmos / Qwen3-VL); SM110 kernel paths unverified. Audio support requires `pip install vllm[audio]` extra in the container (our v7 image doesn't ship it). Tighter Orin budget (~5 GB headroom) than Outcomes A/B/C. |
+
+**Pick if:** the manyforge-assistant needs **vision AND audio** (e.g.,
+voice control of robotics, multi-modal scene understanding) AND tool
+calling AND reasoning, all in one endpoint. Folds Outcomes A, B, and C
+into a single model — but only worth it if its agentic quality on the
+manyforge-assistant workflow tests beats what the existing Qwen3.6-MTP
++ Cosmos split achieves.
+
+**Thor reference recipe (from Jetson AI Lab):**
+```
+sudo docker run -it --rm --pull always --runtime=nvidia --network host \
+  -v $HOME/.cache/huggingface:/root/.cache/huggingface \
+  vllm/vllm-openai:v0.20.0-ubuntu2404 \
+  bash -c "pip install -q 'vllm[audio]' && \
+    vllm serve nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4 \
+      --trust-remote-code \
+      --gpu-memory-utilization 0.65 \
+      --max-model-len 32768 \
+      --reasoning-parser nemotron_v3 \
+      --enable-auto-tool-choice \
+      --tool-call-parser qwen3_coder"
+```
+
+**Recommended sampling (per NVIDIA model card):**
+- Reasoning mode: T=0.6, top_p=0.95, `thinking_token_budget=16384+1024`
+- Instruct mode (no thinking): **T=0.2, top_k=1** (notably *not* the
+  Qwen3.6 generic recommendation of 0.7/0.8 — Nemotron Omni is calibrated
+  much tighter for non-thinking output)
+- ASR (audio in): T=0.2, top_k=1
+
+Note: our T=0 deterministic baseline finding from
+`PERFORMANCE-V7.md` § "Recommended-sampling probe" likely still applies
+— vendor-recommended sampling consistently cost 2–4 TEB points on the
+Qwen3.6-MTP tests. The Omni model's `T=0.2 top_k=1` "Instruct" mode is
+much closer to deterministic and may not show the same gap.
+
 ---
 
 ## Tests to run (once manyforge-assistant is operative)
@@ -110,7 +163,9 @@ workflows:
   choose the right BT node from the available set? Multi-step BT chains?
 - **Visual scene reasoning** — object detection + spatial relationships
   ("which object is closest to the gripper"); only relevant for
-  outcomes A and B (vision present)
+  outcomes A, B, and D (vision present)
+- **Audio reasoning** (Outcome D only) — voice-command parsing,
+  spoken-instruction → BT-node dispatch
 - **Tool calling for robot APIs** — gripper open/close, pose commands,
   trajectory queries — tool-name correctness, argument schema
   compliance
@@ -131,7 +186,9 @@ A candidate is **acceptable** if it meets all of:
 1. Boots inside 40 GB on Orin AGX
 2. Passes ≥ 90% of the manyforge-assistant workflow tests
 3. Latency-critical loop meets the closed-loop budget
-4. Vision works correctly when needed (A or B; or via Cosmos-2B in C)
+4. Vision works correctly when needed (A, B, or D; via Cosmos-2B in C)
+5. (Outcome D only) Audio works for voice-control workflows if those
+   are part of the agent's tool-call set
 
 A candidate is the **winner** if:
 
@@ -168,6 +225,23 @@ A candidate is the **winner** if:
 - Validate that the orchestrator's routing logic correctly distinguishes
   agentic queries (→ port 8000) from spatial-physics queries (→ port 8001)
 
+### If Outcome D wins (Nemotron 3 Nano Omni)
+
+- Add new profile `nemotron3-nano-omni-30b-a3b-nvfp4` to `lib/launch.sh`
+  + `lib/config.sh` (single source of truth for both Thor + Orin)
+- Vision encoder is C-RADIOv4-H (not SigLIP2) — boot may need a
+  different `--mm-encoder-attn-backend` than the SDPA workaround used
+  for Cosmos / Qwen3-VL. Probe at first boot.
+- Audio support requires `pip install vllm[audio]` extra; either bake
+  into a v8 image rebuild OR install at container boot (slower)
+- Use Jetson AI Lab Thor recipe as starting point: `gpu_memory_utilization=0.65`,
+  `--max-model-len 32768`, parsers `nemotron_v3` + `qwen3_coder`
+- Drop the manyforge profile + Cosmos pair from Orin deployment;
+  single endpoint serves all agentic + perception + voice
+- Sampling default for the orchestrator: T=0.2, top_k=1 (NVIDIA's
+  "Instruct" recommendation — much closer to deterministic than
+  the Qwen3.6 generic T=0.7)
+
 ---
 
 ## Open questions
@@ -175,14 +249,30 @@ A candidate is the **winner** if:
 1. **NVFP4 on Ampere SM86**: vLLM's NVFP4 GEMM backend depends on
    FlashInfer-CUTLASS kernels. Need to confirm SM86 instantiations exist
    for the relevant tile shapes. If not, NVFP4 falls back to a slower
-   path or fails outright.
+   path or fails outright. (Affects A's headroom and especially B/C/D
+   that depend on NVFP4 35B / 30B-A3B weights.)
 2. **TurboQuant K8V4 on Ampere**: the `fix-pr39931-turboquant` mod
    removes a SM110-related guard, but TQ K8V4 itself may have arch
    assumptions. Worth a boot probe before committing to Outcome B or C.
 3. **Cosmos-Reason2-8B vision on Ampere**: Thor needs `TORCH_SDPA`
    workaround for SM110 ViT FA2 PTX crash; SM86 may not need this
    workaround (could try FA2 for better ViT throughput).
-4. **ManyForge-assistant agent test harness**: the workflow tests above
+4. **C-RADIOv4-H vision encoder on Thor SM110 / Orin SM87**: this is
+   NVIDIA's own encoder, different from the SigLIP2/Qwen-VL ViTs we've
+   validated. Untested on either platform. If it crashes the same way
+   Cosmos's ViT did on SM110 (vllm #38411), we'd need a similar SDPA
+   fallback; Jetson AI Lab Thor recipe doesn't mention one, suggesting
+   it may "just work".
+5. **Audio extras in the container**: `pip install vllm[audio]` is not
+   in our v7 image. Decide whether to bake into v8 (preferred for cold
+   starts) or install at container boot (slower but doesn't require a
+   rebuild).
+6. **Nemotron 3 family agentic ceiling**: the text-only Nemotron 3 Nano
+   landed mid-pack on TEB (67/100). The Omni variant uses the same
+   architecture class but with multimodal pretraining — does that
+   shift agentic tool-calling quality up, down, or sideways? Only the
+   manyforge-assistant workflow tests will tell.
+7. **ManyForge-assistant agent test harness**: the workflow tests above
    need a runnable harness — defer until the agent itself is at least
    prototyped.
 
