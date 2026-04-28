@@ -139,6 +139,113 @@ windows during real TEB+IFEval workload (steady-state, not peak burst).
 
 ---
 
+## Recommended-sampling probe (2026-04-28) — vendor-recommended sampling vs deterministic baseline
+
+After the main bench finished, three follow-up tests checked whether
+Qwen-recommended sampling parameters (T=0.6/0.7, top_p=0.95/0.8, top_k=20)
+or thinking-mode would shift the production picture. All baseline numbers
+above used T=0/think=false (deterministic, reproducible); the question
+was whether the model's "calibrated" sampling regime would beat the
+deterministic baseline.
+
+### Test setup
+
+Three head-to-head tests against the baseline:
+
+| Test | Profile | Sampling |
+|---|---|---|
+| 1 | `qwen3.6-35b-a3b-nvfp4-mtp-fp8kv` | T=0.6, top_p=0.95, top_k=20, **enable_thinking=true** (Qwen "thinking-mode" recommendation) |
+| 2 | `qwen3.6-35b-a3b-nvfp4-mtp-fp8kv` | T=0.7, top_p=0.8, top_k=20, enable_thinking=false (Qwen "non-thinking" recommendation) |
+| 3 | `cosmos-reason2-8b` | T=0.6, top_p=0.95, top_k=20 (NVIDIA Cosmos VLM-recommended sampling) |
+
+Note: Test 3 did NOT inject NVIDIA's optional CoT system prompt
+(`Answer in <think>...</think><answer>...</answer>`) — that would have
+required a custom chat template or HTTP proxy and bound the orchestrator
+to a model-specific prompt convention, which is undesirable for a
+universal manyforge agent. Test 3 measured Cosmos under recommended
+sampling alone, with TEB scenarios using their own native system prompts.
+
+### Results
+
+|  | TEB | IFEval | TEB Δ vs baseline | IFEval Δ vs baseline |
+|---|---:|---:|---:|---:|
+| **Baseline FP8KV** (T=0, think=false) | **93** | **90.4%** | — | — |
+| Test 1 FP8KV thinking-on (T=0.6) | 91 | **39.7%** | −2 | **−50.7%** ⚠ |
+| Test 2 FP8KV no-think rec (T=0.7) | 89 | 87.0% | −4 | −3.4% |
+| **Baseline cosmos** (T=0, think=false) | **81** | **84.9%** | — | — |
+| Test 3 cosmos rec (T=0.6) | 78 | 84.9% | −3 | 0.0% |
+
+### Findings
+
+1. **T=0 deterministic + think=false is the best regime for both models**
+   on Thor for agentic workloads. Recommended sampling consistently costs
+   2–4 TEB points across all three tests, with no upside on IFEval.
+
+2. **Thinking-on catastrophically breaks IFEval** (90.4% → 39.7%, a
+   50.7-point drop). The `<think>` content leaks into the verified
+   output and breaks every lexical rule the verifier checks (no-comma,
+   lowercase, length-cap, format markers). For lexical/format compliance
+   tasks (and any user-facing output where format matters), thinking-on
+   is **actively harmful**.
+
+3. **Cosmos's IFEval is robust to temperature** (identical 84.9% at
+   both T=0 and T=0.6). Unlike Qwen3.6-MTP-FP8KV, Cosmos does not lose
+   format compliance under stochastic sampling — its training appears
+   to internalize format rules into the response distribution rather
+   than relying on deterministic decoding. But it still pays the
+   3-point TEB cost on agentic.
+
+4. **No production benefit to vendor-recommended sampling on Thor.**
+   The Qwen3.6 model-card recommendations (T=0.6 thinking / T=0.7 non-
+   thinking) reflect "natural" generation distributions, but for
+   tool-call quality and structured agentic output, deterministic
+   decoding beats them on every measured axis.
+
+5. **Thinking-mode latency cost is severe.** Test 1 IFEval ran at
+   ~52 s/prompt vs ~13 s/prompt for the no-think variants — a 4×
+   slowdown driven by `<think>` chains generated for every prompt,
+   even simple instruction-following ones. Even if you could parse
+   out the thinking content, the latency hit alone would disqualify
+   thinking-on for closed-loop control workloads.
+
+### Production recommendation for manyforge orchestrator
+
+```yaml
+# default agentic call (max correctness, lowest latency)
+temperature: 0.0
+chat_template_kwargs:
+  enable_thinking: false
+```
+
+Reserve thinking-on **only** for orchestration steps where:
+- The orchestrator parses out `<think>` content programmatically
+  before the response is consumed downstream, AND
+- The added latency (~4×) is acceptable for that step (e.g., one-off
+  high-level planning, not closed-loop control).
+
+For all other agentic calls — tool selection, code generation, JSON
+schema compliance, refusal handling, multi-turn dispatch — keep T=0
+and think=false.
+
+This is portable across the kept profiles: the same defaults work
+for `nvfp4-mtp-fp8kv`, `nvfp4-tq-mtp`, `cosmos-reason2-8b`, and the
+manyforge production profile. No model-specific sampling tuning needed.
+
+### Artifacts
+
+Per-test outputs (raw bench logs):
+- `/tmp/v7-agentic-bench/teb/{fp8kv-thinkon-rec,fp8kv-nothink-rec,cosmos-rec}.log`
+- `/tmp/v7-agentic-bench/ifeval-out/{fp8kv-thinkon-rec,fp8kv-nothink-rec,cosmos-rec}.{log,json}`
+- `/tmp/v7-agentic-bench/run_recommended_sampling.{sh,log}` — runner script
+
+The runner uses `THOR_DETACH=1` (proper docker daemon detach) and a
+`flock` singleton guard. Earlier runs hit `( cmd & disown )` subshell
+issues that left orphan child processes blocking the parent on
+`do_wait`; the THOR_DETACH path avoids this entirely by letting the
+Docker daemon own the container lifecycle.
+
+---
+
 ## Blocked / broken profiles
 
 ### `qwen3.6-35b-a3b-fp8-turboquant` (and all TQ profiles) — **RESOLVED 2026-04-27**

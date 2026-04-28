@@ -186,17 +186,28 @@ prepare_thor_launch_profile() {
             )
             ;;
         qwen3.6-35b-a3b-nvfp4-mtp-fp8kv)
-            # EXPERIMENTAL (re-added 2026-04-23 for tool-eval-bench quality testing).
-            # NVFP4 weights + MTP N=2 + FP8 KV. Same MTP N=2 that gave +4 tool-eval-bench
-            # points on 27B-FP8 (88 vs 84 at N=3).
+            # ★★ TOOL-EVAL-BENCH WINNER (TEB 93 / IFEval 90.4%): NVFP4 weights +
+            # MTP N=2 + FP8 KV. Reproduced on v7 (62 PASS / 4 PARTIAL / 3 FAIL).
             #
-            # CAVEAT: an earlier version at MTP N=4 was removed because it crashed
-            # under 8-concurrent load (CUDA illegal memory at M=128 in MoE autotuner).
-            # N=2 reduces M growth, and tool-eval-bench is single-concurrent, so the
-            # crash condition should not trigger. Fail-fast on cudaErrorIllegalInstruction
-            # if the autotuner path has changed.
+            # VLLM_USE_FLASHINFER_MOE_FP16=0: defensive fix against the same
+            # non-deterministic FlashInfer-CUTLASS unquantized-MoE autotuner
+            # crash that hits the TQ profiles. The autotuner can occasionally
+            # pick the SM100-only BF16 tile <128,64,64> on the MTP drafter
+            # forward (no SM110 instantiation → engine init crash). Routing
+            # the unquantized drafter MoE to Triton avoids the broken tile
+            # entirely. Hit this profile for the first time 2026-04-28 during
+            # the recommended-sampling re-run.
+            #
+            # CAVEAT: an earlier version at MTP N=4 was removed because it
+            # crashed under 8-concurrent load (CUDA illegal memory at M=128
+            # in MoE autotuner). N=2 reduces M growth.
             THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
+            )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--enforce-eager"
