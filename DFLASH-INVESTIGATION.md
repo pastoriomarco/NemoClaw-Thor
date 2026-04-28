@@ -13,6 +13,51 @@
 > thinking mode produces ~30 tps on the same stack. The drafter is also
 > unpinned, so upstream z-lab changes will shift these numbers day to day.
 
+> **⚠⚠ HEAD_DIM CORRECTION (added 2026-04-26 — REVISES THIS ENTIRE DOC's PRIMARY HYPOTHESIS):**
+> The "head_dim=128 enables flash_attn on SM110, head_dim=256 forces FlashInfer"
+> claim repeated throughout this doc (lines 175, 211-216, 318, 957) is
+> **factually wrong** and **empirically falsified**. Read the actual model
+> configs:
+> - Qwen3.6-35B-A3B-FP8 has `head_dim=256` (not 128)
+> - Qwen3.6-27B-FP8 has `head_dim=256`
+> - Even Qwen3.5-9B has `head_dim=256`
+>
+> The doc author computed `hidden_size / num_attention_heads = 2048/16 = 128`,
+> but Qwen3 has an explicit `head_dim` field that overrides that derivation.
+>
+> **Empirical proof (2026-04-26 test):** Qwen/Qwen3.6-27B-FP8 + DFlash +
+> `--attention-backend flash_attn` boots cleanly on Thor SM110a, generates
+> coherent output, executes tool calls correctly. The "head_dim=256 forces
+> FlashInfer" hypothesis is dead.
+>
+> **What's actually true:** flash_attn (FA4 on Blackwell) handles head_dim=256
+> on SM110a fine. The 27B-FP8 profile's historical use of FlashInfer was an
+> *untested assumption*, not a hardware constraint.
+>
+> **What's still unexplained:** why the 35B-A3B drafter gets 34-48% acceptance
+> while the 27B-FP8 drafter gets 8.2%. That's a drafter-quality issue (preview
+> drafter, BF16-trained vs FP8 target, narrow training distribution per
+> z-lab/dflash issue #60), NOT a head_dim issue.
+>
+> **Other corrections from agent fact-check (2026-04-24):**
+> - FA2 on SM110 fails with **Xid 43 (invalid execution)**, not
+>   `cudaErrorUnsupportedPtxVersion`. Cubins exist; SM80-style shared-memory
+>   patterns execute incorrectly.
+> - The "tcgen05.mma tile-shape constraints cause head_dim=256 ceiling" claim
+>   I added in earlier conversation was **unsupported speculation**, not from
+>   any source.
+> - FA4 SM_100 path ships head_dim ∈ {64, 96, 128, 192} per upstream
+>   `flash_fwd_sm100.py`; head_dim=256 status was unclear at audit time but
+>   empirically works on our v6 image (commit 9965f501a).
+> - FA4 + FP8 KV cache IS unsupported on Blackwell per sglang docs (verified).
+>
+> The investigation results below in this doc remain valid for the data they
+> recorded; only the head_dim *explanation* was wrong. The 47.6 tok/s
+> production number for 35B-A3B-FP8 + DFlash is real and reproducible.
+>
+> See [TOOL-EVAL-BENCH-THOR.md](TOOL-EVAL-BENCH-THOR.md) for related quality
+> findings.
+
 ---
 
 ## NemoClaw-routed Benchmark Results (2026-04-17 evening)

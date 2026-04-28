@@ -1,19 +1,35 @@
 # syntax=docker/dockerfile:1.6
 #
-# NemoClaw-Thor vLLM Container
+# NemoClaw-Thor vLLM Container — v7 generation
 # Builds vLLM + FlashInfer from source for Jetson AGX Thor (sm110 / Blackwell).
 #
 # Adapted from spark-vllm-docker (sm121) — stripped of Ray/cluster logic,
 # retargeted for single-node Thor with CUDA 13.0 and JetPack 7.1.
 #
+# Recommended invocation for the v7 image:
+#   ./build.sh --vllm-ref v0.20.0 --flashinfer-ref v0.6.9
+#
+# Why those pins (researched 2026-04-27):
+#   - vLLM v0.20.0 (tagged 2026-04-27) is the first stable release containing all
+#     the Thor-relevant fixes: PR #39233 (sm_110 build target), PR #39546 (SM100+
+#     spec-decode test fix), PR #40092 (TurboQuant FA3/FA4 prefill enablement),
+#     PR #40654 (avoid seq_lens_cpu GPU->CPU sync), MRv2 acceptance fixes.
+#   - FlashInfer v0.6.9 (released 2026-04-24) — the version vLLM v0.20.0 expects.
+#     Pure-Python wheel + CuTe-DSL JIT, SM110 detected at runtime, no special args.
+#   - flash-attn-4==4.0.0b10 (pinned in runner stage below) — adds SM100 FP8 e4m3/
+#     e5m2 forward (PR #2109), unblocks DFlash + FP8 KV combo on Blackwell.
+#
 # Usage:
-#   ./build.sh                       # default: latest vLLM main
-#   ./build.sh --vllm-ref v0.8.5     # pin to a tag
-#   ./build.sh --build-jobs 6        # lower parallelism on constrained host
+#   ./build.sh --vllm-ref v0.20.0 --flashinfer-ref v0.6.9   # canonical v7 build
+#   ./build.sh --vllm-ref main                              # bleeding edge, NOT recommended
+#   ./build.sh --build-jobs 8                               # lower parallelism if constrained
 
 # ── Build tunables ──────────────────────────────────────────────────
-ARG BUILD_JOBS=12
-ARG CUDA_BASE=nvidia/cuda:13.0.0-devel-ubuntu24.04
+# Thor has 14 ARM cores (Cortex-A78AE). Default to full parallelism. With 128 GiB
+# unified memory, peak CUDA compile RSS at 14 concurrent jobs stays well under
+# 30 GiB. Drop to 8-10 only if rebuilding while serving a model.
+ARG BUILD_JOBS=14
+ARG CUDA_BASE=nvidia/cuda:13.0.3-devel-ubuntu24.04
 
 # =========================================================
 # STAGE 1 — Base build image
@@ -46,19 +62,22 @@ RUN apt update && \
     && rm -rf /var/lib/apt/lists/* \
     && pip install uv
 
-# PyTorch nightly (cu130 — matches host CUDA 13.0 driver, avoids PTX version mismatch)
-# Versions pinned to the 2026-04-15 nightly dropped in the v6 build.
+# PyTorch nightly (cu130 — matches host CUDA 13.0 driver, avoids PTX version mismatch).
+# Pinned to 2026-04-26 nightly for v7 build. Note: vLLM v0.20.0 pins torch==2.11.0
+# stable, but no 2.11.0 stable cu130/aarch64 wheel exists for Thor — we ride the
+# nightly. The 2026-04-15 nightly used in v6 has been pruned from the index, so
+# v6 is no longer rebuildable; v7 uses the 2.13-nightly that is currently live.
+# Triton ships bundled inside the torch wheel — no explicit pin needed.
 ENV UV_HTTP_TIMEOUT=300
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
      uv pip install \
-         "torch==2.12.0.dev20260415+cu130" \
-         "triton==3.7.0+gitb4e20bbe" \
+         "torch==2.13.0.dev20260426+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
      uv pip install \
-         "torchvision==0.27.0.dev20260415+cu130" \
-         "torchaudio==2.11.0.dev20260415+cu130" \
+         "torchvision==0.27.0.dev20260426+cu130" \
+         "torchaudio==2.11.0.dev20260426+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-     uv pip install "nvidia-nvshmem-cu13==3.4.5" "apache-tvm-ffi==0.1.10" filelock pynvml requests tqdm
+     uv pip install "nvidia-nvshmem-cu13==3.6.5" "apache-tvm-ffi==0.1.10" filelock pynvml requests tqdm
 
 # Ccache
 ENV PATH=/usr/lib/ccache:$PATH
@@ -111,12 +130,15 @@ RUN --mount=type=cache,id=repo-cache,target=/repo-cache \
 
 WORKDIR /workspace/flashinfer
 
-# Avoid re-downloading existing cubins
+# Avoid re-downloading existing cubins (pure build-speed optimization;
+# tolerant if upstream artifacts.py changed and patch context no longer matches —
+# absence only means we re-fetch cubins, not a build break).
 COPY patches/flashinfer_cache.patch .
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     --mount=type=cache,id=ccache,target=/root/.ccache \
     --mount=type=cache,id=cubins-cache,target=/workspace/flashinfer/flashinfer-cubin/flashinfer_cubin/cubins \
-    patch -p1 < flashinfer_cache.patch && \
+    (patch -p1 --forward < flashinfer_cache.patch || \
+     echo "flashinfer_cache.patch did not apply cleanly — proceeding without cubin-cache fast path") && \
     sed -i -e 's/license = "Apache-2.0"/license = { text = "Apache-2.0" }/' -e '/license-files/d' pyproject.toml && \
     uv build --no-build-isolation --wheel . --out-dir=/workspace/wheels -v && \
     cd flashinfer-cubin && uv build --no-build-isolation --wheel . --out-dir=/workspace/wheels -v && \
@@ -200,72 +222,77 @@ RUN for p in /tmp/patches/vllm_*.patch; do \
         patch -p1 < "$p" || echo "Patch $(basename $p) not applicable, skipping"; \
     done
 
-# SM110 (Thor) CUTLASS arch fix for vLLM 0.19:
-#
-# vLLM 0.19 CMakeLists.txt natively includes "11.0f" in FP4_ARCHS, SCALED_MM_ARCHS,
-# MLA_ARCHS, and MoE arch lists when CUDA >= 13.0. This is a major improvement over
-# 0.18 where we had to strip-and-restore 11.0f manually.
-#
-# Remaining issue: CUTLASS sm100 scaled_mm kernels (non-MoE) still use
-# enable_sm100f_only which rejects SM110 at runtime. The runtime fallback mod
-# (fix-sm110-cutlass) handles this by routing to PyTorch native _scaled_mm.
-#
-# Verify the upstream arch lists are intact (no stripping needed):
+# SM110 (Thor) CMakeLists.txt arch lists check — vLLM v0.20.0 PR #39233
+# made sm_110 a first-class build target; FP4_ARCHS, SCALED_MM_ARCHS,
+# MLA_ARCHS, and MoE arch lists all natively include "11.0f". We verify
+# (informational) but do NOT modify — the prior strip-and-restore approach
+# was for v0.19 and is no longer correct. Audit: docker/PATCHES-AUDIT.md.
 RUN echo "Verifying SM110 arch inclusion in CMakeLists.txt..." && \
     echo "  FP4_ARCHS 11.0f count: $(grep -c 'FP4_ARCHS.*11\.0f' CMakeLists.txt || echo 0)" && \
     echo "  SCALED_MM_ARCHS 11.0f count: $(grep -c 'SCALED_MM_ARCHS.*11\.0f' CMakeLists.txt || echo 0)" && \
     echo "  MLA_ARCHS 11.0f count: $(grep -c 'MLA_ARCHS.*11\.0f' CMakeLists.txt || echo 0)" && \
     echo "  Total 11.0f: $(grep -c '11\.0f' CMakeLists.txt || echo 0)"
 
-# SM110 MoE kernel selection:
-# flashinfer_cutlass_moe.py: FIXED upstream in 0.19 — includes SM110 check.
-# flashinfer_trtllm_moe.py: still only checks family(100) as of 0.19.0.
+# MoE backend selection on SM110 — informational verification only (v7+).
+#
+# vLLM v0.20.0 has TWO FlashInfer MoE backend families:
+#   1. FlashInfer CUTLASS MoE  (vllm/.../flashinfer_cutlass_moe.py)
+#         — already includes SM110 in its family-capability gate upstream.
+#   2. FlashInfer TRT-LLM Gen MoE (vllm/.../experts/trtllm_{bf16,fp8,mxfp4,nvfp4}_moe.py)
+#         — gate is `is_device_capability_family(100)` only; rejects SM110.
+#
+# All our active profiles set:
+#     VLLM_USE_FLASHINFER_MOE_FP4=1
+#     VLLM_FLASHINFER_MOE_BACKEND=latency
+# which select the CUTLASS MoE path, so the TRT-LLM Gen rejection does NOT
+# affect them — vLLM falls back to CUTLASS MoE (SM110-supported) cleanly.
+#
+# We INTENTIONALLY do NOT patch the TRT-LLM Gen gate in v7 because:
+#   (a) our profiles don't use that path,
+#   (b) we have no evidence TRT-LLM Gen kernels are actually safe on SM110a
+#       (the gate guards against this — opening it might unlock runtime crashes),
+#   (c) the v6 patch silently no-op'd on v0.20.0's split files anyway, so
+#       v6's measured perf was already with TRT-LLM Gen DISABLED on SM110.
+#
+# If a future profile needs TRT-LLM Gen MoE on SM110, add a targeted patch
+# with offline pre-validation against the exact upstream source. See
+# docker/PATCHES-AUDIT.md for the v6→v7 transition history.
 RUN python3 - <<'PYEOF'
 import pathlib
-
-PATCHES = [
-    ("vllm/model_executor/layers/fused_moe/flashinfer_cutlass_moe.py", [
-        # Verify upstream fix is present (no-op)
-    ]),
-    ("vllm/model_executor/layers/fused_moe/flashinfer_trtllm_moe.py", [
-        (
-            "p.is_cuda() and p.is_device_capability_family(100)",
-            "p.is_cuda() and (p.is_device_capability_family(100) or p.is_device_capability_family(110) or p.is_device_capability_family(120))",
-        ),
-    ]),
+verify = "vllm/model_executor/layers/fused_moe/flashinfer_cutlass_moe.py"
+trtllm_files = [
+    "vllm/model_executor/layers/fused_moe/experts/trtllm_bf16_moe.py",
+    "vllm/model_executor/layers/fused_moe/experts/trtllm_fp8_moe.py",
+    "vllm/model_executor/layers/fused_moe/experts/trtllm_mxfp4_moe.py",
+    "vllm/model_executor/layers/fused_moe/experts/trtllm_nvfp4_moe.py",
 ]
-
-for fname, replacements in PATCHES:
-    p = pathlib.Path(fname)
-    if not p.exists():
-        print(f"SKIP {fname}: not found")
-        continue
-    text = p.read_text()
-    if not replacements:
-        if "is_device_capability_family(110)" in text:
-            print(f"VERIFIED {fname}: SM110 support present upstream")
-        else:
-            print(f"WARNING {fname}: SM110 support NOT found upstream — manual patch may be needed")
-        continue
-    changed = False
-    for old, new in replacements:
-        if old in text:
-            text = text.replace(old, new)
-            changed = True
-    if changed:
-        p.write_text(text)
-        print(f"PATCHED {fname}")
-    elif "is_device_capability_family(110)" in text:
-        print(f"ALREADY PATCHED {fname}")
-    else:
-        print(f"PATTERN NOT FOUND in {fname} (check vLLM version)")
+p = pathlib.Path(verify)
+if p.exists() and "is_device_capability_family(110)" in p.read_text():
+    print(f"VERIFIED {verify}: SM110 family check present (CUTLASS MoE path is SM110-ready)")
+else:
+    print(f"NOTE {verify}: SM110 check missing or file moved — CUTLASS MoE may need a patch")
+for f in trtllm_files:
+    p = pathlib.Path(f)
+    status = "exists (SM110 NOT patched — falls back to CUTLASS path)" if p.exists() else "missing"
+    print(f"INFO  {f}: {status}")
+print()
+print("MoE backend selection: CUTLASS (SM110-ready upstream) is the active path")
+print("via VLLM_USE_FLASHINFER_MOE_FP4=1 + VLLM_FLASHINFER_MOE_BACKEND=latency.")
 PYEOF
 
 # NOTE: FA2 SM110 patch removed — confirmed Xid 43 (GPU hang) at runtime.
 # FA2 kernels use SM80-specific shared memory patterns that cause hardware
-# faults on SM110 even when compiled with native cubins. FA4 handles SM110
-# but can't do head_dim=256 (TMEM limit). FlashInfer is the only viable
-# attention backend for Qwen3.5 on Thor.
+# faults on SM110 even when compiled with native cubins.
+#
+# FA4 handles SM110 fine, including head_dim=256 (empirically validated
+# 2026-04-26 on both Qwen3.6-27B-FP8 and Qwen3.6-35B-A3B-FP8 — the prior
+# "head_dim=256 hits TMEM limit" claim in earlier docs was wrong; FA4 runs
+# the full-attention layers cleanly through its SM_100 dispatch path on Thor).
+# FA4 still does NOT support FP8 KV cache on Blackwell pre-beta10 — beta10
+# (pinned below) ships FP8 e4m3/e5m2 forward kernels (PR #2109).
+#
+# FlashInfer remains the right choice for FP8 KV + non-DFlash workloads;
+# flash_attn (FA4) is preferred for DFlash speculative decoding paths.
 
 # Compile vLLM wheel
 RUN --mount=type=cache,id=ccache,target=/root/.ccache \
@@ -286,7 +313,7 @@ COPY --from=vllm-builder /workspace/wheels /
 # =========================================================
 FROM ${CUDA_BASE} AS runner
 
-ARG BUILD_JOBS=12
+ARG BUILD_JOBS=14
 ENV MAX_JOBS=${BUILD_JOBS}
 ENV CMAKE_BUILD_PARALLEL_LEVEL=${BUILD_JOBS}
 ENV NINJAFLAGS="-j${BUILD_JOBS}"
@@ -324,17 +351,16 @@ RUN mkdir -p tiktoken_encodings && \
 ARG PRE_TRANSFORMERS=1
 ENV UV_HTTP_TIMEOUT=300
 
-# PyTorch (cu130 — matches host CUDA 13.0 driver) — pinned to 2026-04-15 nightly
+# PyTorch (cu130 — matches host CUDA 13.0 driver) — pinned to 2026-04-26 nightly (v7)
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
      uv pip install \
-         "torch==2.12.0.dev20260415+cu130" \
-         "triton==3.7.0+gitb4e20bbe" \
+         "torch==2.13.0.dev20260426+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
      uv pip install \
-         "torchvision==0.27.0.dev20260415+cu130" \
-         "torchaudio==2.11.0.dev20260415+cu130" \
+         "torchvision==0.27.0.dev20260426+cu130" \
+         "torchaudio==2.11.0.dev20260426+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-     uv pip install "nvidia-nvshmem-cu13==3.4.5" "apache-tvm-ffi==0.1.10"
+     uv pip install "nvidia-nvshmem-cu13==3.6.5" "apache-tvm-ffi==0.1.10"
 
 # Install FlashInfer + vLLM wheels (bind-mounted from host ./wheels/)
 # Exclude flashinfer_cubin wheel: precompiled cubins are downloaded from upstream
@@ -343,18 +369,19 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # FLASHINFER_CUDA_ARCH_LIST=11.0a and contain valid sm_110a code.
 # This enables the FlashInfer attention backend on Thor.
 # With --tf5 (PRE_TRANSFORMERS=1, the default): override vLLM's and compressed-tensors'
-# transformers<5 constraint, then explicitly install transformers==5.5.0.
+# transformers<5 constraint, then explicitly install transformers==5.6.2 (v7).
 # transformers 5.2.0: first native Qwen3.5 support.
 # transformers 5.3.0: NVFP4 Blackwell quantization integration, Qwen3.5 bug fixes.
 # transformers 5.4.0: Qwen3.5 classification, FP8 grouped matmul speedup.
 # transformers 5.5.0: Gemma 4 model class (Gemma4ForConditionalGeneration),
 #   Gemma4Config, Gemma4VisionConfig, Gemma4AudioConfig, Gemma4Processor.
+# transformers 5.6.x: post-5.5 Qwen3.6-MoE / Gemma 4 / NVFP4 fixes.
 RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
     --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     if [ "$PRE_TRANSFORMERS" = "1" ]; then \
         echo "transformers>=5.0.0" > /tmp/tf-override.txt && \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin) --override /tmp/tf-override.txt && \
-        uv pip install "transformers==5.5.4" --override /tmp/tf-override.txt; \
+        uv pip install "transformers==5.6.2" --override /tmp/tf-override.txt; \
     else \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin); \
     fi
@@ -376,13 +403,15 @@ COPY mods/ /workspace/mods/
 # - fastsafetensors/instanttensor: fast model loading (--load-format instanttensor)
 # - triattention: KV cache compression via trigonometric frequency-domain scoring
 #   (vLLM plugin — transparent, up to 10.7x KV memory reduction for long reasoning)
-# - flash-attn-4: FA4 with SM110a/SM110f support (JIT via CuTeDSL, beta9)
-#   Enables --attention-backend flash_attn for DFlash on SM110 (head_dim=256).
+# - flash-attn-4 beta10: FA4 with SM110a/SM110f support (JIT via CuTeDSL).
+#   Enables --attention-backend flash_attn for DFlash on SM110 with head_dim=256.
+#   Beta10 (2026-04-22) adds SM100 FP8 e4m3/e5m2 forward (PR #2109), unblocking
+#   DFlash + FP8 KV combo. Plus SM100 seqlen_k=0 crash fix (PR #2470).
 #   Requires nvidia-cutlass-dsl >= 4.4.x
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv pip install "fastsafetensors==0.2.2" "instanttensor==0.1.8" && \
-    uv pip install "triattention @ git+https://github.com/WeianMao/triattention.git@91bb3c27e5000aa2e1f5abb3f247376597f2b5af" && \
-    uv pip install "flash-attn-4==4.0.0b9" "nvidia-cutlass-dsl==4.4.2"
+    uv pip install "fastsafetensors==0.3" "instanttensor==0.1.8" && \
+    uv pip install "triattention @ git+https://github.com/WeianMao/triattention.git@325297218a" && \
+    uv pip install "flash-attn-4==4.0.0b10" "nvidia-cutlass-dsl==4.4.2"
 
 # flash_attn shim: merge vendored vllm_flash_attn modules into the flash-attn-4
 # package. flash-attn-4 only provides cute/, but vLLM also imports flash_attn.ops

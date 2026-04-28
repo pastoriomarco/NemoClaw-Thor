@@ -149,21 +149,27 @@ resolve_thor_sandbox_name() {
 print_supported_model_profiles() {
     cat <<'EOF'
 Supported model profiles:
-  qwen3.6-35b-a3b-prismaquant-dflash (mixed-precision 4.75bpp + DFlash-15) ★★ DEFAULT
-  qwen3.6-35b-a3b-nvfp4-dflash    (uniform NVFP4 + DFlash-15, fallback for max-context)
-  qwen3.6-35b-a3b-nvfp4-dflash-vl (DFlash + vision enabled, experimental)
-  qwen3.6-27b-fp8-mtp-kvfp8       (dense 27B FP8 + MTP + FP8 KV, EXPERIMENTAL)
-  qwen3.6-35b-a3b-fp8-dflash      (DFlash-15, 47.6 tok/s, ~700K KV) ★ MAX THROUGHPUT FP8
-  qwen3.6-35b-a3b-nvfp4-tq-mtp   (TQ K8V4 + MTP, 28.6 single / 153.6 @8-conc, 256K ctx) ★ MAX CONTEXT
-  qwen3.6-35b-a3b-fp8-mtp-fp8kv   (MTP N=4 + FP8 KV, 25.7 tok/s, 1.44M KV)
-  qwen3.6-35b-a3b-fp8-turboquant  (TQ K8V4 + MTP, 26.2 tok/s, 1.89M KV)
-  qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge  (★ ManyForge production: TQ+MTP-2, 3×64K, gpu_mem_util 0.32, co-serves w/ Cosmos)
-  qwen3.5-9b-claude-distilled-nvfp4  (DeltaNet hybrid, 9B Opus-distilled NVFP4)
-  cosmos-reason2-2b         (NVIDIA physical-AI VLM, Qwen3-VL-2B base, 32K ctx, 2-conc)
-  cosmos-reason2-8b         (NVIDIA physical-AI VLM, Qwen3-VL-8B base, 32K ctx, 3-conc)
-  gemma4-e4b-it             (vLLM, BF16 MoE, 8B/4B-active, vision+text+tools)
-  gemma4-31b-it-nvfp4       (vLLM, NVFP4 quantized, vision+text+tools)
-  gemma4-26b-a4b-it         (vLLM, BF16 MoE 128E/8A, vision+text+tools)
+
+  Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration):
+    qwen3.6-35b-a3b-nvfp4-mtp-fp8kv    ★★ DEFAULT — max correctness (TEB 93, 90% IFEval, 19.5 tps)
+    qwen3.6-35b-a3b-nvfp4-tq-mtp       ★★ throughput+context (TEB 90, 89% IFEval, 24.8 tps, 2.22M KV)
+    qwen3.6-35b-a3b-nvfp4-dflash       heavy coding bursts (DFlash-8, ~v6 87 TEB, peak ~130 tps)
+    qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge  ★ ManyForge production: TQ+MTP-2 + VISION, 3×64K, co-serves w/ Cosmos
+
+  Other Qwen3.6:
+    qwen3.6-27b-fp8-mtp-kvfp8     dense 27B FP8 + MTP + FP8 KV (TEB 84)
+
+  Distilled / specialized:
+    qwen3.5-9b-claude-distilled-nvfp4  DeltaNet hybrid, 9B Opus-distilled, fast control loop (TEB 42)
+
+  Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning):
+    cosmos-reason2-2b         Qwen3-VL-2B base, 32K ctx, 2-conc
+    cosmos-reason2-8b         Qwen3-VL-8B base, 64K ctx, 3-conc (TEB 81)
+
+  Gemma 4 (Google, vision+text+tools):
+    gemma4-e4b-it             BF16 MoE, 8B/4B-active
+    gemma4-31b-it-nvfp4       NVFP4 quantized
+    gemma4-26b-a4b-it         BF16 MoE 128E/8A
 EOF
 }
 
@@ -176,7 +182,7 @@ resolve_model_profile() {
     # Default profile: NVFP4 + DFlash-15 (FASTEST — 45.7 tok/s single, 192.5 @ 8-concurrent,
     # 256K context). Users without an HF token for the gated drafter can override via
     # THOR_MODEL_PROFILE or arg, e.g. `./start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
-    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-prismaquant-dflash}}")
+    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-nvfp4-mtp-fp8kv}}")
 
     case "${requested}" in
         # minimax-m2.7-139b-a10b-nvfp4 profile removed 2026-04-23.
@@ -220,39 +226,12 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
-        qwen3.6-35b-a3b-fp8-dflash)
-            # ~700K KV tokens at 0.8 (BF16 KV + DFlash drafter overhead)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-FP8-DFlash"
-            THOR_TARGET_MAX_MODEL_LEN="131072"
-            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
-            THOR_TARGET_MAX_NUM_SEQS="4"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.6-35b-a3b-fp8-mtp-fp8kv)
-            # 1.44M KV tokens at 0.8 (FP8 KV, ~2x compression)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-FP8-MTP-FP8KV"
-            THOR_TARGET_MAX_MODEL_LEN="131072"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="8"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.6-35b-a3b-fp8-turboquant)
-            # 1.89M KV tokens at 0.8 (TQ K8V4, ~2.6x compression)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-FP8-TQ"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="turboquant_k8v4"
-            THOR_TARGET_MAX_NUM_SEQS="6"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
+        # qwen3.6-27b-fp8-dflash REMOVED 2026-04-28 — see launch.sh
+        # qwen3.6-35b-a3b-fp8-dflash REMOVED 2026-04-28 — see launch.sh; heavy
+        # coding now via qwen3.6-35b-a3b-nvfp4-dflash (same NVFP4 weights).
+        # qwen3.6-35b-a3b-fp8-mtp-fp8kv REMOVED 2026-04-28 — FP8-weights variant
+        # of an NVFP4 alternative; use nvfp4-mtp-fp8kv or nvfp4-tq-mtp instead.
+        # qwen3.6-35b-a3b-fp8-turboquant REMOVED 2026-04-28 — see launch.sh.
         qwen3.6-35b-a3b-nvfp4-dflash)
             # ★★ FASTEST: 45.71 tok/s single, 192.45 aggregate at 8-concurrent.
             # 678K KV tokens at 256K context → ~2 full-context concurrent, more at shorter.
@@ -265,45 +244,14 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
-        qwen3.6-35b-a3b-nvfp4-dflash-vl)
-            # EXPERIMENTAL: DFlash with vision enabled. Validated 2026-04-19:
-            # ViT works on SM110 with TORCH_SDPA, DFlash drafter coexists with
-            # multimodal prompts, ~2s latency per vision request after warmup.
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-DFlash-VL"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
-            THOR_TARGET_MAX_NUM_SEQS="5"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
-        qwen3.6-35b-a3b-prismaquant-dflash)
-            # ★★ DEFAULT — promoted 2026-04-22 after matched-methodology bench.
-            # rdtand/Qwen3.6-35B-A3B-PrismaQuant-4.75bit-vllm.
-            # Mixed-precision compressed-tensors (per-layer NVFP4/FP8/BF16
-            # allocated by Fisher-sensitivity knapsack). ~22 GB weights, ~3 GB
-            # more than RedHatAI NVFP4 baseline. Quality claim: −0.56 pp vs BF16
-            # (uniform NVFP4 is −2.21 pp) — ~4× closer on commonsense benchmarks.
-            # Backends reuse the existing dflash stack (FlashInfer CUTLASS NVFP4
-            # MoE + CutlassFP8 dense + flash_attn + DFlash-15 drafter). No new
-            # kernels, no runtime mods.
-            #
-            # Matched-methodology benchmark (coding prompts, temp=0.2,
-            # enable_thinking=false, 1200 toks, today's drafter main):
-            #   single peak 50.66 / avg 39.80 tok/s
-            #   aggregate N=4 119.22 tok/s, N=5 142.35 tok/s
-            # Beats nvfp4-dflash on every axis (+11–16% at low-to-mid concurrency,
-            # tie at saturation).
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-PrismaQuant-DFlash"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
-            THOR_TARGET_MAX_NUM_SEQS="5"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
+        # qwen3.6-35b-a3b-nvfp4-dflash-vl REMOVED 2026-04-28 — vision support
+        # folded into qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge. See launch.sh.
+        # qwen3.6-35b-a3b-prismaquant-dflash REMOVED 2026-04-28 — was the
+        # default; default re-pointed to qwen3.6-35b-a3b-nvfp4-mtp-fp8kv (the
+        # 93/100 tool-eval-bench winner). PrismaQuant 4.75bpp + DFlash-15 was
+        # tuned for throughput on a different methodology and proved agentic-
+        # weak on our v7 bench (DFlash N=15 → TEB 40-46 across all DFlash
+        # variants).
         qwen3.6-35b-a3b-nvfp4-mtp-fp8kv)
             # EXPERIMENTAL (re-added 2026-04-23 for tool-eval-bench quality testing).
             # NVFP4 weights + MTP N=2 + FP8 KV. MTP N=2 mirrors the 27B-FP8 winning
@@ -318,6 +266,8 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
+        # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv-n4 REMOVED 2026-04-28 — variance probe
+        # done; TEB 91 confirmed N=2 is the right pick for FP8 KV.
         qwen3.6-35b-a3b-nvfp4-tq-mtp)
             # ★ MAX CONTEXT: 28.0 tok/s, 79% acceptance, 2.22M KV tokens
             THOR_MODEL_PROFILE="${requested}"
@@ -329,6 +279,8 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
+        # qwen3.6-35b-a3b-nvfp4-tq-mtp-2 REMOVED 2026-04-28 — TQ + N=2 dominated
+        # by TQ + N=4 (TEB 87 vs 90 at same KV).
         # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv removed — crashes under 8-concurrent
         # (CUDA illegal memory in MoE autotuner at M=128 on SM110). Superseded
         # by qwen3.6-35b-a3b-nvfp4-tq-mtp which is strictly better: larger KV
@@ -376,6 +328,11 @@ resolve_model_profile() {
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_QUANTIZATION=""
             ;;
+        # cosmos-reason2-8b-reasoning REMOVED 2026-04-28 — broken-tuning
+        # experiment, see launch.sh. Use cosmos-reason2-8b instead.
+        # nemotron3-nano-30b-a3b-nvfp4 REMOVED 2026-04-28 — TEB 67/100
+        # mid-pack on Thor; Qwen3.6-MTP family is empirically dominant
+        # at this scale. See PERFORMANCE-V7.md and launch.sh comments.
         gemma4-e4b-it)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="gemma-4-E4B-it"

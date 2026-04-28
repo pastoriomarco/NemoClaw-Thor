@@ -6,6 +6,12 @@
 
 set -euo pipefail
 
+# Auto-read HF_TOKEN from the standard cache file so gated-repo drafters
+# (e.g. z-lab/Qwen3.6-27B-DFlash) can be downloaded without manual export.
+if [[ -z "${HF_TOKEN:-}" && -f "${HOME}/.cache/huggingface/token" ]]; then
+    export HF_TOKEN="$(cat "${HOME}/.cache/huggingface/token")"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/checks.sh"
 source "${SCRIPT_DIR}/lib/config.sh"

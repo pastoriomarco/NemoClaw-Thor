@@ -55,67 +55,24 @@ prepare_thor_launch_profile() {
         # reuse with other NVFP4 split-scale checkpoints.
         # qwen3.5-122b-a10b-nvfp4 profile removed 2026-04-24 — superseded by qwen3.6.
         # qwen3.5-122b-a10b-nvfp4-resharded removed
-        qwen3.6-35b-a3b-fp8-dflash)
-            # ★ BEST THROUGHPUT: 47.6 tok/s avg, 94 tok/s peak with matched z-lab drafter.
-            # Qwen3.6-35B-A3B has head_dim=128 → FA2 works natively on SM110.
-            # DFlash-15 with flash_attn backend. No runtime mods needed.
-            # z-lab/Qwen3.6-35B-A3B-DFlash is gated — requires HF token.
-            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.6-35B-A3B-FP8"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "flash_attn"
-                "--enforce-eager"
-                "--language-model-only"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "8192"
-                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
-            )
-            ;;
-        qwen3.6-35b-a3b-fp8-mtp-fp8kv)
-            # MTP N=4 + FP8 KV: 25.7 tok/s, 80% acceptance, 1.44M KV tokens.
-            # No PR needed. Simpler alternative to TurboQuant.
-            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.6-35B-A3B-FP8"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--enforce-eager"
-                "--language-model-only"
-                "--kv-cache-dtype" "fp8"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "8192"
-                "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
-            )
-            ;;
-        qwen3.6-35b-a3b-nvfp4-dflash-vl)
-            # EXPERIMENTAL: same as qwen3.6-35b-a3b-nvfp4-dflash but with vision enabled.
-            # Removes --language-model-only so the ViT is initialized.
-            # Adds --mm-encoder-attn-backend TORCH_SDPA for the SM110 ViT FA2 PTX crash
-            # workaround (vllm #38411) — same workaround used by qwen3.5-9b VLM profile.
-            # Validated 2026-04-19:
-            #   1. DFlash drafter coexists with multimodal prompts — spec_decode keeps
-            #      drafting (3.5 accepted tokens/round avg across text+vision requests).
-            #   2. Qwen3.6 ViT works on SM110 with TORCH_SDPA (head_dim=128 fits TMEM).
-            #   3. Single model serves agentic coding, bounded semantic selection, and
-            #      vision-aware selection queries with ~2s latency per vision request.
-            # Cold-start first decode is slow (~108s) due to CUDA graph + drafter JIT
-            # warmup; subsequent requests run at ~20 tok/s.
-            # z-lab/Qwen3.6-35B-A3B-DFlash remains gated — requires HF token.
-            THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "flash_attn"
-                "--enforce-eager"
-                "--mm-encoder-attn-backend" "TORCH_SDPA"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "8192"
-                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":15}'
-            )
-            ;;
+        # qwen3.6-35b-a3b-fp8-dflash REMOVED 2026-04-28 — FP8-weights variant
+        # of NVFP4 alternative, plus DFlash N=15 was empirically agentic-bad
+        # (TEB 46). Heavy-coding workloads now use qwen3.6-35b-a3b-nvfp4-dflash
+        # (same RedHatAI/Qwen3.6-35B-A3B-NVFP4 weights as the agentic profiles
+        # — saves ~17 GB Qwen FP8 weights on disk — and uses N=8 which retains
+        # the burst-throughput edge while staying in the v6 87/100 ★★★★ band).
+        # qwen3.6-27b-fp8-dflash REMOVED 2026-04-28 — DFlash N=15 scored TEB 40
+        # (★★ Weak); dominated by qwen3.6-27b-fp8-mtp-kvfp8 (TEB 84). 27B-DFlash
+        # drafter is gated and adds no value on Thor at this N. See PERFORMANCE-V7.md.
+        # qwen3.6-35b-a3b-fp8-mtp-fp8kv REMOVED 2026-04-28 — FP8-weights variant
+        # of an NVFP4 profile that's strictly better at every metric. NVFP4 weights
+        # available via RedHatAI/Qwen3.6-35B-A3B-NVFP4 → use nvfp4-mtp-fp8kv (TEB
+        # 93) or nvfp4-tq-mtp (TEB 90, +1.4× context) instead.
+        # qwen3.6-35b-a3b-nvfp4-dflash-vl REMOVED 2026-04-28 — vision support
+        # folded into qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge (production profile
+        # now serves agentic + vision in one). Same RedHatAI/Qwen3.6-35B-A3B-NVFP4
+        # weights. The MTP-2 + TQ KV path beats DFlash-15 on agentic correctness
+        # (90 vs 46 TEB) without losing the vision capability.
         cosmos-reason2-2b)
             # NVIDIA Cosmos Reason 2 (2B) — VLM for physical AI reasoning,
             # post-trained from Qwen3-VL-2B-Instruct. Qwen3VLForConditionalGeneration
@@ -176,52 +133,46 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "hermes"
             )
             ;;
-        qwen3.6-35b-a3b-fp8-turboquant)
-            # TurboQuant K8V4 + MTP N=4: 26.2 tok/s, 78% acceptance, 1.89M KV tokens at 0.8.
-            # Best KV compression (~2.6x). Requires vLLM with PR #39931 (baked in v6 image)
-            # + fix-pr39931-turboquant mod (full PR replay — gate removal +
-            # TQFullAttentionSpec presence).
-            THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.6-35B-A3B-FP8"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.5}"
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_MODS=fix-pr39931-turboquant"
-            )
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--enforce-eager"
-                "--language-model-only"
-                "--kv-cache-dtype" "turboquant_k8v4"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "8192"
-                "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
-            )
-            ;;
+        # cosmos-reason2-8b-reasoning REMOVED 2026-04-28 — empirically
+        # produced uniform 7-word responses on IFEval-lite vs ~160-word
+        # median on the FP8 cosmos-reason2-8b profile (TEB 52 vs 81).
+        # The {BF16 KV + max-num-seqs=1 + max-num-batched-tokens=16384}
+        # combination triggered some chunked-prefill scheduler edge case
+        # in vLLM v0.20.0 that broke generation. The existing
+        # `cosmos-reason2-8b` profile (FP8 KV, max-num-seqs=3,
+        # max-num-batched-tokens=8192) is the canonical robotics config.
+        #
+        # nemotron3-nano-30b-a3b-nvfp4 REMOVED 2026-04-28 — NVIDIA's Dec 2025
+        # agentic flagship landed at TEB 67/100 ★★★ on Thor, mid-pack vs
+        # Qwen3.6-35B-A3B-NVFP4-MTP-FP8KV at 93/100. Worth re-evaluating if
+        # NVIDIA ships a v2 with stronger tool-call training, but the Qwen3.6
+        # MTP family is empirically dominant at this scale on Thor for now.
+        # See PERFORMANCE-V7.md for the cross-bench data.
+        # qwen3.6-35b-a3b-fp8-turboquant REMOVED 2026-04-28 — FP8-weights variant
+        # of qwen3.6-35b-a3b-nvfp4-tq-mtp (TEB 90, +27% tps, +1.4× ctx). NVFP4
+        # alternative is strictly better on every metric.
+        # qwen3.6-35b-a3b-prismaquant-dflash REMOVED 2026-04-28 — was the
+        # default; default re-pointed to qwen3.6-35b-a3b-nvfp4-mtp-fp8kv. Same
+        # DFlash-agentic-weakness pattern; PrismaQuant 4.75bpp is also obscure.
         qwen3.6-35b-a3b-nvfp4-dflash)
-            # NVFP4 weights + DFlash-8 (was -15 — reduced 2026-04-23 following 27B tool-eval-bench
-            # finding that lower spec-decode N improves quality on edge-case scenarios).
+            # ★ HEAVY CODING / BURST THROUGHPUT: NVFP4 weights + DFlash N=8.
+            # Kept as the canonical DFlash profile after 2026-04-28 cleanup —
+            # the v7 agentic bench established that DFlash N=15 (upstream
+            # default) tanks tool-call quality (TEB 40-46), but DFlash N=8
+            # was the v6 sweet spot (TEB 87/100 ★★★★ Good). At N=8 DFlash is
+            # competitive with MTP for tool-calling AND retains the burst-
+            # throughput advantage (~3-5× peak vs MTP) for long predictable
+            # code stretches. Use this profile when you're doing heavy code
+            # generation rather than agentic tool-calling.
+            #
             # head_dim=128 → flash_attn works natively on SM110.
-            # z-lab/Qwen3.6-35B-A3B-DFlash is gated — requires HF token.
+            # z-lab/Qwen3.6-35B-A3B-DFlash drafter is gated — requires HF_TOKEN
+            # (start-model.sh auto-reads it from ~/.cache/huggingface/token).
+            #
+            # Same RedHatAI/Qwen3.6-35B-A3B-NVFP4 weights as the agentic
+            # profiles, so swapping between this and nvfp4-mtp-fp8kv /
+            # nvfp4-tq-mtp doesn't require a new model download.
             THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "flash_attn"
-                "--enforce-eager"
-                "--language-model-only"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
-                "--max-num-batched-tokens" "32768"
-                "--speculative-config" '{"method":"dflash","model":"z-lab/Qwen3.6-35B-A3B-DFlash","num_speculative_tokens":8}'
-            )
-            ;;
-        qwen3.6-35b-a3b-prismaquant-dflash)
-            # EXPERIMENTAL: PrismaQuant 4.75-bit mixed-precision + DFlash-8 (reduced from 15
-            # following 27B tool-eval-bench finding). Same backend stack as
-            # qwen3.6-35b-a3b-nvfp4-dflash: flash_attn + FlashInfer CUTLASS NVFP4 MoE +
-            # CutlassFP8 dense. Loader dispatches per-layer format automatically
-            # (compressed-tensors format field resolved per config_group).
-            THOR_LAUNCH_MODEL_SOURCE="rdtand/Qwen3.6-35B-A3B-PrismaQuant-4.75bit-vllm"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
@@ -258,17 +209,27 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":2}'
             )
             ;;
+        # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv-n4 REMOVED 2026-04-28 — variance-
+        # probe profile, mission accomplished. TEB 91 confirmed N=2 (TEB 93)
+        # is the right pick for FP8 KV; this profile was empirically dominated.
         qwen3.6-35b-a3b-nvfp4-tq-mtp)
             # ★ MAX CONTEXT: 28.0 tok/s, 79% acceptance, 2.22M KV tokens.
             # NVFP4 weights + TurboQuant K8V4 KV + MTP N=4.
-            # Requires vLLM with PR #39931 (baked in v6 image) + fix-pr39931-turboquant (runtime mod replaying PR
-            # mod (makes hybrid-model gate conditional on TQFullAttentionSpec presence).
+            # Requires fix-pr39931-turboquant runtime mod — PR #39931 was NOT
+            # merged into v0.20.0 (initial research was wrong); v0.20.0 source
+            # still rejects hybrid models. The mod replays the PR idempotently.
+            # VLLM_USE_FLASHINFER_MOE_FP16=0: same fix as nvfp4-tq-mtp-manyforge —
+            # the FlashInfer-CUTLASS unquantized-MoE oracle non-deterministically
+            # picks the SM100-only BF16 tile <128,64,64> on the MTP drafter
+            # forward (no SM110 instantiation → engine init crash). Routing the
+            # drafter MoE to Triton avoids the broken tile entirely.
             THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
             THOR_DOCKER_ENV_ARGS+=(
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
                 "-e" "VLLM_FLASHINFER_MOE_BACKEND=latency"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
                 "-e" "VLLM_MODS=fix-pr39931-turboquant"
             )
             THOR_VLLM_ARGS+=(
@@ -282,33 +243,49 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":4}'
             )
             ;;
+        # qwen3.6-35b-a3b-nvfp4-tq-mtp-2 REMOVED 2026-04-28 — N=2 hypothesis-
+        # test profile, dominated. TEB 87 (vs 90 for nvfp4-tq-mtp at same KV
+        # with N=4). With TQ KV, N=4 wins; with FP8 KV, N=2 wins. See full
+        # 2×2 KV×N matrix in PERFORMANCE-V7.md.
         # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv removed — crashes under 8-concurrent
         # (MoE autotuner picks invalid SM110 tile at M=128). Superseded by
         # qwen3.6-35b-a3b-nvfp4-tq-mtp which is strictly better on all axes.
         # qwen3.5-35b-a3b-nvfp4 removed — superseded by qwen3.6
 
         qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge)
-            # ★ MANYFORGE PRODUCTION: NVFP4 weights + TurboQuant K8V4 KV + MTP N=2.
-            # Validated 2026-04-19 via 7-test reliability battery (stress study):
-            # 100% pass on JSON schema / tool call / multi-turn / 60K needle /
-            # 3-concurrent / 2K sustained decode; MTP acceptance 97-99% across
-            # 5 consecutive requests (no vllm#38182 collapse).
+            # ★ MANYFORGE PRODUCTION: NVFP4 weights + TurboQuant K8V4 KV + MTP N=2 + VISION.
+            # Validated 2026-04-19 (LM-only) via 7-test reliability battery: 100% pass on
+            # JSON schema / tool call / multi-turn / 60K needle / 3-concurrent / 2K sustained
+            # decode; MTP acceptance 97-99% across 5 consecutive requests.
             # Throughput: 18.5 tok/s single, 46 tok/s at 3-concurrent aggregate.
-            # Sized for 3×64K context with moderate KV headroom (~2.6× minimum).
-            # gpu_mem_util=0.32 → ~500K KV tokens vs 192K needed for 3×64K.
-            # Leaves ~70% of Thor free to co-serve a second model (cosmos-reason2-2b).
+            # Sized for 3×64K context. KV at TQ K8V4 with vision enabled: ~450K tokens vs
+            # 192K needed for 3×64K (still 2.3× headroom).
+            # Vision enabled 2026-04-28: removed --language-model-only, added
+            # --mm-encoder-attn-backend TORCH_SDPA (SM110 ViT FA2 PTX crash workaround,
+            # vllm #38411). ViT (~830 MB BF16 weights + ~1.5 GB activation peak) replaces
+            # the now-deleted nvfp4-dflash-vl experimental profile and unifies coding +
+            # vision in the production profile.
+            # Leaves ~68% of Thor free to co-serve cosmos-reason2-2b (gpu_mem_util 0.12)
+            # or cosmos-reason2-8b (0.25).
             THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.32}"
+            # NOTE: fix-pr39931-turboquant mod required again on v7 — PR #39931 did NOT
+            # actually merge into vLLM v0.20.0; hybrid-rejection guard still in source.
+            # VLLM_USE_FLASHINFER_MOE_FP16=0: at max-num-seqs=3, the FlashInfer-CUTLASS
+            # unquantized MoE autotuner picks tile <128,64,64> which is BF16+SM100-only
+            # and has no SM110 instantiation — drafter forward crashes on engine init.
+            # Routing the unquantized drafter MoE to Triton avoids the broken tile.
             THOR_DOCKER_ENV_ARGS+=(
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
                 "-e" "VLLM_FLASHINFER_MOE_BACKEND=latency"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
                 "-e" "VLLM_MODS=fix-pr39931-turboquant"
             )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--enforce-eager"
-                "--language-model-only"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
                 "--kv-cache-dtype" "turboquant_k8v4"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_xml"
@@ -386,6 +363,8 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.4}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
+            # --max-num-batched-tokens 4096: same MM-encoder-budget reason as 31B
+            # (vLLM v0.20.0 enforces ≥ max_tokens_per_mm_item).
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--attention-backend" "triton_attn"
@@ -394,6 +373,7 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "gemma4"
                 "--enable-prefix-caching"
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--max-num-batched-tokens" "4096"
             )
             ;;
         gemma4-31b-it-nvfp4)
@@ -413,6 +393,11 @@ prepare_thor_launch_profile() {
             THOR_DOCKER_ENV_ARGS+=(
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
             )
+            # --max-num-batched-tokens 4096: vLLM v0.20.0+ enforces that
+            # max_num_batched_tokens >= max_tokens_per_mm_item (2496 for SigLIP2 vision
+            # encoder). Default 2048 fails at boot with ValueError. 4096 is the
+            # nearest multiple of 1024 that clears it; bump higher if MM throughput
+            # becomes an issue.
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--attention-backend" "triton_attn"
@@ -422,6 +407,7 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "gemma4"
                 "--enable-prefix-caching"
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--max-num-batched-tokens" "4096"
             )
             ;;
         gemma4-26b-a4b-it)

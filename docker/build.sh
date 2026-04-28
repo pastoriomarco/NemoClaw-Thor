@@ -10,12 +10,13 @@
 # already-built components.
 #
 # Usage:
-#   ./build.sh                              # defaults: latest main, 8 jobs
-#   ./build.sh --vllm-ref v0.8.5            # pin vLLM to a tag/branch/SHA
-#   ./build.sh --flashinfer-ref v0.6.1      # pin FlashInfer
-#   ./build.sh --build-jobs 6               # limit parallelism
-#   ./build.sh --apply-vllm-pr 12345        # cherry-pick a PR onto vLLM
-#   ./build.sh --tf5                        # use transformers >= 5
+#   ./build.sh                              # defaults: v7 build (vLLM v0.20.0 + FlashInfer v0.6.9 + 14 jobs)
+#   ./build.sh --vllm-ref v0.20.0           # pin vLLM to a tag/branch/SHA
+#   ./build.sh --flashinfer-ref v0.6.9      # pin FlashInfer
+#   ./build.sh --build-jobs 8               # lower parallelism if rebuilding while serving
+#   ./build.sh --apply-vllm-pr 40941        # cherry-pick a PR onto vLLM
+#   ./build.sh --tf5                        # use transformers >= 5 (default: ON for v7)
+#   ./build.sh --no-tf5                     # disable the >=5 override (legacy behavior)
 #   ./build.sh --skip-flashinfer            # reuse existing FlashInfer wheels
 #   ./build.sh --skip-vllm                  # reuse existing vLLM wheels
 #   ./build.sh --image-name my-vllm:latest  # custom image tag
@@ -25,13 +26,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Raise BuildKit per-step log limits so verbose RUN steps (notably FlashInfer's
+# 10k-cubin download and vLLM's nvcc compile flood) don't get truncated with
+# "[output clipped, log limit 2MiB reached]". Defaults: 2MiB size, 200KiB/s.
+export BUILDKIT_STEP_LOG_MAX_SIZE=${BUILDKIT_STEP_LOG_MAX_SIZE:-104857600}    # 100 MiB
+export BUILDKIT_STEP_LOG_MAX_SPEED=${BUILDKIT_STEP_LOG_MAX_SPEED:-10485760}    # 10 MiB/s
+
 # ── Defaults ────────────────────────────────────────────────────────
-# Pinned to the validated v6 build (2026-04-17). Override with --vllm-ref / etc.
-# Reset to "main" when starting a new development stint.
-VLLM_REF="9965f501a89204769a53c86cdee2528947373747"
-FLASHINFER_REF="25b324dbad53942a695a1f00cd7837800de25634"
-BUILD_JOBS=12
-CUDA_BASE="nvidia/cuda:13.0.0-devel-ubuntu24.04"
+# v7 build (2026-04-27): vLLM v0.20.0 (first stable with all Thor fixes —
+# #39233 sm_110 build target, #39546 SM100+ spec-decode, #40092 TQ+FA prefill,
+# #40654 sync removal, MRv2 acceptance fixes), FlashInfer v0.6.9 stable.
+# Override with --vllm-ref / --flashinfer-ref. Use "main" for bleeding edge.
+VLLM_REF="v0.20.0"
+FLASHINFER_REF="v0.6.9"
+# Thor has 14 ARM cores. Default to full parallelism. Drop to 8-10 only when
+# rebuilding while a vLLM model is actively serving (memory pressure).
+BUILD_JOBS=14
+CUDA_BASE="nvidia/cuda:13.0.3-devel-ubuntu24.04"
 TORCH_CUDA_ARCH_LIST="11.0a"
 FLASHINFER_CUDA_ARCH_LIST="11.0a"
 IMAGE_NAME="nemoclaw-thor/vllm"
@@ -42,7 +53,7 @@ IMAGE_TAG=""  # auto-generated if empty
 # can change upstream without warning, and git apply often rejects the
 # in-place edits anyway due to context drift).
 VLLM_PRS=""
-PRE_TRANSFORMERS=0
+PRE_TRANSFORMERS=1
 SKIP_FLASHINFER=0
 SKIP_VLLM=0
 REBUILD_FLASHINFER=0
@@ -61,6 +72,7 @@ while [[ $# -gt 0 ]]; do
         --image-tag)          IMAGE_TAG="$2";              shift 2 ;;
         --apply-vllm-pr)      VLLM_PRS="${VLLM_PRS:+$VLLM_PRS }$2"; shift 2 ;;
         --tf5)                PRE_TRANSFORMERS=1;          shift ;;
+        --no-tf5)             PRE_TRANSFORMERS=0;          shift ;;
         --skip-flashinfer)    SKIP_FLASHINFER=1;           shift ;;
         --skip-vllm)          SKIP_VLLM=1;                 shift ;;
         --rebuild-flashinfer) REBUILD_FLASHINFER=1;        shift ;;
@@ -227,5 +239,5 @@ echo "  Transformers >= 5: $([ "$PRE_TRANSFORMERS" = "1" ] && echo "yes" || echo
 echo ""
 echo "To use with NemoClaw-Thor:"
 echo "  export THOR_VLLM_IMAGE=${IMAGE_NAME}:${IMAGE_TAG}"
-echo "  ./start-model.sh qwen3.5-35b-a3b-fp8"
+echo "  ./start-model.sh qwen3.6-35b-a3b-fp8-dflash"
 echo ""
