@@ -1,27 +1,46 @@
-# ManyForge Assistant — LLM stack deployment plan for Jetson Orin AGX
+# ManyForge Assistant — LLM Stack Deployment Plan for Thor and Jetson Orin AGX
 
 **Status:** PENDING — tests deferred until the manyforge-assistant agent is
 operative on Thor. This document captures the future evaluation plan.
 
-**Target hardware:** Jetson Orin AGX Dev Kit (64 GB unified memory, SM86
-Ampere — *different from Thor SM110a*).
+**Target hardware:**
 
-**Memory budget:** **≤ 40 GB total for the LLM stack** so ≥ 24 GB stays
-free for the Isaac ROS perception/control pipeline running on the same
-device.
+- Thor: development/evaluation target with Blackwell-class GPU behavior and
+  substantially more memory headroom.
+- Jetson Orin AGX Dev Kit: constrained deployment target with 64 GB unified
+  memory and Ampere SM86 behavior.
+
+**Memory budget:** on Orin, target **30-40 GB total for the LLM stack** so
+ManyForge, NemoClaw/OpenClaw services, Isaac ROS, controller/runtime services,
+and perception models such as FoundationPose, RT-DETR, and nvblox have usable
+headroom on the same device.
+
+**ManyForge contract references:**
+
+- `/home/tndlux/workspaces/dev_ws/src/manyforge/docs/plans/AI_ASSISTANT_INTEGRATION_PLAN.md`
+- `/home/tndlux/workspaces/dev_ws/src/manyforge/docs/reference/ASSISTANT_BACKEND_CONTRACT.md`
+
+ManyForge owns the assistant provider contract, tool contracts, proposal
+review/apply boundary, and workflow tests. This document owns model-serving
+profiles, memory budgets, and platform-specific deployment tradeoffs.
 
 ---
 
 ## Goal
 
-Decide which Thor-validated profile (or combination) is the right fit
-for the manyforge-assistant agent on Orin AGX, given the 40 GB constraint.
+Decide which Thor-validated profile, or combination of profiles, is the right
+fit for the manyforge-assistant agent across Thor and Orin AGX.
 
-The Thor v7 bench already established the agentic-quality ceiling for
-each candidate (see `PERFORMANCE-V7.md`). What's outstanding is
-**workload-specific validation against the manyforge-assistant agent's
-actual tool calls and pipeline workflows** — and **whether each profile
-fits the Orin AGX 40 GB budget at all**.
+Thor remains the primary development and evaluation platform. Orin AGX is the
+strict deployment budget case: any profile intended for field deployment must
+fit the 30-40 GB LLM envelope while leaving enough memory for the robotics and
+perception stack.
+
+The Thor v7 bench already established the agentic-quality ceiling for each
+candidate (see `PERFORMANCE-V7.md`). What's outstanding is
+**workload-specific validation against the manyforge-assistant agent's actual
+tool calls and pipeline workflows** and **whether each profile fits the Orin
+AGX shared-memory budget with the rest of the stack present**.
 
 ---
 
