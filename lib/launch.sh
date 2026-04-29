@@ -191,7 +191,11 @@ prepare_thor_launch_profile() {
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
                 "--reasoning-parser" "nemotron_v3"
-                "--kernel-config" '{"enable_flashinfer_autotune": false}'
+                # v7 needed `--kernel-config '{"enable_flashinfer_autotune": false}'`
+                # here to dodge a cuDNN sublibrary-version mismatch (apt 9.21.1
+                # + pip 9.20.0). v8 drops the apt cuDNN and relies on pip's
+                # bundled nvidia-cudnn-cu13==9.20.0.48, so the autotuner can
+                # run again. Re-enable verified at v8 boot 2026-04-29.
             )
             ;;
         # cosmos-reason2-8b-reasoning REMOVED 2026-04-28 — empirically

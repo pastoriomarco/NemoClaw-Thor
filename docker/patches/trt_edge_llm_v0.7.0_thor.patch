@@ -1,0 +1,56 @@
+## TRT-Edge-LLM v0.7.0 Thor build fixes
+##
+## Two minimal patches against `release/0.7.0` to remove the workarounds
+## the Dockerfile would otherwise need:
+##
+## 1. setup_pybind.py: forward `ENABLE_CUTE_DSL` env var to cmake. Without
+##    this the pybind build defaults to ENABLE_CUTE_DSL=OFF, which means the
+##    nvfp4_moe / fmha / gdn / gemm / ssd kernel groups don't link in and
+##    Mamba-MoE inference (Omni, Qwen3.6-MoE) crashes at first token with
+##    `NvFP4MoEContiguousGemmRunner: decomposed AOT kernels not enabled`.
+##
+## 2. setup_pybind.py: the post-build packaging step looks for the .so at
+##    `build/pybind/` but cmake's per-target LIBRARY_OUTPUT_DIRECTORY puts
+##    it under `build/temp.linux-aarch64-cpython-312/_edgellm_runtime/pybind/`.
+##    Patch the validation to look at the actual cmake output dir.
+##
+## When upstream version bumps, retry-applying this patch with
+## `git apply --3way` will succeed if context is intact, fail noisily if not.
+## Either fix the patch or upstream a PR.
+
+diff --git a/experimental/server/setup_pybind.py b/experimental/server/setup_pybind.py
+--- a/experimental/server/setup_pybind.py
++++ b/experimental/server/setup_pybind.py
+@@ -64,6 +64,15 @@ class CMakeBuild(build_ext):
+                 "-DCMAKE_TOOLCHAIN_FILE=cmake/aarch64_linux_toolchain.cmake")
+             cmake_args.append("-DEMBEDDED_TARGET=jetson-thor")
+
++        # NemoClaw-Thor patch: forward ENABLE_CUTE_DSL so the pybind build
++        # links the prebuilt nvfp4_moe + 4 other kernel groups for SM110
++        # (required for Mamba-MoE inference on Omni / Qwen3.6-MoE class
++        # models). Default upstream behavior leaves these kernels out and
++        # MoE inference crashes at first token.
++        _enable_cute_dsl = os.environ.get("ENABLE_CUTE_DSL", "")
++        if _enable_cute_dsl:
++            cmake_args.append(f"-DENABLE_CUTE_DSL={_enable_cute_dsl}")
++
+         if os.environ.get("ENABLE_CUTE_DSL_FMHA", "").lower() in (
+                 "1",
+                 "true",
+@@ -119,8 +128,16 @@ class CMakeBuild(build_ext):
+
+         ext_filename = self.get_ext_filename(self.get_ext_fullname(ext.name))
+         built_so = pybind_out_dir / os.path.basename(ext_filename)
++        # NemoClaw-Thor patch: cmake's per-target LIBRARY_OUTPUT_DIRECTORY
++        # overrides the global flag, so the .so lands in the build temp dir
++        # rather than build/pybind/. Search both before failing.
++        if not built_so.exists():
++            for cand in Path(self.build_temp).rglob(os.path.basename(ext_filename)):
++                if cand.is_file():
++                    built_so = cand
++                    break
+         build_lib_dir = (Path.cwd() / self.build_lib).resolve()
+         dest_so = build_lib_dir / ext_filename
+         dest_so.parent.mkdir(parents=True, exist_ok=True)
+         if built_so.exists():
+             shutil.copy2(built_so, dest_so)

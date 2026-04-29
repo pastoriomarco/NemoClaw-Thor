@@ -233,6 +233,29 @@ When ManyForge integration is enabled, the same script also persists the mux
 state in `~/.config/nemoclaw-thor/config.env` so `status.sh` and later runs
 stay consistent.
 
+## Building images
+
+The repo produces two independent runtime images (vLLM and TRT-Edge-LLM) plus
+a production bundle of the vLLM image with baked-in JIT caches.
+
+| Goal | Command | Dockerfile | Output image |
+|---|---|---|---|
+| Build/rebuild vLLM | `cd docker && ./build-vllm.sh` | `Dockerfile.vllm` | `nemoclaw-thor/vllm:<tag>` + `:latest` |
+| Build/rebuild TRT-Edge-LLM | `cd docker && ./build-trt.sh` | `Dockerfile.trt` | `nemoclaw-thor/trt-edge-llm:<tag>` + `:latest` |
+| Build vLLM production bundle | `cd docker && ./bundle.sh` | `Dockerfile.bundle` | `nemoclaw-thor/vllm:<tag>-bundled` |
+| Add a package without full rebuild | `cd docker && docker build -f Dockerfile.overlay -t nemoclaw-thor/vllm:latest .` | `Dockerfile.overlay` | overrides `:latest` |
+
+Each `build-*.sh` accepts `--help` for arg reference. Both vLLM and TRT
+builds share apt cache (`id=apt-cache-thor`) and pip cache mounts so package
+downloads done by either build are reused by the other on subsequent runs.
+
+vLLM and TRT-Edge-LLM images are independent — no inheritance — so you can
+delete or rebuild either without affecting the other. They co-exist on disk
+fine; the host filesystem deduplicates layers where possible.
+
+For the **runtime tradeoff** between vLLM and TRT-Edge-LLM (memory, throughput,
+which model classes work best with which runtime), see `PERFORMANCE-V7.md`.
+
 ## Key files
 
 ```
@@ -246,8 +269,14 @@ NemoClaw-Thor/
 │   ├── sandbox-runtime.sh      # sync_sandbox_runtime_config(), sandbox helpers
 │   └── checks.sh               # Diagnostic checks for status.sh
 ├── docker/
-│   ├── Dockerfile              # Multi-stage vLLM build for SM110
-│   ├── build.sh                # Build orchestration
+│   ├── Dockerfile.vllm         # Multi-stage vLLM build for SM110
+│   ├── Dockerfile.trt          # TensorRT-Edge-LLM standalone build for SM110
+│   ├── Dockerfile.bundle       # vLLM bundled with baked-in JIT caches (production)
+│   ├── Dockerfile.overlay      # Quick add-package overlay (dev convenience)
+│   ├── build-vllm.sh           # vLLM build orchestration (multi-phase)
+│   ├── build-trt.sh            # TRT-Edge-LLM build orchestration (single-stage)
+│   ├── bundle.sh               # vLLM production bundle wrapper
+│   ├── patches/                # Build-time patches (FlashInfer, TRT-Edge-LLM)
 │   └── NOTES.md                # SM110 compatibility map, build history
 └── KV-CACHE-BUDGET.md          # Memory planning reference
 ```

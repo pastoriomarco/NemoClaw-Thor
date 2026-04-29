@@ -1,5 +1,5 @@
-build_date: 2026-04-27T17:20:03Z
-script_commit: 399876ee319e1abd2c5a10c6c190c6fb3cc4a42d
+build_date: 2026-04-29T08:11:01Z
+script_commit: db2533d492075a565eadc968936320b73e752bbf
 vllm_ref: v0.20.0
 vllm_commit: b8160878f07fe6aff02deb12bc842df3fa4a9237
 flashinfer_ref: v0.6.9

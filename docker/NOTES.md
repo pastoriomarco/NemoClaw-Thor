@@ -26,7 +26,7 @@ TurboQuant K8V4 KV cache, flash_attn (head_dim=128), tool calling (qwen3_xml).
 
 ### Pinned versions
 
-The `build.sh` defaults and `Dockerfile` pip installs were pinned on
+The `build-vllm.sh` defaults and `Dockerfile.vllm` pip installs were pinned on
 2026-04-17 (commit `fc33d58`) so a fresh rebuild produces the same image.
 **Reset to `main`/unpinned when starting the next development stint.**
 
@@ -357,16 +357,16 @@ Without JIT caches: startup time on first launch = ~50-60 min (JIT recompiles, t
 ```bash
 # Full rebuild (latest vLLM main):
 cd src/NemoClaw-Thor/docker
-./build.sh
+./build-vllm.sh
 
 # Incremental rebuild (reuse cached FlashInfer wheels):
-./build.sh --skip-flashinfer
+./build-vllm.sh --skip-flashinfer
 
 # Pin to specific vLLM commit:
-./build.sh --vllm-ref 58a249bc6
+./build-vllm.sh --vllm-ref 58a249bc6
 
 # Lower parallelism if build OOMs:
-./build.sh --build-jobs 4
+./build-vllm.sh --build-jobs 4
 ```
 
 ## Build phases
@@ -381,15 +381,18 @@ Wheels are cached in `./wheels/`. `--skip-flashinfer` or `--skip-vllm` reuse the
 
 ```
 docker/
-├── Dockerfile              # Multi-stage build (base → flashinfer-builder → vllm-builder → runner)
-├── build.sh                # Build orchestration
-├── NOTES.md                # This file
+├── Dockerfile.vllm                     # vLLM multi-stage build (base → flashinfer-builder → vllm-builder → runner)
+├── Dockerfile.trt                      # TensorRT-Edge-LLM standalone build (single-stage)
+├── Dockerfile.bundle                   # vLLM production bundle (baked-in JIT caches)
+├── Dockerfile.overlay                  # Quick add-package overlay (dev convenience)
+├── build-vllm.sh                       # vLLM build orchestration (multi-phase)
+├── build-trt.sh                        # TRT-Edge-LLM build orchestration (single-stage)
+├── bundle.sh                           # vLLM production bundle wrapper
+├── NOTES.md                            # This file
 ├── patches/
 │   ├── flashinfer_cache.patch          # Skip re-downloading existing cubins
-│   └── vllm_sm110_no_sm100_cutlass.patch  # Strips SM100 CUTLASS from arch lists
-│                                           # NOTE: fails on vLLM g58a249bc6+, skipped gracefully
-│                                           # Python patch in Dockerfile handles it instead
-└── wheels/                 # Exported wheel cache (gitignored)
+│   └── trt_edge_llm_v0.7.0_thor.patch  # TRT-Edge-LLM Thor build fixes (CUTE_DSL forwarding + .so path)
+└── wheels/                             # Exported wheel cache (gitignored)
     ├── flashinfer_*.whl
     └── vllm-*.whl
 ```

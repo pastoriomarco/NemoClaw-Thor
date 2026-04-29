@@ -415,8 +415,8 @@ single-shot best-case in `lib/config.sh`.
 
 ## Documents updated/created during this work
 
-- `docker/Dockerfile` — pin updates, build-job parallelism (12→14)
-- `docker/build.sh` — defaults updated to v0.20.0 / v0.6.9 / 14 jobs / CUDA 13.0.3
+- `docker/Dockerfile.vllm` (renamed from `Dockerfile`) — pin updates, build-job parallelism (12→14)
+- `docker/build-vllm.sh` (renamed from `build.sh`) — defaults updated to v0.20.0 / v0.6.9 / 14 jobs / CUDA 13.0.3
 - `docker/PATCHES-AUDIT.md` — full patch lifecycle audit
 - `docker/mods/README.md` — placeholder (mods all removed)
 - `docker/mods/{fix-pr39931-turboquant,fix-nvfp4-moe-scale-merge}/` — deleted

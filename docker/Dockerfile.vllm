@@ -1,15 +1,35 @@
 # syntax=docker/dockerfile:1.6
 #
-# NemoClaw-Thor vLLM Container — v7 generation
+# NemoClaw-Thor vLLM Container — v8 generation
 # Builds vLLM + FlashInfer from source for Jetson AGX Thor (sm110 / Blackwell).
 #
 # Adapted from spark-vllm-docker (sm121) — stripped of Ray/cluster logic,
 # retargeted for single-node Thor with CUDA 13.0 and JetPack 7.1.
 #
-# Recommended invocation for the v7 image:
-#   ./build.sh --vllm-ref v0.20.0 --flashinfer-ref v0.6.9
+# v8 changes vs v7 (2026-04-29):
+#   - DROPPED apt libcudnn9-cuda-13 in both stages. v7 had apt cuDNN 9.21.1
+#     and pip cuDNN 9.20.0 (transitive via torch nightly) installed
+#     simultaneously. nvidia-runtime ld.so.cache prefers the apt copy, while
+#     PyTorch's own runtime checks the pip version it was built against —
+#     this surfaced as cuDNN SUBLIBRARY_VERSION_MISMATCH on Nemotron 3 Nano
+#     Omni's FlashInfer autotuner path. Workaround in v7 was profile-level
+#     `--kernel-config '{"enable_flashinfer_autotune": false}'`. v8 fixes
+#     it at the image level by relying solely on pip nvidia-cudnn-cu13.
+#   - ADDED audio dependencies (librosa, soundfile + apt ffmpeg) so Nemotron
+#     Omni's audio modality boots without a vllm[audio] post-install.
+#   - vLLM and FlashInfer pins UNCHANGED — v7 stack is proven on every
+#     active profile; v8 is a hygiene + targeted-fixes release, not a major
+#     version bump. Bumping vLLM should be a separate v9 once a clean
+#     upstream release lands with all v0.20.0 + post-release fixes we depend on.
+#   - BUMPED transformers 5.6.2 → 5.7.0 for: Qwen3.5 GDN linear-attention cached
+#     forward correctness fix, Gemma4 rotary kernel + config-driven inference
+#     fixes, continuous batching memory/KV-dedup fixes ≥16K (we run 64K),
+#     NVFP4+torchao serialization fix. All directly relevant to active profiles.
 #
-# Why those pins (researched 2026-04-27):
+# Recommended invocation for the v8 image:
+#   ./build-vllm.sh --vllm-ref v0.20.0 --flashinfer-ref v0.6.9
+#
+# Why those pins (researched 2026-04-27, still current 2026-04-29):
 #   - vLLM v0.20.0 (tagged 2026-04-27) is the first stable release containing all
 #     the Thor-relevant fixes: PR #39233 (sm_110 build target), PR #39546 (SM100+
 #     spec-decode test fix), PR #40092 (TurboQuant FA3/FA4 prefill enablement),
@@ -20,9 +40,9 @@
 #     e5m2 forward (PR #2109), unblocks DFlash + FP8 KV combo on Blackwell.
 #
 # Usage:
-#   ./build.sh --vllm-ref v0.20.0 --flashinfer-ref v0.6.9   # canonical v7 build
-#   ./build.sh --vllm-ref main                              # bleeding edge, NOT recommended
-#   ./build.sh --build-jobs 8                               # lower parallelism if constrained
+#   ./build-vllm.sh --vllm-ref v0.20.0 --flashinfer-ref v0.6.9   # canonical v8 build
+#   ./build-vllm.sh --vllm-ref main                              # bleeding edge, NOT recommended
+#   ./build-vllm.sh --build-jobs 8                               # lower parallelism if constrained
 
 # ── Build tunables ──────────────────────────────────────────────────
 # Thor has 14 ARM cores (Cortex-A78AE). Default to full parallelism. With 128 GiB
@@ -51,15 +71,26 @@ ENV UV_BREAK_SYSTEM_PACKAGES=1
 ENV UV_LINK_MODE=copy
 ENV VLLM_BASE_DIR=/workspace/vllm
 
-# Build dependencies
-RUN apt update && \
+# Tell apt to keep .deb files post-install so the BuildKit cache mount
+# below actually accumulates downloads (default noble behavior is to delete).
+RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+    > /etc/apt/apt.conf.d/keep-downloaded
+
+# Build dependencies — v8 drops apt libcudnn9-* (was source of the Omni
+# SUBLIBRARY_VERSION_MISMATCH crash). cuDNN is supplied via pip's
+# nvidia-cudnn-cu13 (transitive through torch nightly + explicit pin below).
+#
+# Apt cache mount uses the same id `apt-cache-thor` as Dockerfile.trt, so
+# package downloads are shared across both image trees. First build of
+# either populates the cache; subsequent builds of either reuse it.
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,id=apt-lists-thor,sharing=locked \
+    apt update && \
     apt install -y --no-install-recommends --allow-change-held-packages \
     curl vim cmake build-essential ninja-build \
-    libcudnn9-cuda-13 libcudnn9-dev-cuda-13 \
     python3-dev python3-pip git wget \
     libnccl-dev libnccl2 libibverbs1 libibverbs-dev rdma-core \
     ccache \
-    && rm -rf /var/lib/apt/lists/* \
     && pip install uv
 
 # PyTorch nightly (cu130 — matches host CUDA 13.0 driver, avoids PTX version mismatch).
@@ -78,6 +109,13 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
          "torchaudio==2.11.0.dev20260426+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
      uv pip install "nvidia-nvshmem-cu13==3.6.5" "apache-tvm-ffi==0.1.10" filelock pynvml requests tqdm
+
+# v8: pin pip cuDNN explicitly so it can't drift in the resolver. torch nightly
+# pulls nvidia-cudnn-cu13 transitively; pinning here documents the exact build
+# version and keeps base+runner stages aligned. Drop or bump only when both
+# stages are bumped together.
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+     uv pip install "nvidia-cudnn-cu13==9.20.0.48"
 
 # Ccache
 ENV PATH=/usr/lib/ccache:$PATH
@@ -329,14 +367,23 @@ ENV UV_SYSTEM_PYTHON=1
 ENV UV_BREAK_SYSTEM_PACKAGES=1
 ENV UV_LINK_MODE=copy
 
-# Runtime dependencies
-RUN apt update && \
+# Tell apt to keep .deb files post-install so the BuildKit cache mount
+# below actually accumulates downloads (default noble behavior is to delete).
+RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+    > /etc/apt/apt.conf.d/keep-downloaded
+
+# Runtime dependencies — v8 drops apt libcudnn9-cuda-13 (see header for why).
+# Adds ffmpeg + libsndfile for Nemotron Omni audio decode (librosa/soundfile
+# need the system libs to actually open audio files).
+# Apt cache mount shares with Dockerfile.trt via the same id `apt-cache-thor`.
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,id=apt-lists-thor,sharing=locked \
+    apt update && \
     apt install -y --no-install-recommends --allow-change-held-packages \
     python3 python3-pip python3-dev vim curl git wget \
-    libcudnn9-cuda-13 \
     libnccl-dev libnccl2 libibverbs1 libibverbs-dev rdma-core \
     libxcb1 \
-    && rm -rf /var/lib/apt/lists/* \
+    ffmpeg libsndfile1 \
     && pip install uv
 
 WORKDIR $VLLM_BASE_DIR
@@ -351,7 +398,8 @@ RUN mkdir -p tiktoken_encodings && \
 ARG PRE_TRANSFORMERS=1
 ENV UV_HTTP_TIMEOUT=300
 
-# PyTorch (cu130 — matches host CUDA 13.0 driver) — pinned to 2026-04-26 nightly (v7)
+# PyTorch (cu130 — matches host CUDA 13.0 driver) — pinned to 2026-04-26 nightly.
+# v7 pin retained for v8 (still the latest live nightly with all our fixes).
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
      uv pip install \
          "torch==2.13.0.dev20260426+cu130" \
@@ -362,6 +410,11 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
      uv pip install "nvidia-nvshmem-cu13==3.6.5" "apache-tvm-ffi==0.1.10"
 
+# v8: pin pip cuDNN to match the base stage. Same version both sides keeps the
+# torch ABI happy and avoids any chance of a runtime/build-time mismatch.
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+     uv pip install "nvidia-cudnn-cu13==9.20.0.48"
+
 # Install FlashInfer + vLLM wheels (bind-mounted from host ./wheels/)
 # Exclude flashinfer_cubin wheel: precompiled cubins are downloaded from upstream
 # and target sm100f — they crash on sm110 (Thor).
@@ -369,19 +422,24 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # FLASHINFER_CUDA_ARCH_LIST=11.0a and contain valid sm_110a code.
 # This enables the FlashInfer attention backend on Thor.
 # With --tf5 (PRE_TRANSFORMERS=1, the default): override vLLM's and compressed-tensors'
-# transformers<5 constraint, then explicitly install transformers==5.6.2 (v7).
+# transformers<5 constraint, then explicitly install transformers==5.7.0 (v8).
 # transformers 5.2.0: first native Qwen3.5 support.
 # transformers 5.3.0: NVFP4 Blackwell quantization integration, Qwen3.5 bug fixes.
 # transformers 5.4.0: Qwen3.5 classification, FP8 grouped matmul speedup.
 # transformers 5.5.0: Gemma 4 model class (Gemma4ForConditionalGeneration),
 #   Gemma4Config, Gemma4VisionConfig, Gemma4AudioConfig, Gemma4Processor.
 # transformers 5.6.x: post-5.5 Qwen3.6-MoE / Gemma 4 / NVFP4 fixes.
+# transformers 5.7.0 (v8 bump, 2026-04-28): Qwen3.5 GDN linear-attention cached
+#   multi-token forward fix (correctness), Gemma4 rotary kernel incompatibility
+#   fix + config-driven inference, continuous batching KV-dedup and memory
+#   estimation fixes for sequences ≥16K (we run 64K), NVFP4+torchao
+#   serialization fix. Smoke-test all profiles after the build to confirm.
 RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
     --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     if [ "$PRE_TRANSFORMERS" = "1" ]; then \
         echo "transformers>=5.0.0" > /tmp/tf-override.txt && \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin) --override /tmp/tf-override.txt && \
-        uv pip install "transformers==5.6.2" --override /tmp/tf-override.txt; \
+        uv pip install "transformers==5.7.0" --override /tmp/tf-override.txt; \
     else \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin); \
     fi
@@ -413,6 +471,13 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv pip install "triattention @ git+https://github.com/WeianMao/triattention.git@325297218a" && \
     uv pip install "flash-attn-4==4.0.0b10" "nvidia-cutlass-dsl==4.4.2"
 
+# v8: vLLM audio extras — librosa + soundfile cover Nemotron 3 Nano Omni's
+# audio modality (Parakeet encoder feed). audioread is librosa's fallback
+# decoder. Without these, the Omni audio path fails on first audio request.
+# apt's ffmpeg + libsndfile1 (above) supply the system codecs they wrap.
+RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+    uv pip install "librosa>=0.10.2" "soundfile>=0.12.1" "audioread>=3.0.1"
+
 # flash_attn shim: merge vendored vllm_flash_attn modules into the flash-attn-4
 # package. flash-attn-4 only provides cute/, but vLLM also imports flash_attn.ops
 # (for rotary embeddings) and flash_attn_interface (for varlen_fwd). Copy missing
@@ -440,7 +505,7 @@ RUN SITE=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
         echo "flash_attn shim: nothing to do"; \
     fi
 
-# Build metadata (generated by build.sh)
+# Build metadata (generated by build-vllm.sh)
 COPY build-metadata.yaml /workspace/build-metadata.yaml
 
 # Default entrypoint: apply mods then exec into vllm

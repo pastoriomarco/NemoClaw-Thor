@@ -1,0 +1,195 @@
+# syntax=docker/dockerfile:1.6
+#
+# NemoClaw-Thor — TensorRT-Edge-LLM v0.7.0 standalone image (Thor SM110a)
+#
+# Production-ready standalone image. Does NOT inherit from the vLLM image —
+# carrying a parallel vLLM Python stack into a TRT-only deployment would
+# waste 14+ GB of image transfer for Orin/Thor edge.
+#
+# Why this Dockerfile is the way it is — all settings here trace back to
+# specific upstream gaps in TRT-Edge-LLM v0.7.0:
+#
+#   * EMBEDDED_TARGET=jetson-thor + aarch64 toolchain file
+#       Required for cmake to find apt-installed TensorRT on Debian-multiarch
+#       layout. Without these, find_package(TensorRT) fails with "TensorRT
+#       not found" even though all libs/headers are present.
+#
+#   * ENABLE_CUTE_DSL=ALL (in BOTH the C++ build AND the pybind build)
+#       Links the prebuilt nvfp4_moe / fmha / gdn / gemm / ssd kernel
+#       groups from kernelSrcs/cuteDSLPrebuilt/cutedsl_aarch64_sm_110_cuda13.tar.gz.
+#       Without this, Mamba-MoE inference (Omni, Qwen3.6-MoE) crashes at
+#       first token with `NvFP4MoEContiguousGemmRunner: decomposed AOT
+#       kernels not enabled`.
+#
+#   * libnvonnxparsers-dev / libnvonnxparsers10
+#       Required by `find_package(TensorRT REQUIRED COMPONENTS OnnxParser)`
+#       in the project's CMakeLists. Not pulled by libnvinfer-dev.
+#
+#   * Patched setup_pybind.py via patches/trt_edge_llm_v0.7.0_thor.patch
+#       Adds ENABLE_CUTE_DSL env-var forwarding (otherwise the pybind build
+#       defaults the kernel groups to OFF) and fixes the post-build .so
+#       path validation. See the patch file for diff details.
+#
+#   * Venv torch replaced with cu130-CUDA build (with deps)
+#       TRT-Edge-LLM's requirements.txt pins `torch~=2.10.0`, pip's default
+#       resolver picks the CPU PyPI wheel (no CUDA support). The visual-
+#       encoder ONNX export does `visual_model.to('cuda')` which crashes
+#       with "Torch not compiled with CUDA enabled" otherwise. We install
+#       WITH deps so libcudnn/libcublas are pulled.
+#
+# Build:
+#   docker build -f docker/Dockerfile.trt \
+#       -t nemoclaw-thor/trt-edge-llm:0.7.0-thor-sm110 \
+#       -t nemoclaw-thor/trt-edge-llm:latest \
+#       docker/
+#
+# Cache strategy:
+#   - Apt: BuildKit cache mount on /var/cache/apt + /var/lib/apt/lists with
+#     `keep-cache` config so .deb files survive across rebuilds. After the
+#     first build of EITHER this image or Dockerfile (vLLM), shared package
+#     downloads are cached. The 2.3 GB libnvinfer is reused across all
+#     subsequent builds of this image's chain.
+#   - Pip: BuildKit cache mount for pip wheels.
+#   - C++: ccache mounted; subsequent rebuilds are ~30 s instead of ~3-4 min.
+#
+# Version-bump strategy (when bumping TRT_EDGE_LLM_REF):
+#   1. Bump the ARG. Build.
+#   2. If the patch fails to apply (`git apply --reject` will leave .rej
+#      files), inspect the rejected hunks. Either:
+#       a. Update the patch to match upstream's new context (preferred), or
+#       b. Submit a PR to NVIDIA upstreaming our two fixes (long-term).
+#   3. If new kernel groups appear in CuTeDsl.cmake, ENABLE_CUTE_DSL=ALL
+#      will pick them up automatically — no Dockerfile change needed.
+
+ARG CUDA_BASE=nvidia/cuda:13.0.3-devel-ubuntu24.04
+FROM ${CUDA_BASE} AS runner
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+ENV TRT_VENV=/opt/trt-venv
+
+# Tell apt to keep .deb files in /var/cache/apt/archives/ so the BuildKit
+# cache mount actually accumulates downloads. Without this the default
+# noble-image behavior is to delete .deb files post-install.
+RUN echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
+    > /etc/apt/apt.conf.d/keep-downloaded
+
+# ── System runtime + build dependencies ─────────────────────────────────
+# Apt cache mounts are NAMED with `id=apt-cache-thor`. Both this Dockerfile
+# and docker/Dockerfile (vLLM) use the same id, so package downloads are
+# shared across image trees. First build of either populates; subsequent
+# builds of either reuse.
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,id=apt-lists-thor,sharing=locked \
+    apt update && \
+    apt install -y --no-install-recommends --allow-change-held-packages \
+    libnvinfer-dev libnvinfer-plugin-dev libnvinfer-headers-dev \
+    libnvonnxparsers-dev libnvonnxparsers10 \
+    libopenmpi-dev openmpi-bin \
+    python3 python3-pip python3-dev python3-venv \
+    cmake build-essential ninja-build \
+    git curl wget
+
+RUN pip install --break-system-packages uv
+
+# ── Clone TRT-Edge-LLM and apply Thor patch ──────────────────────────────
+ARG TRT_EDGE_LLM_REF=release/0.7.0
+ARG CACHEBUST_TRT=1
+
+RUN git clone --recursive --depth 1 --branch ${TRT_EDGE_LLM_REF} \
+        https://github.com/NVIDIA/TensorRT-Edge-LLM.git /workspace/trt-edge-llm
+
+WORKDIR /workspace/trt-edge-llm
+
+# Apply our 2-hunk patch to setup_pybind.py. If upstream version bumps shift
+# context lines, `git apply --3way` will try to merge automatically; if that
+# also fails, the patch file needs an update — see the file's header for
+# what each hunk does and why.
+COPY patches/trt_edge_llm_v0.7.0_thor.patch /tmp/trt_thor.patch
+RUN git apply --3way /tmp/trt_thor.patch
+
+# ── C++ runtime build ────────────────────────────────────────────────────
+# CuTe DSL kernel groups are linked from the prebuilt sm_110 tarball that
+# ships in the repo at kernelSrcs/cuteDSLPrebuilt/cutedsl_aarch64_sm_110_cuda13.tar.gz.
+ARG TRT_CUDA_ARCHS="110a"
+ENV TRT_CUDA_ARCHS=${TRT_CUDA_ARCHS}
+RUN --mount=type=cache,target=/root/.ccache,id=trt-ccache,sharing=locked \
+    set -e && \
+    rm -rf build && mkdir build && cd build && \
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DTRT_PACKAGE_DIR=/usr \
+        -DCMAKE_TOOLCHAIN_FILE=../cmake/aarch64_linux_toolchain.cmake \
+        -DEMBEDDED_TARGET=jetson-thor \
+        -DENABLE_CUTE_DSL=ALL \
+        -G Ninja && \
+    ninja -j$(nproc) && \
+    if [ -d ./bin ]; then cp -r ./bin/* /usr/local/bin/; fi && \
+    if [ -d ./lib ]; then cp -r ./lib/* /usr/local/lib/; fi && \
+    ldconfig
+
+# ── Isolated venv with TRT-Edge-LLM Python + cu130 torch ─────────────────
+RUN python3 -m venv ${TRT_VENV} && \
+    ${TRT_VENV}/bin/pip install --upgrade pip
+
+RUN --mount=type=cache,target=/root/.cache/pip,id=trt-pip,sharing=locked \
+    ${TRT_VENV}/bin/pip install -r requirements.txt && \
+    ${TRT_VENV}/bin/pip install -r experimental/llm_loader/requirements.txt && \
+    ${TRT_VENV}/bin/pip install --no-deps .
+
+RUN --mount=type=cache,target=/root/.cache/pip,id=trt-pip,sharing=locked \
+    ${TRT_VENV}/bin/pip install --force-reinstall --upgrade \
+        torch==2.10.0+cu130 \
+        --index-url https://download.pytorch.org/whl/cu130 \
+        --extra-index-url https://pypi.org/simple
+
+# experimental/server/api_server.py is the OpenAI-compatible HTTP server
+# (FastAPI + uvicorn). TRT-Edge-LLM's requirements.txt doesn't pull these
+# (the package can be used purely as a Python library). Bake them in so
+# `python -m experimental.server` works out-of-the-box.
+RUN --mount=type=cache,target=/root/.cache/pip,id=trt-pip,sharing=locked \
+    ${TRT_VENV}/bin/pip install fastapi uvicorn
+
+# ── Build pybind via the patched setup_pybind.py ─────────────────────────
+# The patch makes setup_pybind.py forward ENABLE_CUTE_DSL=ALL when the env
+# var is set, AND fixes the .so path validation that previously required
+# `|| echo` workarounds. With the patch, this is a clean single-shot build.
+RUN --mount=type=cache,target=/root/.ccache,id=trt-ccache,sharing=locked \
+    --mount=type=cache,target=/root/.cache/pip,id=trt-pip,sharing=locked \
+    set -e && \
+    cd /workspace/trt-edge-llm && \
+    AARCH64_BUILD=1 ENABLE_CUTE_DSL=ALL TRT_PACKAGE_DIR=/usr \
+        ${TRT_VENV}/bin/python experimental/server/setup_pybind.py build_ext --inplace
+
+# ── Install the .so into all import paths engine.py searches ────────────
+# `_import_runtime()` in experimental/server/engine.py searches in this
+# order: tensorrt_edgellm package, build/pybind/, build/lib.*. It does NOT
+# search experimental/server/ as a sibling, so the build-time `.so` must
+# be copied to the venv's tensorrt_edgellm directory for runtime import.
+# We also copy to the source-dir tensorrt_edgellm/ for cwd-relative imports.
+RUN set -e && \
+    EDGELLM_SO="$(find /workspace/trt-edge-llm/build -name '_edgellm_runtime*.so' -type f | head -1)" && \
+    if [ -z "${EDGELLM_SO}" ]; then \
+        echo "FATAL: _edgellm_runtime.so was not built" >&2; \
+        find /workspace/trt-edge-llm/build -name '*.so' -type f >&2; \
+        exit 1; \
+    fi && \
+    echo "Built: ${EDGELLM_SO}" && \
+    cp -f "${EDGELLM_SO}" /workspace/trt-edge-llm/experimental/server/ && \
+    cp -f "${EDGELLM_SO}" /opt/trt-venv/lib/python3.12/site-packages/tensorrt_edgellm/ && \
+    cp -f "${EDGELLM_SO}" /workspace/trt-edge-llm/tensorrt_edgellm/ && \
+    echo "_edgellm_runtime installed for system, venv, and source-dir imports"
+
+# ── Runtime environment ──────────────────────────────────────────────────
+# LD_LIBRARY_PATH covers the TRT-Edge-LLM custom plugin .so (libNvInfer_
+# edgellm_plugin.so produced by the C++ build) and the standard system libs.
+# PATH puts the venv first so `python` defaults to TRT-Edge-LLM's interpreter.
+ENV LD_LIBRARY_PATH=/workspace/trt-edge-llm/build/lib:/workspace/trt-edge-llm/build:/usr/local/lib:${LD_LIBRARY_PATH:-}
+ENV PATH=${TRT_VENV}/bin:/workspace/trt-edge-llm/build/bin:${PATH}
+
+# NOTE: build-time smoke import is intentionally omitted. The pybind .so
+# links against CuTe DSL kernels that require libcuda.so.1 at .so load
+# time, which `docker build` does not have access to. Verification happens
+# at runtime in a container started with --runtime nvidia.
+
+WORKDIR /workspace

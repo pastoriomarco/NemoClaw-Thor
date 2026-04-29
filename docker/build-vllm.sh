@@ -1,7 +1,10 @@
 #!/bin/bash
-# build.sh — Build NemoClaw-Thor vLLM container for Jetson AGX Thor (sm110)
+# build-vllm.sh — Build NemoClaw-Thor vLLM container for Jetson AGX Thor (sm110)
 #
-# Orchestrates a multi-stage Docker build:
+# Companion to build-trt.sh (TensorRT-Edge-LLM image) and bundle.sh (vLLM
+# production bundle with baked-in JIT caches).
+#
+# Orchestrates a multi-stage Docker build of docker/Dockerfile.vllm:
 #   Phase 1: FlashInfer wheels
 #   Phase 2: vLLM wheels
 #   Phase 3: Final runner image
@@ -10,16 +13,16 @@
 # already-built components.
 #
 # Usage:
-#   ./build.sh                              # defaults: v7 build (vLLM v0.20.0 + FlashInfer v0.6.9 + 14 jobs)
-#   ./build.sh --vllm-ref v0.20.0           # pin vLLM to a tag/branch/SHA
-#   ./build.sh --flashinfer-ref v0.6.9      # pin FlashInfer
-#   ./build.sh --build-jobs 8               # lower parallelism if rebuilding while serving
-#   ./build.sh --apply-vllm-pr 40941        # cherry-pick a PR onto vLLM
-#   ./build.sh --tf5                        # use transformers >= 5 (default: ON for v7)
-#   ./build.sh --no-tf5                     # disable the >=5 override (legacy behavior)
-#   ./build.sh --skip-flashinfer            # reuse existing FlashInfer wheels
-#   ./build.sh --skip-vllm                  # reuse existing vLLM wheels
-#   ./build.sh --image-name my-vllm:latest  # custom image tag
+#   ./build-vllm.sh                              # defaults: v8 build (vLLM v0.20.0 + FlashInfer v0.6.9 + 14 jobs)
+#   ./build-vllm.sh --vllm-ref v0.20.0           # pin vLLM to a tag/branch/SHA
+#   ./build-vllm.sh --flashinfer-ref v0.6.9      # pin FlashInfer
+#   ./build-vllm.sh --build-jobs 8               # lower parallelism if rebuilding while serving
+#   ./build-vllm.sh --apply-vllm-pr 40941        # cherry-pick a PR onto vLLM
+#   ./build-vllm.sh --tf5                        # use transformers >= 5 (default: ON)
+#   ./build-vllm.sh --no-tf5                     # disable the >=5 override (legacy behavior)
+#   ./build-vllm.sh --skip-flashinfer            # reuse existing FlashInfer wheels
+#   ./build-vllm.sh --skip-vllm                  # reuse existing vLLM wheels
+#   ./build-vllm.sh --image-name my-vllm:latest  # custom image tag
 
 set -euo pipefail
 
@@ -33,9 +36,14 @@ export BUILDKIT_STEP_LOG_MAX_SIZE=${BUILDKIT_STEP_LOG_MAX_SIZE:-104857600}    # 
 export BUILDKIT_STEP_LOG_MAX_SPEED=${BUILDKIT_STEP_LOG_MAX_SPEED:-10485760}    # 10 MiB/s
 
 # ── Defaults ────────────────────────────────────────────────────────
-# v7 build (2026-04-27): vLLM v0.20.0 (first stable with all Thor fixes —
-# #39233 sm_110 build target, #39546 SM100+ spec-decode, #40092 TQ+FA prefill,
-# #40654 sync removal, MRv2 acceptance fixes), FlashInfer v0.6.9 stable.
+# v8 build (2026-04-29): same vLLM/FlashInfer pins as v7 (proven on every
+# active profile). v8 changes are image-hygiene only:
+#   - drops apt libcudnn9-* (resolves Omni FlashInfer autotuner mismatch)
+#   - adds librosa/soundfile/ffmpeg (Nemotron Omni audio modality)
+# v7 pins retained:
+#   - vLLM v0.20.0 (first stable with all Thor fixes — #39233 sm_110, #39546
+#     spec-decode, #40092 TQ+FA prefill, #40654 sync removal, MRv2 fixes)
+#   - FlashInfer v0.6.9
 # Override with --vllm-ref / --flashinfer-ref. Use "main" for bleeding edge.
 VLLM_REF="v0.20.0"
 FLASHINFER_REF="v0.6.9"
@@ -121,7 +129,7 @@ if [ "$SKIP_FLASHINFER" = "0" ]; then
         "${FLASHINFER_ARGS[@]}" \
         --target flashinfer-export \
         --output "type=local,dest=${WHEELS_DIR}" \
-        -f Dockerfile .
+        -f Dockerfile.vllm .
 
     echo ""
     echo "FlashInfer wheels:"
@@ -162,7 +170,7 @@ if [ "$SKIP_VLLM" = "0" ]; then
         "${VLLM_ARGS[@]}" \
         --target vllm-export \
         --output "type=local,dest=${WHEELS_DIR}" \
-        -f Dockerfile .
+        -f Dockerfile.vllm .
 
     echo ""
     echo "vLLM wheel:"
@@ -182,10 +190,12 @@ FLASHINFER_COMMIT="unknown"
 [ -f "$WHEELS_DIR/.vllm-commit" ] && VLLM_COMMIT=$(cat "$WHEELS_DIR/.vllm-commit")
 [ -f "$WHEELS_DIR/.flashinfer-commit" ] && FLASHINFER_COMMIT=$(cat "$WHEELS_DIR/.flashinfer-commit")
 
-# Auto-generate image tag from vLLM commit
+# Auto-generate image tag from vLLM commit. v8 marker baked into the tag so
+# `docker images` makes the generation obvious without consulting metadata.
+IMAGE_GEN="${IMAGE_GEN:-v8}"
 if [ -z "$IMAGE_TAG" ]; then
     VLLM_SHORT="${VLLM_COMMIT:0:9}"
-    IMAGE_TAG="${VLLM_REF}-g${VLLM_SHORT}-thor-sm110-cu132"
+    IMAGE_TAG="${VLLM_REF}-g${VLLM_SHORT}-thor-sm110-cu132-${IMAGE_GEN}"
     # Sanitize tag (replace / with -)
     IMAGE_TAG="${IMAGE_TAG//\//-}"
 fi
@@ -223,7 +233,7 @@ docker build --network host \
     --target runner \
     -t "${IMAGE_NAME}:${IMAGE_TAG}" \
     -t "${IMAGE_NAME}:latest" \
-    -f Dockerfile .
+    -f Dockerfile.vllm .
 
 echo ""
 echo "=========================================="

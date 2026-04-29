@@ -44,7 +44,7 @@ done
 # ── Validate ──────────────────────────────────────────────────────────────────
 if ! docker image inspect "$BASE_IMAGE" &>/dev/null; then
     echo "ERROR: Base image not found: $BASE_IMAGE" >&2
-    echo "  Build it first with: ./build.sh" >&2
+    echo "  Build it first with: ./build-vllm.sh" >&2
     exit 1
 fi
 

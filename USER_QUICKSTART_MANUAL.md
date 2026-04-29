@@ -306,13 +306,13 @@ and head_dim=256/512 is incompatible with flash_attn on SM110.
 
 ```bash
 cd docker/
-./build.sh --skip-flashinfer --skip-vllm   # reuse cached wheels
-./build.sh                                  # full rebuild from main
-./build.sh --vllm-ref v0.8.5               # pin vLLM version
+./build-vllm.sh --skip-flashinfer --skip-vllm   # reuse cached wheels
+./build-vllm.sh                                  # full rebuild from main
+./build-vllm.sh --vllm-ref v0.8.5               # pin vLLM version
 ```
 
 This produces `nemoclaw-thor/vllm:latest` via a multi-stage Dockerfile.
-See `./build.sh --help` for all options.
+See `./build-vllm.sh --help` for all options.
 
 ### Overlay build (add packages without rebuilding)
 
