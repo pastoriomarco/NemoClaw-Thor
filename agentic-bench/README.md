@@ -118,3 +118,34 @@ For Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4 on Jetson AGX Thor:
 
 Full IFEval/GSM8K/BFCL on both runtimes is deferred until TRT-Edge-LLM
 v0.8+ ships proper request batching.
+
+## TODO — BFCL via NeMo Evaluator
+
+The lm-eval-harness wrappers above don't cover function-calling. For a
+publishable BFCL number on Nemotron-Omni, use NVIDIA's own evaluation
+recipe rather than rolling our own handler:
+
+```bash
+pip install nemo-evaluator-launcher
+nemo-evaluator-launcher run -t ns_bfcl_v3 \
+    --config nemotron_omni_local.yaml
+```
+
+Where `nemotron_omni_local.yaml` points `api_endpoint.url` at the local
+vLLM `/v1/chat/completions` and `model_id` at the served name. The
+launcher pulls `eval-factory-benchmark-bfcl` from NGC and runs it.
+
+Why this over rolling our own:
+- Apples-to-apples with NVIDIA's published Nemotron Nano v3 numbers
+  (same harness, same dataset version)
+- Container speaks OpenAI directly — no client-side tool-call parsing,
+  relies on the server's `tool_calls` field (vLLM with
+  `--tool-call-parser` produces it correctly for Omni; verified
+  2026-04-29)
+- No upstream BFCL model registration
+
+Reproducibility recipe:
+https://github.com/NVIDIA-NeMo/Evaluator/blob/main/packages/nemo-evaluator-launcher/examples/nemotron/nano-v3-reproducibility.md
+
+First-run cost: ~30–45 min to set up the launcher venv + pull the NGC
+container before the first sample runs.
