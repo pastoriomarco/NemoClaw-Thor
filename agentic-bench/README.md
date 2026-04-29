@@ -116,31 +116,84 @@ For Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4 on Jetson AGX Thor:
 | long_tps_oai (2100 tokens) | 12.71 tps | 23.22 tps |
 | IFEval prompt-strict (limit=20) | not run | 85.0% |
 
-Full IFEval/GSM8K/BFCL on both runtimes is deferred until TRT-Edge-LLM
-v0.8+ ships proper request batching.
+Full IFEval/GSM8K/BFCL on TRT-Edge-LLM is deferred until upstream ships
+a thread-safe server. No roadmap commitment yet (the experimental server
+is still flagged as such in 0.7.0); track each monthly release. vLLM is
+unblocked.
 
-## TODO — BFCL via NeMo Evaluator
+## Benchmark menu
+
+Five benchmarks are in the active set for the next bake-off cycle.
+
+### Agentic quality (primary axis)
+
+- **TEB** — SeraphimSerapis tool-eval-bench v0.8.x. 69 scenarios across
+  15 categories (tool selection, parameter precision, multi-step chains,
+  restraint, prompt injection, JSON-schema compliance, …). Deterministic
+  scoring 0/1/2, scaled to 100. Community-comparable via NVIDIA
+  developer-forum peers (Spark + Thor). Current Thor-best:
+  `qwen3.6-35b-a3b-nvfp4-mtp-fp8kv` at 93/100. See
+  [TOOL-EVAL-BENCH-THOR.md](../TOOL-EVAL-BENCH-THOR.md).
+- **BFCL v3** via NVIDIA NeMo Evaluator. Leaderboard-comparable
+  function-calling — anchors numbers against published Qwen / NVIDIA /
+  OpenAI results, not just the Jetson community. Not yet run; setup
+  recipe below.
+
+### General quality
+
+- **IFEval** — instruction following, lm-eval-harness wrapper at
+  [run_ifeval_trt.sh](scripts/run_ifeval_trt.sh). 541 prompts, ~90 min
+  single-stream. Lower priority unless a general-quality reading is
+  needed.
+- **GSM8K-CoT zero-shot** — math reasoning, lm-eval-harness wrapper at
+  [run_gsm8k_trt.sh](scripts/run_gsm8k_trt.sh). Killed during the April
+  2026 Omni run because Omni's thinking mode burned ~30 s/sample.
+  Re-enable on non-Omni candidates (Qwen3.5/3.6 don't have the same
+  bloat).
+
+### Throughput
+
+- **`long_tps_oai.py`** — single-stream sustained tps over OpenAI HTTP,
+  [scripts/long_tps_oai.py](scripts/long_tps_oai.py). Validated April
+  2026 (vLLM-Omni 12.71, TRT-Omni 23.22).
+
+### Next-cycle plan
+
+Run TEB + BFCL v3 + `long_tps_oai` on the top 2–3 candidates:
+
+1. `qwen3.5-35b-a3b-nvfp4-mtp-fp8kv` — current TEB winner. Anchors a
+   public-benchmark number alongside the existing community ranking.
+2. Qwen3.6 NVFP4 with TQ + MTP-2 — newer architecture and validates
+   TQ KV-cache compression on a public benchmark. If TQ scores within
+   ~2 pts of uncompressed BFCL, that's a publishable claim.
+3. One DFlash N=8 config — tests whether the agentic-quality cliff seen
+   on TEB at N=15 reproduces on a public benchmark or is a TEB artifact.
+
+IFEval / GSM8K on candidates only if a general-quality reading becomes
+useful for a specific decision.
+
+## BFCL via NeMo Evaluator — setup recipe
 
 The lm-eval-harness wrappers above don't cover function-calling. For a
-publishable BFCL number on Nemotron-Omni, use NVIDIA's own evaluation
-recipe rather than rolling our own handler:
+publishable BFCL number, use NVIDIA's own evaluation path rather than
+rolling our own handler:
 
 ```bash
 pip install nemo-evaluator-launcher
 nemo-evaluator-launcher run -t ns_bfcl_v3 \
-    --config nemotron_omni_local.yaml
+    --config qwen3_5_35b_local.yaml
 ```
 
-Where `nemotron_omni_local.yaml` points `api_endpoint.url` at the local
-vLLM `/v1/chat/completions` and `model_id` at the served name. The
-launcher pulls `eval-factory-benchmark-bfcl` from NGC and runs it.
+Where the YAML points `api_endpoint.url` at the local vLLM
+`/v1/chat/completions` and `model_id` at the served name. The launcher
+pulls `eval-factory-benchmark-bfcl` from NGC and runs it.
 
 Why this over rolling our own:
 - Apples-to-apples with NVIDIA's published Nemotron Nano v3 numbers
   (same harness, same dataset version)
 - Container speaks OpenAI directly — no client-side tool-call parsing,
   relies on the server's `tool_calls` field (vLLM with
-  `--tool-call-parser` produces it correctly for Omni; verified
+  `--tool-call-parser` produces it correctly; verified for Omni
   2026-04-29)
 - No upstream BFCL model registration
 
