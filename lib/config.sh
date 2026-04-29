@@ -195,7 +195,7 @@ resolve_model_profile() {
         # qwen3.5-122b-a10b-nvfp4 profile removed 2026-04-24 — superseded by qwen3.6.
         qwen3.5-9b-claude-distilled-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.5-9B-Claude-Distilled-NVFP4"
+            THOR_MODEL_ID_DEFAULT="qwen3.5-9b-claude-distilled-nvfp4"
             THOR_TARGET_MAX_MODEL_LEN="131072"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="8"
@@ -221,7 +221,7 @@ resolve_model_profile() {
             # on the 16 full-attn layers, 48 DeltaNet linear_attn layers.
             # head_dim=256 forces FlashInfer attention (FA2 crashes SM110).
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-27B-FP8-MTP-KVFP8"
+            THOR_MODEL_ID_DEFAULT="qwen3.6-27b-fp8-mtp-kvfp8"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="9"
@@ -239,7 +239,7 @@ resolve_model_profile() {
             # ★★ FASTEST: 45.71 tok/s single, 192.45 aggregate at 8-concurrent.
             # 678K KV tokens at 256K context → ~2 full-context concurrent, more at shorter.
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-DFlash"
+            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-dflash"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
             THOR_TARGET_MAX_NUM_SEQS="5"
@@ -261,7 +261,7 @@ resolve_model_profile() {
             # config. Older sibling with MTP N=4 crashed under 8-concurrent; this
             # N=2 variant reduces crash risk but still carries the same dtype mix.
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-MTP-FP8KV"
+            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-mtp-fp8kv"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="5"
@@ -274,7 +274,7 @@ resolve_model_profile() {
         qwen3.6-35b-a3b-nvfp4-tq-mtp)
             # ★ MAX CONTEXT: 28.0 tok/s, 79% acceptance, 2.22M KV tokens
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4-TQ-MTP"
+            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-tq-mtp"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="turboquant_k8v4"
             THOR_TARGET_MAX_NUM_SEQS="8"
@@ -294,7 +294,7 @@ resolve_model_profile() {
             # Production ManyForge profile: 3×64K context, TQ K8V4 + MTP N=2,
             # gpu_mem_util 0.32 so we can co-serve cosmos-reason2-2b on Thor.
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Qwen3.6-35B-A3B-NVFP4"
+            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge"
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="turboquant_k8v4"
             THOR_TARGET_MAX_NUM_SEQS="3"
@@ -307,7 +307,7 @@ resolve_model_profile() {
             # NVIDIA Cosmos Reason 2 (2B), Qwen3-VL-2B base, VLM physical-AI reasoner.
             # Sized for 2×32K concurrent context with FP8 KV (see launch.sh comment).
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Cosmos-Reason2-2B"
+            THOR_MODEL_ID_DEFAULT="cosmos-reason2-2b"
             THOR_TARGET_MAX_MODEL_LEN="32768"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="2"
@@ -322,7 +322,7 @@ resolve_model_profile() {
             # Sized for 64K context to accommodate OpenClaw's ~16K system prompt + 16K output
             # (32K ceiling was too tight: prompt+output overflows). FP8 KV keeps footprint low.
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Cosmos-Reason2-8B"
+            THOR_MODEL_ID_DEFAULT="cosmos-reason2-8b"
             THOR_TARGET_MAX_MODEL_LEN="65536"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="3"
@@ -339,7 +339,7 @@ resolve_model_profile() {
             # that may shift the agentic ceiling. See MANYFORGE-ASSISTANT-
             # DEPLOYMENT-PLAN.md § Outcome D for the deployment rationale.
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
+            THOR_MODEL_ID_DEFAULT="nemotron3-nano-omni-30b-a3b-nvfp4"
             THOR_TARGET_MAX_MODEL_LEN="32768"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="2"
@@ -356,7 +356,7 @@ resolve_model_profile() {
         # (multimodal Reasoning variant). See PERFORMANCE-V7.md.
         gemma4-e4b-it)
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="gemma-4-E4B-it"
+            THOR_MODEL_ID_DEFAULT="gemma4-e4b-it"
             THOR_TARGET_MAX_MODEL_LEN="131072"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="12"
@@ -368,7 +368,7 @@ resolve_model_profile() {
             ;;
         gemma4-31b-it-nvfp4)
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="Gemma-4-31B-IT-NVFP4"
+            THOR_MODEL_ID_DEFAULT="gemma4-31b-it-nvfp4"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="6"
@@ -380,7 +380,7 @@ resolve_model_profile() {
             ;;
         gemma4-26b-a4b-it)
             THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="gemma-4-26B-A4B-it"
+            THOR_MODEL_ID_DEFAULT="gemma4-26b-a4b-it"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="17"
