@@ -166,6 +166,9 @@ Supported model profiles:
     cosmos-reason2-2b         Qwen3-VL-2B base, 32K ctx, 2-conc
     cosmos-reason2-8b         Qwen3-VL-8B base, 64K ctx, 3-conc (TEB 81)
 
+  Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text):
+    nemotron3-nano-omni-30b-a3b-nvfp4  30B-A3B hybrid MoE, 32K ctx, 1-conc (released 2026-04-28)
+
   Gemma 4 (Google, vision+text+tools):
     gemma4-e4b-it             BF16 MoE, 8B/4B-active
     gemma4-31b-it-nvfp4       NVFP4 quantized
@@ -328,11 +331,29 @@ resolve_model_profile() {
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_QUANTIZATION=""
             ;;
+        nemotron3-nano-omni-30b-a3b-nvfp4)
+            # NVIDIA Nemotron 3 Nano Omni (released 2026-04-28). 30B-A3B
+            # hybrid Mamba-Transformer MoE + multimodal (vision/video/audio
+            # encoders). NVFP4 quant 20.9 GB on disk. Replaces the text-only
+            # nemotron3-nano-30b-a3b-nvfp4 (TEB 67) with a multimodal variant
+            # that may shift the agentic ceiling. See MANYFORGE-ASSISTANT-
+            # DEPLOYMENT-PLAN.md § Outcome D for the deployment rationale.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
+            THOR_TARGET_MAX_MODEL_LEN="32768"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="2"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
         # cosmos-reason2-8b-reasoning REMOVED 2026-04-28 — broken-tuning
         # experiment, see launch.sh. Use cosmos-reason2-8b instead.
         # nemotron3-nano-30b-a3b-nvfp4 REMOVED 2026-04-28 — TEB 67/100
-        # mid-pack on Thor; Qwen3.6-MTP family is empirically dominant
-        # at this scale. See PERFORMANCE-V7.md and launch.sh comments.
+        # mid-pack on Thor (text-only). Replaced by nemotron3-nano-omni
+        # (multimodal Reasoning variant). See PERFORMANCE-V7.md.
         gemma4-e4b-it)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="gemma-4-E4B-it"

@@ -119,7 +119,7 @@ either role's quality threshold.
 | Activations | ~3-5 GB (vision + audio buffers) |
 | **Estimated steady-state on Orin (40 GB target)** | weights 21 + KV 10 + activations 4 ≈ **~35 GB** at `--max-model-len 32768`, `gpu_memory_utilization 0.6` (vs Thor's recommended 0.65 on its 122 GB pool) |
 | Headroom inside 40 GB | ~5 GB (12%) — tight but feasible |
-| Thor TEB / IFEval | not yet benched; the text-only Nemotron 3 Nano scored TEB 67 on our Thor v7 bench — the Omni variant may behave differently due to multimodal pretraining |
+| Thor TEB / IFEval | **Benched 2026-04-28: TEB 80 / IFEval 87.7%** at NVIDIA vendor tool-call sampling (T=0.6, top_p=0.95, max_tokens=512). At T=0/think=false: TEB 75 / IFEval 86.3% (vendor sampling wins by +5 TEB — opposite of Qwen3.6). +13 TEB over the text-only Nemotron 3 Nano (67) — multimodal pretraining lifted agentic. Tied with Cosmos-Reason2-8B (81) on agentic, beats it on IFEval (87.7% vs 84.9%). Still 13 below Qwen3.6-MTP-FP8KV winner (93). |
 | Strengths | Single endpoint for vision + audio + text; built-in reasoning mode with explicit `thinking_token_budget`; Jetson AI Lab has an official Thor recipe; NVFP4 quant officially supported on Blackwell (SM110); commercial-friendly license |
 | Risks | Same architecture class as the Nano text model that scored 67/100 on agentic — quality may not match Qwen3.6-MTP. C-RADIOv4-H vision encoder is new (different from SigLIP2 in Cosmos / Qwen3-VL); SM110 kernel paths unverified. Audio support requires `pip install vllm[audio]` extra in the container (our v7 image doesn't ship it). Tighter Orin budget (~5 GB headroom) than Outcomes A/B/C. |
 
@@ -246,20 +246,33 @@ A candidate is the **winner** if:
 
 ### If Outcome D wins (Nemotron 3 Nano Omni)
 
-- Add new profile `nemotron3-nano-omni-30b-a3b-nvfp4` to `lib/launch.sh`
-  + `lib/config.sh` (single source of truth for both Thor + Orin)
-- Vision encoder is C-RADIOv4-H (not SigLIP2) — boot may need a
-  different `--mm-encoder-attn-backend` than the SDPA workaround used
-  for Cosmos / Qwen3-VL. Probe at first boot.
-- Audio support requires `pip install vllm[audio]` extra; either bake
-  into a v8 image rebuild OR install at container boot (slower)
-- Use Jetson AI Lab Thor recipe as starting point: `gpu_memory_utilization=0.65`,
-  `--max-model-len 32768`, parsers `nemotron_v3` + `qwen3_coder`
-- Drop the manyforge profile + Cosmos pair from Orin deployment;
-  single endpoint serves all agentic + perception + voice
-- Sampling default for the orchestrator: T=0.2, top_k=1 (NVIDIA's
-  "Instruct" recommendation — much closer to deterministic than
-  the Qwen3.6 generic T=0.7)
+Profile already added to `lib/launch.sh` + `lib/config.sh` and
+benched 2026-04-28 (TEB 80 / IFEval 87.7% at vendor tool-call
+recipe). Remaining steps to ship:
+
+- **Vision encoder is C-RADIOv4-H** (not SigLIP2). Booted on Thor
+  without an explicit `--mm-encoder-attn-backend` flag — appears to
+  "just work" on SM110. Probe Orin SM86/87 at first boot.
+- **Audio support** requires `pip install vllm[audio]` extra; bake
+  into v8 image if voice control is in scope, else skip.
+- **Sampling default for the orchestrator**: T=0.6, top_p=0.95,
+  max_tokens=512 (NVIDIA's "Tool calling" recipe — empirically
+  beats T=0 by +5 TEB on this model, the opposite of Qwen3.6).
+  Pass via OpenAI body per request, not in the profile.
+- **Drop the manyforge + Cosmos pair from Orin** if Omni's agentic
+  quality on the manyforge-assistant workflow tests is acceptable
+  (TEB 80 sets a clear floor — but workflow-specific quality can
+  differ from the generic tool-eval-bench).
+- **v7 image cuDNN bug**: profile sets
+  `--kernel-config '{"enable_flashinfer_autotune": false}'` to
+  dodge a `CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH` crash on the
+  current image. v8 rebuild should remove the apt-installed
+  libcudnn9-cuda-13 (rely on pip's bundled nvidia-cudnn-cu13
+  instead) so the autotuner can be re-enabled (~5-15% throughput
+  recovery).
+- KV bench math (per § "Memory budget for Outcome D" in the table):
+  ~32 GB at FP8 KV / 3×64K — fits the 30-40 GB Orin envelope with
+  ~5-8 GB headroom for FoundationPose / RT-DETR / nvblox.
 
 ---
 
@@ -303,8 +316,9 @@ For context, the per-candidate Thor v7 results that underpin this plan:
 
 | Profile | TEB | IFEval | Median tps | Notes |
 |---|---:|---:|---:|---|
-| `cosmos-reason2-8b` | 81 ★★★★ | 84.9% | 14.5 | Surprise general-agentic competence |
-| `qwen3.6-35b-a3b-nvfp4-mtp-fp8kv` | 93 ★★★★★ | 90.4% | 19.5 | Tool-eval-bench winner |
+| `cosmos-reason2-8b` | 81 ★★★★ | 84.9% | 14.5 | Surprise general-agentic competence (Outcome A) |
+| `qwen3.6-35b-a3b-nvfp4-mtp-fp8kv` | 93 ★★★★★ | 90.4% | 19.5 | Tool-eval-bench winner (Outcome B/C orchestration brain) |
 | `qwen3.6-35b-a3b-nvfp4-tq-mtp` | 90 ★★★★★ | 89.0% | 24.8 | manyforge family; +27% tps, +1.4× ctx |
+| `nemotron3-nano-omni-30b-a3b-nvfp4` | 80 ★★★★ | 87.7% | ~11.7 | Outcome D — multimodal (vision/audio/video). Vendor tool-call recipe wins by +5 TEB over T=0 |
 
 Full bench results in `PERFORMANCE-V7.md`.

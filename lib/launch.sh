@@ -133,6 +133,67 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "hermes"
             )
             ;;
+        nemotron3-nano-omni-30b-a3b-nvfp4)
+            # NVIDIA Nemotron 3 Nano Omni — open multimodal reasoning model
+            # (released 2026-04-28). 30B-A3B hybrid Mamba-Transformer MoE +
+            # C-RADIOv4-H vision encoder + NVIDIA Parakeet audio encoder +
+            # EVS frame compression for video, all in a single 20.9 GB NVFP4
+            # checkpoint. NVIDIA Open Model License (open, commercial OK).
+            #
+            # Thor v7 bench results (2026-04-28):
+            #   Primary regime (T=0.6, top_p=0.95, max_tokens=512, think=false):
+            #     TEB 80/100 ★★★★ Good   IFEval 87.7%
+            #   Fallback regime (T=0, think=false):
+            #     TEB 75/100 ★★★★ Good   IFEval 86.3%
+            # NVIDIA's vendor tool-call recipe wins by +5 TEB and +1.4% IFEval
+            # — the OPPOSITE of Qwen3.6 (where T=0 won). Lesson: tool-call-
+            # specific vendor recommendations matter when they're explicitly
+            # labeled "Tool calling" in the model card / cookbook (Omni's was;
+            # Qwen3.6's generic non-thinking sampling was not).
+            #
+            # vLLM args (per Jetson AI Lab Thor recipe + NVIDIA vllm_cookbook.ipynb):
+            #   --reasoning-parser nemotron_v3 (bundled in vLLM 0.20.0)
+            #   --tool-call-parser qwen3_coder (bundled)
+            #   --trust-remote-code (Nemotron-H custom modeling code)
+            #
+            # Recommended PER-REQUEST sampling (orchestrator should set):
+            #   - Tool calling (winning regime):  T=0.6, top_p=0.95, max_tokens=512
+            #   - Reasoning:  T=1.0 (diverse) or 0.6 (structured), max_tokens 1K-2K
+            #   - Pure instruct (no tools):  T=0, max_tokens=256
+            #
+            # Audio support requires `pip install vllm[audio]` extra; not
+            # baked into the v7 image. Bake into v8 if voice control is in
+            # scope; for text+vision+tool-call workloads it's unnecessary.
+            #
+            # KNOWN ISSUE in v7 image — fold into v8 rebuild:
+            # Two cuDNN installs (apt libcudnn9-cuda-13 9.21.1.3 +
+            # pip nvidia-cudnn-cu13 9.20.0.48) cause CUDNN_STATUS_SUBLIBRARY_
+            # VERSION_MISMATCH in FlashInfer's fp8_gemm autotuner during boot.
+            # LD_LIBRARY_PATH and LD_PRELOAD overrides did NOT help (the
+            # nvidia-runtime layer's ld.so.cache wins, plus EngineCore
+            # subprocess fork dropped LD_PRELOAD). The working workaround
+            # is to disable the FlashInfer JIT autotuner entirely via
+            # --kernel-config '{"enable_flashinfer_autotune": false}' so
+            # vLLM uses default kernel selection and never invokes the
+            # cuDNN-using tactic. Costs ~5-15% throughput vs full autotune
+            # but boots reliably. v8 image should drop the apt cuDNN and
+            # rely solely on pip's bundled nvidia-cudnn-cu13.
+            THOR_LAUNCH_MODEL_SOURCE="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.65}"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--enforce-eager"
+                "--trust-remote-code"
+                "--max-num-batched-tokens" "8192"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
+                "--reasoning-parser" "nemotron_v3"
+                "--kernel-config" '{"enable_flashinfer_autotune": false}'
+            )
+            ;;
         # cosmos-reason2-8b-reasoning REMOVED 2026-04-28 — empirically
         # produced uniform 7-word responses on IFEval-lite vs ~160-word
         # median on the FP8 cosmos-reason2-8b profile (TEB 52 vs 81).
