@@ -41,10 +41,15 @@ bridge** that translates ManyForge's contract into model dispatches; see
 - `start-model.sh`, `start-duo.sh`, `configure-local-provider.sh` — host
   entry points wrapping the above.
 - `agentic-bench/` — runtime-agnostic benchmark harness.
-- `bridge/` (when built) — the FastAPI ManyForge assistant-provider
-  bridge service.
 - Operational docs in this repo (workflow, deployment plan, performance
   reports, investigations).
+
+This repo does **not** own the ManyForge assistant-provider bridge
+service. The bridge implements ManyForge's HTTP contract and lives in
+the ManyForge repo (`manyforge/manyforge_assistant_bridge/`); it
+consumes the vLLM endpoint this repo's launch scripts expose. The
+bridge's architectural design lives alongside the contract in
+`manyforge_specs/docs/spec/485-assistant-bridge-architecture.md`.
 
 **Consumes** (don't reimplement; don't fork; configure and wrap):
 
@@ -114,13 +119,16 @@ Concretely:
                                        ▲
                                        │ ManyForge composer (downstream)
                                        │ POSTs assistant-provider contract
-                                       │ to bridge service (this repo);
-                                       │ bridge enforces the active mode's
-                                       │ catalog and dispatches directly to
-                                       │ the local vLLM endpoint above.
-                                       │ The sandbox is for interactive
-                                       │ OpenClaw use, not the assistant
-                                       │ request path. See BRIDGE-DESIGN.md.
+                                       │ to the bridge service (lives in
+                                       │ manyforge/manyforge_assistant_bridge/,
+                                       │ NOT this repo); the bridge
+                                       │ enforces the active mode's catalog
+                                       │ and dispatches to the local vLLM
+                                       │ endpoint above. The sandbox is for
+                                       │ interactive OpenClaw use, not the
+                                       │ assistant request path. See
+                                       │ manyforge_specs spec 485 for the
+                                       │ bridge architecture.
 ```
 
 **Verified working version pins.** Update on each tested upgrade. The
@@ -249,7 +257,7 @@ durable but not the file names.
 
 ### Architecture decisions (locked)
 
-- **Pattern B** — bridge service in this repo translates ManyForge's
+- **Pattern B** — bridge service (in the ManyForge repo, not here) translates ManyForge's
   contract into model dispatches with a deployment-scoped tool catalog.
   The bridge is the enforcement point for the bounded-autonomy
   invariant. Pattern C (MCP) is a future evolution gated on upstream
@@ -271,8 +279,8 @@ durable but not the file names.
   (and any future VLA/policy work) is backend territory and out of
   scope for this assistant pipeline.
 
-Detail and rationale live in [`BRIDGE-DESIGN.md`](BRIDGE-DESIGN.md).
-Mode taxonomy and bounded-autonomy spec live in `manyforge_specs/`.
+Detail and rationale live in `manyforge_specs/docs/spec/485-assistant-bridge-architecture.md`.
+Mode taxonomy and bounded-autonomy spec live in `manyforge_specs/docs/spec/480-...md`.
 
 ---
 
@@ -332,9 +340,6 @@ Keep these high-level — file names shift, scope endures.
 - **`MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md`** — profile-selection
   plan for the ManyForge assistant on Thor and Orin (which model fits
   which deployment budget).
-- **`BRIDGE-DESIGN.md`** — design doc for the bridge service that
-  connects ManyForge to the Thor LLM stack. Read before implementing
-  or modifying anything under `bridge/`.
 - **`MANYFORGE-PROFILE-CALIBRATION.md`** — sizing methodology for
   `max_model_len` / `max_num_seqs` / `gpu_memory_utilization` on
   ManyForge-pipeline-targeted profiles. Read before adding a new
