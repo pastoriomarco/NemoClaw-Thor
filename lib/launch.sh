@@ -179,7 +179,13 @@ prepare_thor_launch_profile() {
             # but boots reliably. v8 image should drop the apt cuDNN and
             # rely solely on pip's bundled nvidia-cudnn-cu13.
             THOR_LAUNCH_MODEL_SOURCE="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.65}"
+            # gpu_memory_utilization=0.50 calibrated 2026-04-30 against
+            # max_model_len=262144 + max_num_seqs=16 (see lib/config.sh
+            # nemotron3-nano-omni profile branch + MANYFORGE-PROFILE-
+            # CALIBRATION.md). Yields ~25 GB KV pool, ~32x supportable
+            # concurrency at 256K vs the 16 we configure, frees ~14 GB
+            # for Isaac ROS / system / cluster gateway vs the prior 0.65.
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.50}"
             THOR_DOCKER_ENV_ARGS+=(
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
             )

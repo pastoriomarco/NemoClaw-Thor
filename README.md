@@ -70,21 +70,19 @@ Prerequisites: 32 GiB swap active, HF token at `~/.cache/huggingface/token`
 
 ## Stack
 
-| Component | Version | Notes |
-|-----------|---------|-------|
-| NemoClaw | v0.0.18-10-g946c52b7 (2026-04-17 validated) | `~/NemoClaw` (origin/main) — **not pinned** |
-| OpenShell | 0.0.31 (2026-04-17 validated) | `curl ... install.sh` — **not pinned** |
-| OpenClaw | 2026.4.2 | Pinned upstream in NemoClaw's Dockerfile.base |
-| vLLM | v6 (dev338 pinned, commit `9965f501a`) | Custom SM110 image, fully pinned — see docker/NOTES.md |
-| Sandbox | `my-assistant` (or `thor-v5`) | Landlock + seccomp + netns |
-| Provider | `vllm-local` | Direct HTTP to host vLLM (`:8000`) or ManyForge mux mode (`:8888`) |
+| Component | Pin source |
+|-----------|------------|
+| NemoClaw, OpenShell CLI, OpenShell cluster, OpenClaw | See the verified-versions table in [AGENTS.md](AGENTS.md). One source of truth, updated on each tested upgrade. |
+| vLLM image | Custom SM110 build owned by this repo. CUDA base, vLLM/FlashInfer commits, every pip package pinned in `docker/Dockerfile.vllm` and documented in `docker/NOTES.md`. |
+| Sandbox | Created via `nemoclaw onboard`. Landlock + seccomp + netns. |
+| Provider | `vllm-local` route on the OpenShell gateway. Direct HTTP to host vLLM (`:8000`); see `configure-local-provider.sh`. |
 
 **Authoritative version references**:
-- **vLLM image pins** (CUDA base, vLLM/FlashInfer commits, every pip package) — see
-  [docker/NOTES.md → Pinned versions](docker/NOTES.md#pinned-versions)
-- **NemoClaw pipeline versions + install commands to reproduce** — see
-  [USER_QUICKSTART_MANUAL.md → Validated baseline](USER_QUICKSTART_MANUAL.md#user-quickstart-manual--nemoclaw-thor-v6)
-  and section 3 for the exact `git checkout` / `OPENSHELL_VERSION=` commands
+- **NemoClaw / OpenShell / OpenClaw**: see the version table in
+  [AGENTS.md](AGENTS.md). Reproduction commands live in
+  [USER_QUICKSTART_MANUAL.md](USER_QUICKSTART_MANUAL.md).
+- **vLLM image pins** (CUDA base, vLLM/FlashInfer commits, every pip
+  package): see [docker/NOTES.md → Pinned versions](docker/NOTES.md#pinned-versions).
 
 ## Scripts
 

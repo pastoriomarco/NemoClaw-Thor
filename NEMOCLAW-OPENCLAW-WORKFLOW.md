@@ -5,15 +5,22 @@ Thor host: a single `cosmos-reason2-8b` vLLM endpoint served on port 8000,
 consumed by OpenClaw inside the `my-assistant` sandbox through an OpenShell
 `vllm-local` provider route.
 
-## Versions verified (2026-04-20)
+## Versions verified (2026-04-30)
 
 | Component | Version |
 |---|---|
-| NemoClaw CLI (host) | `v0.0.18-10-g946c52b7` |
-| OpenClaw (sandbox agent) | `2026.4.2 (d74a122)` |
-| vLLM image | `v0.19.1rc1.dev338+g9965f501a.d20260417` (v6 container) |
-| Model | `nvidia/Cosmos-Reason2-8B` (text+vision, 32K→262K context capable) |
+| NemoClaw CLI (host) | `v0.0.31` |
+| OpenShell CLI (host) | `0.0.36` |
+| OpenShell cluster image | `0.0.36` |
+| OpenClaw (in-sandbox agent) | `v2026.4.24` |
+| vLLM image | `nemoclaw-thor/vllm:latest` (v8 container) |
+| Reference model used in this doc | `nvidia/Cosmos-Reason2-8B` (text+vision, 32K→262K context capable). Other profiles in `lib/config.sh`. |
 | Host | NVIDIA Thor (SM110) |
+
+Update this table whenever a tested upgrade lands. The recipes below
+were last validated against the 2026-04-30 versions; small command
+shifts can occur between NemoClaw monthly releases and the workflow may
+need touch-ups.
 
 ## One-time prerequisites
 
@@ -36,6 +43,107 @@ consumed by OpenClaw inside the `my-assistant` sandbox through an OpenShell
    docker ps --format '{{.Names}}' | grep openshell-cluster-nemoclaw   # should print
    nemoclaw list                                                         # my-assistant should be listed
    ```
+
+## First-time NemoClaw onboard recipe (v0.0.31+)
+
+For a clean Thor host (no existing `my-assistant` sandbox), this is the
+end-to-end onboarding the wizard expects. Validated 2026-04-30 against
+NemoClaw `v0.0.31`, OpenShell CLI `0.0.36`, OpenShell cluster image
+`0.0.36`, OpenClaw `v2026.4.24`.
+
+### Order of operations matters
+
+The NemoClaw wizard probes the inference endpoint as part of step 3/8.
+**Start the vLLM container before running `nemoclaw onboard`** — the
+wizard's bounded probe (PR #2714, fixed in v0.0.31) will fail-fast and
+prompt re-entry if the endpoint is unreachable, which is annoying mid-
+onboard.
+
+```bash
+# 1. Start the model first
+cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+./start-model.sh <profile-slug>           # e.g. nemotron3-nano-omni-30b-a3b-nvfp4
+
+# Wait for /v1/models to respond
+curl -s http://127.0.0.1:8000/v1/models | head -c 300
+
+# 2. Run the onboard wizard
+nemoclaw onboard
+```
+
+### Wizard answers
+
+The wizard walks through 8 steps. Answers that produced a working
+`my-assistant` sandbox on Thor:
+
+| Step | Prompt | Answer |
+|---|---|---|
+| 1/8 | Preflight checks | (automatic) |
+| 2/8 | Starting OpenShell gateway | (automatic; first run pulls `ghcr.io/nvidia/openshell/cluster:0.0.36`, ~60-180s) |
+| 3/8 | Inference options (1–7) | **`3`** — Other OpenAI-compatible endpoint |
+| 3/8 | OpenAI-compatible base URL | **`http://127.0.0.1:8000/v1`** (host loopback; the wizard probes from the host. `host.openshell.internal:8000` is the sandbox-internal name and won't resolve here) |
+| 3/8 | Endpoint model | **the served-model-name** (== profile slug per the alignment in `lib/config.sh`, e.g. `nemotron3-nano-omni-30b-a3b-nvfp4`) |
+| 3/8 | Sandbox name | `my-assistant` (default; press Enter) |
+| 3/8 | Apply this configuration? | `Y` |
+| 4/8 | Setting up inference provider | (automatic; creates `compatible-endpoint` provider + route) |
+| 4/8 | Enable Brave Web Search? | `N` |
+| 5/8 | Messaging channels | (Enter — skip all) |
+| 6/8 | Creating sandbox | (automatic; ~6 min on first run for the sandbox image build + upload to gateway) |
+| 7/8 | Setting up OpenClaw inside sandbox | (automatic; gateway launched on port 18789) |
+| 8/8 | Policy tier | **Balanced** (or Restricted; see notes below) |
+| 8/8 | Policy presets | **`local-inference` only** (untick all Balanced defaults if you want minimum egress) |
+
+### Policy preset choice — minimum egress
+
+The sandbox image is fully built with all NemoClaw/OpenClaw deps baked in
+during step 6/8. Runtime egress only needs to cover what the agent will
+*do* at runtime. For ManyForge-assistant work the minimum surface is:
+
+- ✅ **`local-inference`** — opens host gateway endpoints `host.openshell.internal:11434` (Ollama default), `:11435` (Ollama auth proxy, added in v0.0.21 by PR #2114), and **`:8000` (vLLM)**. Allowed binaries: `openclaw`, `claude`, `node`, `curl`, `python3`. Without this, the in-sandbox agent cannot reach the vLLM endpoint.
+- All other presets OFF unless you have a specific need.
+
+Add presets later with `nemoclaw <sandbox> policy-add <preset>` — no
+re-onboard required (the v0.0.31 fix made this reliable).
+
+### After onboard completes
+
+The wizard prints a tokenized OpenClaw UI URL once:
+
+```
+Dashboard: http://127.0.0.1:18789/#token=<long-hex>
+```
+
+**Save this URL securely.** It contains an auth token treated as a
+password and is not printed again. To reveal it later:
+
+```bash
+nemoclaw <sandbox> gateway-token              # prints just the token
+```
+
+**Run `configure-local-provider.sh` after onboard finishes.** This
+step is required, not optional. Onboard creates the OpenShell-side
+inference provider with the URL you typed at the wizard prompt
+(typically `http://127.0.0.1:8000/v1`), but the **in-sandbox
+`/sandbox/.openclaw/openclaw.json`** that the embedded agent runner
+actually reads keeps the OpenShell-blueprint default
+`https://inference.local/v1` — which OpenClaw's undici fetch cannot
+reach (the L7-proxy issue documented in the appendix below).
+`configure-local-provider.sh` performs the kubectl-exec patch that
+overrides the in-sandbox `baseUrl` to
+`http://host.openshell.internal:8000/v1`, plus the warmup, and is
+the step that makes the assistant actually able to call the model.
+
+```bash
+./configure-local-provider.sh <profile-slug>
+```
+
+Without this step the agent dispatch fails with
+`LLM request failed: network connection error` even though
+`nemoclaw list` shows the sandbox correctly bound to the model.
+
+The `configure-local-provider.sh` script also remains the tool for
+**switching the active model on an existing sandbox** without
+re-onboarding (same script, different `<profile-slug>`).
 
 ## Starting the vLLM endpoint
 
@@ -68,6 +176,13 @@ THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-cosmos-reason2-8b" THOR_VLLM_PORT=80
 ```
 
 ## Wiring OpenShell to route OpenClaw to the local endpoint
+
+> **When to use this script:** for **switching the active model on an
+> existing sandbox** without re-onboarding. The first-time onboard
+> wizard (above) already creates the inference provider, route, sandbox
+> runtime config, in-sandbox gateway, and `local-inference` policy
+> preset. `configure-local-provider.sh` remains the tool for changing
+> the bound model on a sandbox you already have.
 
 ```bash
 ./configure-local-provider.sh cosmos-reason2-8b

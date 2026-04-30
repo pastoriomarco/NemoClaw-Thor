@@ -338,11 +338,31 @@ resolve_model_profile() {
             # nemotron3-nano-30b-a3b-nvfp4 (TEB 67) with a multimodal variant
             # that may shift the agentic ceiling. See MANYFORGE-ASSISTANT-
             # DEPLOYMENT-PLAN.md § Outcome D for the deployment rationale.
+            #
+            # ManyForge-pipeline calibration (2026-04-30, see
+            # MANYFORGE-PROFILE-CALIBRATION.md for the methodology):
+            #   - max_model_len=262144 (256K, model native max).
+            #     OpenClaw bootstrap is ~16K + 16K output budget; the
+            #     prior 32K target overflowed on turn 1. 256K gives
+            #     comfortable multi-turn headroom for hybrid agentic
+            #     loops and accumulated tool-result history.
+            #   - max_num_seqs=16. Sized to absorb GUI assistant +
+            #     parallel BT query_model nodes + future subagents
+            #     without queueing. Per spec 480 §2.4 the assistant
+            #     surface is single-user but may fan out across
+            #     parallel BT branches. 16 covers 4 main agents × 3
+            #     subagents with headroom; revise downward if main-
+            #     agent budget is capped lower.
+            #   - gpu_memory_utilization=0.50 (set in launch.sh, not
+            #     here). Empirical KV-pool sizing keeps ~32× supportable
+            #     concurrency at 256K (vs the 16 we configure), leaving
+            #     ~14 GB freed for Isaac ROS / system / cluster gateway.
+            #     See MANYFORGE-PROFILE-CALIBRATION.md for the math.
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="nemotron3-nano-omni-30b-a3b-nvfp4"
-            THOR_TARGET_MAX_MODEL_LEN="32768"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="2"
+            THOR_TARGET_MAX_NUM_SEQS="16"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"

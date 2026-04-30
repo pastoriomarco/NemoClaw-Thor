@@ -1,22 +1,26 @@
-# User Quickstart Manual — NemoClaw-Thor v6
+# User Quickstart Manual — NemoClaw-Thor
 
-Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor with NemoClaw v0.0.18+
-and OpenShell v0.0.31.
+Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor.
 
-Validated baseline (2026-04-17):
+The currently verified versions of NemoClaw, OpenShell (CLI + cluster
+image), and OpenClaw live in [AGENTS.md](AGENTS.md) — single source of
+truth, updated on each tested upgrade. The vLLM image is owned by this
+repo and fully pinned in `docker/Dockerfile.vllm` (see `docker/NOTES.md`
+for build details).
 
-- NemoClaw: **v0.0.18-10-g946c52b7** (installed via `git pull origin main`, not pinned)
-- OpenShell: **0.0.31** (installed via `curl ... install.sh`, not pinned)
-- OpenClaw: **2026.4.2** (pinned upstream in NemoClaw's `Dockerfile.base`)
-- vLLM image: **v6-pinned-2026-04-17** (commit `9965f501a`, all pip versions pinned
-  in our Dockerfile; PR #39931 replayed at runtime via `fix-pr39931-turboquant` mod)
+**Operating shape:**
+
 - Gateway: `nemoclaw`
-- Sandbox: `my-assistant` (or `thor-v5`)
-- Provider: `vllm-local` (direct `:8000` by default, muxed `:8888` for ManyForge mode)
+- Sandbox: created during `nemoclaw onboard` (typically `my-assistant`)
+- Provider route: `vllm-local` → `host.openshell.internal:8000` (direct
+  to vLLM); a muxed mode is available for ManyForge integration when
+  the bridge service is in play.
 
-**Only the vLLM container is fully pinned.** NemoClaw and OpenShell install
-from their respective upstream `main` / latest-release. For reproducibility
-across hosts, manually install the same versions (see commands in section 3).
+**Reproducibility note:** the vLLM container is fully pinned by this repo's
+build; NemoClaw and OpenShell install from their respective upstream
+release channels via the install script in NemoClaw's `scripts/`
+directory. To reproduce a specific tested baseline on a new host, pin
+to the versions in AGENTS.md using the commands in section 3.
 
 Important rule:
 
@@ -95,31 +99,36 @@ Use this on a fresh Thor or after a full reinstall.
 cd ~/NemoClaw && git pull origin main && npm install && npm link
 ```
 
-**For reproducing the 2026-04-17 validated versions exactly:**
+**For reproducing a specific verified baseline:**
+
+Replace `<NEMOCLAW_REF>` and `<OPENSHELL_VERSION>` below with the
+values from the AGENTS.md verified-versions table.
 
 ```bash
-# Pin NemoClaw to v0.0.18-10-g946c52b7
+# Pin NemoClaw to the verified ref (commit hash or tag like v0.0.31)
 cd ~/NemoClaw
 git fetch origin
-git checkout 946c52b7
+git checkout <NEMOCLAW_REF>
 npm install && npm link
 
-# Pin OpenShell to v0.0.31
-curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh \
-    | OPENSHELL_VERSION=v0.0.31 sh
+# Pin OpenShell CLI to the verified version
+bash ~/NemoClaw/scripts/install-openshell.sh
+# (the installer reads min/max version pins from NemoClaw's blueprint
+#  and downloads the appropriate release; falls within AGENTS.md range)
 
-# OpenClaw (2026.4.2) is pinned automatically by NemoClaw v0.0.18's Dockerfile.base —
+# OpenClaw is pinned automatically by NemoClaw's Dockerfile.base —
 # it gets installed into the sandbox image during `nemoclaw onboard`.
 ```
 
 Verify:
 ```bash
-nemoclaw --version        # nemoclaw v0.0.18-10-g946c52b7
-openshell --version       # openshell 0.0.31
+nemoclaw --version
+openshell --version
 # After onboard, check OpenClaw inside sandbox:
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c agent -- openclaw --version
-# OpenClaw 2026.4.2
 ```
+
+Cross-check the printed versions against AGENTS.md.
 
 2. Run the NemoClaw onboard wizard:
 
