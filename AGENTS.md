@@ -62,6 +62,25 @@ bridge's architectural design lives alongside the contract in
   but bumpy — prefer OpenClaw for production today).
 - **vLLM**, **TRT-Edge-LLM**, **HuggingFace models** — upstream binaries.
 
+**Sibling workspaces** (read-but-don't-edit boundaries; cross-cutting
+work happens via the coordination protocol in
+`manyforge_specs/docs/cross-workspace-conventions.md`):
+
+- **`manyforge`** at `dev_ws/src/manyforge/` — ManyForge composer +
+  behavior runtime + assistant-provider HTTP contract code +
+  `manyforge_assistant_bridge/` runtime service. The wire shape and
+  runtime services for the assistant pipeline live there, not here.
+- **`manyforge_specs`** at `dev_ws/src/manyforge_specs/` —
+  architectural specs + ADRs + contract specifications. Normative for
+  both this repo and `manyforge`. When a behaviour question crosses
+  workspace boundaries, the spec layer is the tie-breaker.
+
+This repo's role in the trio is the **deployment helper** layer:
+hardware-specific build/launch/onboard scripts and Thor-tuned model
+profiles. It does not own the ManyForge contract, the bridge
+implementation, or any runtime service that fulfils the
+assistant-provider contract.
+
 ---
 
 ## Scope shift — 2026-04 reboot, do not regress
@@ -291,6 +310,17 @@ Mode taxonomy and bounded-autonomy spec live in `manyforge_specs/docs/spec/480-.
    doc and any open `*-INVESTIGATION.md` notes that touch the same
    area. The repo's value is mostly in the comments — they record
    traps that took hours to find.
+
+   **Read-before-claim rule for cross-workspace work.** Before
+   implementing or claiming scope for anything that crosses a
+   workspace boundary (assistant-provider envelope, bridge behaviour,
+   deployment-artifact field, skill manifest field, model-serving
+   profile referenced from manyforge_specs), read the relevant source
+   code in the OTHER workspace, not just its docs. Wire shapes,
+   validation rules, and runtime semantics are in code; documentation
+   summarises them but can lag. See
+   `manyforge_specs/docs/cross-workspace-conventions.md` for the full
+   protocol and the authority-by-concern table.
 
 2. **Don't re-implement upstream.** If something feels missing in
    NemoClaw / OpenShell / OpenClaw, the answer is *"check upstream
