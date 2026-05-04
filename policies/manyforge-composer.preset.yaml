@@ -1,0 +1,40 @@
+preset:
+  name: manyforge-composer
+  description: |
+    Allow the in-sandbox OpenClaw agent (and the bundled manyforge-mcp-bridge.py
+    spawned as an MCP stdio server) to reach the ManyForge composer's MCP/HTTP
+    endpoint on the host gateway. Required for the agent to invoke ManyForge
+    tools (scene.inspect, scene.draft.*, tree.draft.*, etc.).
+
+    Companion to the `local-inference` preset (which opens vLLM:8000). This
+    preset opens the composer's :9000 endpoint to the same trusted bundle of
+    binaries already permitted by local-inference.
+
+    Apply with:
+      nemoclaw <sandbox> policy-add --from-file policies/manyforge-composer.preset.yaml
+
+network_policies:
+  manyforge_composer:
+    name: manyforge_composer
+    endpoints:
+      - host: host.openshell.internal
+        port: 9000
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow:
+              method: GET
+              path: /api/mcp
+          - allow:
+              method: POST
+              path: /api/mcp
+          - allow:
+              method: GET
+              path: /api/mcp/sse
+          - allow:
+              method: POST
+              path: /api/mcp/sse
+    binaries:
+      - path: /usr/local/bin/openclaw
+      - path: /usr/local/bin/node
+      - path: /usr/bin/python3

@@ -374,6 +374,13 @@ Keep these high-level — file names shift, scope endures.
   `max_model_len` / `max_num_seqs` / `gpu_memory_utilization` on
   ManyForge-pipeline-targeted profiles. Read before adding a new
   profile or changing those knobs on an existing one.
+- **`MANYFORGE-MCP-INTEGRATION.md`** — end-to-end runbook for routing
+  the ManyForge composer-assistant through the OpenClaw agent runtime
+  in the `my-assistant` sandbox via Model Context Protocol. Covers the
+  skill (`manyforge-composer`), the custom egress preset, the MCP
+  stdio bridge, the `setup-manyforge-assistant.sh` provisioner, and
+  the Phase 2 OpenClaw assistant bridge. Read first when answering
+  "how does the agent talk to ManyForge?"
 - **`agentic-bench/README.md`** — bench harness and candidate plan.
 - **`docker/`** — Thor-specific build notes and patch rationale,
   including any active TRT-Edge-LLM evaluation.
