@@ -1,7 +1,14 @@
 # ManyForge Assistant — LLM Stack Deployment Plan for Thor and Jetson Orin AGX
 
-**Status:** PENDING — tests deferred until the manyforge-assistant agent is
-operative on Thor. This document captures the future evaluation plan.
+**Status (2026-05-05):** Thor-side assistant lane is operative end-to-end
+through both the direct-vLLM bridge (`nemoclaw` provider) and the canonical
+OpenClaw gateway lane (`openclaw` provider, demo default). The Phase 3
+A/B harness landed at [`../ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py)
+with first-run measurements captured (see runbook validation log in
+[`./MANYFORGE-MCP-INTEGRATION.md`](./MANYFORGE-MCP-INTEGRATION.md)
+"Phase 3 A/B harness — first run, 2026-05-05 evening"). Outstanding work in
+this plan is **per-Orin per-profile validation** of the candidate outcomes
+below — Thor mechanics are no longer the gate.
 
 **Target hardware:**
 
@@ -160,7 +167,13 @@ much closer to deterministic and may not show the same gap.
 
 ---
 
-## Tests to run (once manyforge-assistant is operative)
+## Tests to run
+
+The Thor side is now operative; the work in this section is **per-Orin
+per-profile** validation. The Thor-side reliability/latency harness already
+exists at [`../ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py)
+and can be re-run on each Orin candidate with no source changes (just point
+`VLLM_BASE` at the Orin's vLLM endpoint).
 
 ### Per-profile boot test on Orin AGX
 
@@ -299,14 +312,81 @@ recipe). Remaining steps to ship:
    in our v7 image. Decide whether to bake into v8 (preferred for cold
    starts) or install at container boot (slower but doesn't require a
    rebuild).
-6. **Nemotron 3 family agentic ceiling**: the text-only Nemotron 3 Nano
-   landed mid-pack on TEB (67/100). The Omni variant uses the same
-   architecture class but with multimodal pretraining — does that
-   shift agentic tool-calling quality up, down, or sideways? Only the
-   manyforge-assistant workflow tests will tell.
-7. **ManyForge-assistant agent test harness**: the workflow tests above
-   need a runnable harness — defer until the agent itself is at least
-   prototyped.
+6. **Nemotron 3 family agentic ceiling** — *partially answered
+   2026-05-05*. The Omni variant runs through both the direct-vLLM
+   lane and the canonical OpenClaw gateway lane on Thor with 100%
+   reliability on a small (N=3 × 3 prompts) suite of trivial and
+   short-factual prompts; null-content failures (#71847) are gone
+   after applying `chat_template_kwargs.{enable_thinking: false,
+   force_nonempty_content: true}` via `openclaw config set
+   agents.defaults.models.<id>.params.chat_template_kwargs`. Latency
+   profile P50: direct vLLM 2.14 s, OpenClaw gateway 15.04 s; P95
+   2.78 s vs 67.30 s. **Still open**: complex agentic chains (TC-52..69
+   in tool-eval-bench equivalents) and multi-tool workflows. The A/B
+   harness scaffold at [`../ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py)
+   is the place to add complex prompts; revisit when a representative
+   complex prompt suite exists.
+7. **ManyForge-assistant agent test harness** — *resolved 2026-05-05*.
+   Harness lives at [`../ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py)
+   (A/B reliability + latency probe, configurable `--runs` and
+   `--prompt`). Companion reliability smoke at
+   [`../smoke-openclaw-assistant-reliability.py`](../smoke-openclaw-assistant-reliability.py).
+   Both reuse the same direct-vLLM and gateway endpoints we use in the
+   demo flow. First-run results captured in
+   [`./MANYFORGE-MCP-INTEGRATION.md`](./MANYFORGE-MCP-INTEGRATION.md)
+   "Phase 3 A/B harness — first run, 2026-05-05 evening".
+
+8. **Automated / non-interactive onboarding for the OpenClaw lane on
+   fresh hosts** (added 2026-05-05). The OpenClaw lane is now the demo
+   default in `manyforge/scripts/demo-assistant-known-good.sh`; the
+   launcher provisions the `manyforge-composer` skill / preset / MCP
+   automatically per cycle, but the **first-time** sandbox creation
+   still requires the interactive `nemoclaw onboard` wizard. NemoClaw
+   ships a non-interactive entry point (`nemoclaw onboard
+   --non-interactive --yes-i-accept-third-party-software --name ...
+   --control-ui-port ...` plus the `NEMOCLAW_NON_INTERACTIVE`,
+   `NEMOCLAW_SANDBOX_NAME`, `NEMOCLAW_MODEL`,
+   `NEMOCLAW_INFERENCE_BASE_URL`, `NEMOCLAW_PROVIDER_KEY`,
+   `NEMOCLAW_RECREATE_SANDBOX` env vars; `BRAVE_API_KEY` optional).
+   Today's research and a first-cut script live in
+   [`../../setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`](../../setup/NEMOCLAW-OPENCLAW-WORKFLOW.md)
+   under "Automated / non-interactive onboarding".
+
+   Work to land:
+   - Wrap the documented script as `setup/onboard-non-interactive.sh`
+     here in NemoClaw-Thor (sibling to
+     `configure-local-provider.sh`). It must:
+     - start vLLM, wait for `/v1/models`,
+     - call `nemoclaw onboard --non-interactive --name my-assistant
+       --control-ui-port 18789 --yes-i-accept-third-party-software`
+       with the env vars set from the active `serving/config.sh`
+       profile,
+     - then chain into `setup/configure-local-provider.sh` and
+       `manyforge/setup-manyforge-assistant.sh`.
+   - Add a smoke test that runs against a clean `~/.nemoclaw/` and
+     verifies the resulting sandbox is reachable on the canonical
+     gateway lane (re-uses the assertions from
+     `manyforge/setup-manyforge-assistant.sh`'s precheck).
+   - Decide where this fits: a single `setup/bring-up.sh` orchestrator
+     (also covers `nemoclaw onboard` when needed), OR the existing
+     `manyforge/scripts/demo-assistant-known-good.sh` gains a
+     `bootstrap` verb that does the cross-repo dance.
+
+   Why this is on this plan: the deployment plan is the right home for
+   this work because it's NemoClaw-Thor that owns
+   `configure-local-provider.sh`, the openclaw_assistant_bridge
+   launcher, and `setup-manyforge-assistant.sh`. A wrapper here can
+   chain them all without depending on the `manyforge` repo for
+   onboarding. Cross-link:
+   `manyforge_specs/docs/plans/AI_ASSISTANT_INTEGRATION_PLAN.md` calls
+   this out as a deferred item under "Optional or deferred".
+
+   Risk to track: NemoClaw's onboarding flow is changing fast (we
+   moved from v0.0.18 → v0.0.31 in this project's lifetime). The
+   non-interactive surface may shift. The script must call out the
+   verified NemoClaw/OpenShell/OpenClaw versions in its header (mirror
+   `setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`'s versions table) and fail
+   fast on a mismatch.
 
 ---
 

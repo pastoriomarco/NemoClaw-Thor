@@ -145,6 +145,86 @@ The `configure-local-provider.sh` script also remains the tool for
 **switching the active model on an existing sandbox** without
 re-onboarding (same script, different `<profile-slug>`).
 
+### Automated / non-interactive onboarding (for future CI use)
+
+NemoClaw supports a non-interactive onboarding mode for scripted setups.
+This is the supported alternative to the wizard above and the right
+target if/when this repo wants a single automated bring-up command for
+fresh hosts.
+
+Flags and env (per `nemoclaw onboard --help` on v0.0.31):
+
+```
+nemoclaw onboard --non-interactive
+                 [--resume | --fresh]
+                 [--recreate-sandbox]
+                 [--from <Dockerfile>]
+                 [--name <sandbox>]
+                 [--agent <name>]
+                 [--control-ui-port <N>]
+                 [--yes-i-accept-third-party-software]
+```
+
+Companion env vars consulted in `--non-interactive` mode:
+
+- `NEMOCLAW_NON_INTERACTIVE=1` (alternative to the flag).
+- `NEMOCLAW_SANDBOX_NAME` (alternative to `--name`).
+- `NEMOCLAW_FROM_DOCKERFILE` (alternative to `--from`).
+- `NEMOCLAW_MODEL` — endpoint model id (= the served-model-name).
+- `NEMOCLAW_INFERENCE_BASE_URL` — OpenAI-compatible base URL (e.g.
+  `http://127.0.0.1:8000/v1`).
+- `NEMOCLAW_PROVIDER_KEY` — API key for the inference provider (vLLM
+  accepts any non-empty value).
+- `NEMOCLAW_RECREATE_SANDBOX=1` — force recreation when the wizard
+  would otherwise reuse.
+- `BRAVE_API_KEY` — optional; enables Brave Search and `web_fetch`.
+
+A first-cut automation script for our Thor profile would look like:
+
+```bash
+# Start vLLM first (the wizard probes the inference endpoint as part of
+# step 3/8 even in non-interactive mode).
+./serving/start-model.sh nemotron3-nano-omni-30b-a3b-nvfp4
+curl -fsS http://127.0.0.1:8000/v1/models >/dev/null   # readiness gate
+
+NEMOCLAW_NON_INTERACTIVE=1 \
+NEMOCLAW_SANDBOX_NAME=my-assistant \
+NEMOCLAW_MODEL=nemotron3-nano-omni-30b-a3b-nvfp4 \
+NEMOCLAW_INFERENCE_BASE_URL=http://127.0.0.1:8000/v1 \
+NEMOCLAW_PROVIDER_KEY=local \
+nemoclaw onboard \
+    --non-interactive \
+    --yes-i-accept-third-party-software \
+    --control-ui-port 18789
+
+# Tighten the inference route + spawn the gateway under canonical setup:
+./setup/configure-local-provider.sh nemotron3-nano-omni-30b-a3b-nvfp4
+# Apply the manyforge-composer preset + skill + MCP server registration:
+./manyforge/setup-manyforge-assistant.sh my-assistant
+```
+
+State that `--non-interactive` writes (informational, not a bypass):
+
+- `~/.nemoclaw/sandboxes.json` — sandbox registry (truth file for
+  `nemoclaw <sandbox> ...` calls and for `configure-local-provider.sh`
+  reconciliation).
+- `~/.nemoclaw/onboard-session.json` — wizard session cache; safe to
+  delete to force a clean re-onboard.
+
+**What is NOT a bypass**: hand-writing `~/.nemoclaw/sandboxes.json` and
+expecting the sandbox to come up. The sandbox is real Kubernetes /
+OpenShell state — k3s pods, PVCs, the OpenShell gateway container,
+network policies, the in-sandbox OpenClaw config — that the onboard
+flow creates. The registry JSON is just the local handle. Skipping
+onboard would require reproducing every k3s/openshell creation step
+manually, which is brittle and version-fragile (NemoClaw's onboarding
+flow is changing fast; reverse-engineering it is not worth the
+maintenance cost).
+
+The supportable automation target is the `--non-interactive` flow
+above; if/when we want a single command on a clean host, that is the
+right wrapper to script around.
+
 ## Starting the vLLM endpoint
 
 ```bash
