@@ -5,9 +5,12 @@ import json
 from openclaw_assistant_bridge.adapter import (
     AdapterConfig,
     build_agent_prompt,
+    build_gateway_chat_completions_command,
     build_openclaw_command,
+    derive_gateway_session_key,
     mcp_allowed_tools_from_payload,
     normalize_agent_response,
+    normalize_chat_completions_response,
     parse_openclaw_json,
 )
 
@@ -326,3 +329,218 @@ def test_text_fallback_when_openclaw_json_missing() -> None:
     )
     assert response["message"] == "plain assistant answer"
     assert "Could not parse JSON" in response["warnings"]
+
+
+# -----------------------------------------------------------------------
+# Gateway-lane: session isolation, revision guards, observability filter
+# -----------------------------------------------------------------------
+
+
+def test_session_key_includes_conversation_id() -> None:
+    """Two requests with the same conversationId should hash to the same key."""
+    a = derive_gateway_session_key({"conversationId": "conv-A", "context": {}})
+    b = derive_gateway_session_key({"conversationId": "conv-A", "context": {}})
+    assert a == b
+    assert a.startswith("manyforge-conv-A-")
+
+
+def test_session_key_isolates_distinct_conversations() -> None:
+    """Different conversationIds must produce different keys (the
+    primary session-isolation property)."""
+    a = derive_gateway_session_key({"conversationId": "conv-A", "context": {}})
+    b = derive_gateway_session_key({"conversationId": "conv-B", "context": {}})
+    assert a != b
+
+
+def test_session_key_rotates_on_catalog_hash_change() -> None:
+    """Same conversation, different catalogHash -> different session key.
+    A deployment reload mid-stream must invalidate the cached session
+    so OpenClaw doesn't reuse stale tool-list context."""
+    base = {"conversationId": "conv-A", "context": {"catalogHash": "abc"}}
+    drift = {"conversationId": "conv-A", "context": {"catalogHash": "xyz"}}
+    assert derive_gateway_session_key(base) != derive_gateway_session_key(drift)
+
+
+def test_session_key_rotates_on_program_revision_change() -> None:
+    """Same conversation, different programRevision -> different session.
+    A draft adopt mid-conversation invalidates 'the tree's root is X'
+    style cached context."""
+    base = {"conversationId": "conv-A", "context": {"programRevision": "r1"}}
+    drift = {"conversationId": "conv-A", "context": {"programRevision": "r2"}}
+    assert derive_gateway_session_key(base) != derive_gateway_session_key(drift)
+
+
+def test_session_key_rotates_on_deployment_id_change() -> None:
+    base = {"conversationId": "conv-A", "context": {"deploymentId": "d1"}}
+    drift = {"conversationId": "conv-A", "context": {"deploymentId": "d2"}}
+    assert derive_gateway_session_key(base) != derive_gateway_session_key(drift)
+
+
+def test_session_key_falls_back_to_request_id_when_no_conversation() -> None:
+    """If Composer doesn't pass a conversationId, we still get
+    one-session-per-request isolation rather than zero isolation."""
+    a = derive_gateway_session_key({"requestId": "req-1"})
+    b = derive_gateway_session_key({"requestId": "req-2"})
+    assert a != b
+
+
+def test_gateway_command_stamps_session_key_header() -> None:
+    """The host-side curl must carry the x-openclaw-session-key header
+    so the gateway scheduler isolates this conversation's session."""
+    cfg = AdapterConfig(use_gateway=True, agent="manyforge-composer")
+    cmd = build_gateway_chat_completions_command(
+        config=cfg,
+        payload={
+            "conversationId": "conv-test",
+            "context": {"catalogHash": "cafebabe"},
+            "message": "hello",
+        },
+        timeout_s=60,
+    )
+    # Curl args contain the header twice-flag-pair: -H "x-openclaw-session-key: ..."
+    joined = " ".join(cmd)
+    assert "x-openclaw-session-key:" in joined
+    # And the value is the derived session key (deterministic for the input)
+    expected_key = derive_gateway_session_key(
+        {"conversationId": "conv-test", "context": {"catalogHash": "cafebabe"}}
+    )
+    assert expected_key in joined
+
+
+def test_gateway_command_session_key_changes_when_context_drifts() -> None:
+    """End-to-end: a drift in catalogHash must change the header value."""
+    cfg = AdapterConfig(use_gateway=True)
+    cmd_a = build_gateway_chat_completions_command(
+        config=cfg,
+        payload={"conversationId": "conv-X", "context": {"catalogHash": "h1"}, "message": "x"},
+        timeout_s=60,
+    )
+    cmd_b = build_gateway_chat_completions_command(
+        config=cfg,
+        payload={"conversationId": "conv-X", "context": {"catalogHash": "h2"}, "message": "x"},
+        timeout_s=60,
+    )
+    assert " ".join(cmd_a) != " ".join(cmd_b)
+
+
+def test_observability_leakage_filter_replaces_stuck_session_phrase() -> None:
+    """The 'which session you're referring to' response we observed live
+    must be rewritten to a neutral fallback and surfaced as a warning."""
+    response = normalize_chat_completions_response(
+        payload={"requestId": "req-leak", "conversationId": "conv-leak"},
+        response_json={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "I'm not sure which session you're referring to. "
+                            "Could you provide the session key (or name) "
+                            "you'd like me to check?"
+                        ),
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+        stdout="",
+    )
+    # Original leaky message must NOT be passed through to the user.
+    assert "session key" not in response["message"].lower()
+    # A structured warning MUST be present so reviewers see what happened.
+    leakage_warnings = [w for w in response["warnings"] if "openclaw_observability_leakage" in w]
+    assert leakage_warnings, "expected an openclaw_observability_leakage warning"
+
+
+def test_observability_leakage_filter_lets_normal_answers_through() -> None:
+    """A real assistant answer must NOT be filtered (no false positives)."""
+    response = normalize_chat_completions_response(
+        payload={"requestId": "req-ok"},
+        response_json={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The current scene contains one box and one ground plane.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+        stdout="",
+    )
+    assert "current scene contains" in response["message"]
+    assert not any("openclaw_observability_leakage" in w for w in response["warnings"])
+
+
+def test_observability_leakage_filter_catches_session_or_scene_clarification() -> None:
+    """The 2026-05-05 observed second-attempt response variant — model
+    asking 'Could you clarify which session or scene you're asking
+    about?' — must also be caught. The first version of the filter was
+    too narrow and missed this wording."""
+    response = normalize_chat_completions_response(
+        payload={"requestId": "req-leak-2", "conversationId": "conv-leak"},
+        response_json={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Could you clarify which session or scene you're asking about?",
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+        stdout="",
+    )
+    assert "session" not in response["message"].lower() or response["message"].startswith("I couldn't")
+    assert any("openclaw_observability_leakage" in w for w in response["warnings"])
+
+
+def test_observability_leakage_filter_catches_session_key_for_session() -> None:
+    """The first-attempt wording from the same screenshot —
+    'I'm not sure which scene you're referring to. Could you provide
+    more details or the session key for the session you'd like
+    information about?' — was also missed by the narrow patterns."""
+    response = normalize_chat_completions_response(
+        payload={"requestId": "req-leak-3"},
+        response_json={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "I'm not sure which scene you're referring to. Could you "
+                            "provide more details or the session key for the session "
+                            "you'd like information about?"
+                        ),
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+        stdout="",
+    )
+    assert any("openclaw_observability_leakage" in w for w in response["warnings"])
+
+
+def test_observability_leakage_filter_catches_lane_task_error() -> None:
+    """Defense-in-depth: if a 'lane task error' string from the gateway
+    log ever ends up in model output, filter that too."""
+    response = normalize_chat_completions_response(
+        payload={"requestId": "req-lte"},
+        response_json={
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "lane task error: lane=main durationMs=49593",
+                    },
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+        stdout="",
+    )
+    assert "lane task error" not in response["message"].lower()
+    assert any("openclaw_observability_leakage" in w for w in response["warnings"])

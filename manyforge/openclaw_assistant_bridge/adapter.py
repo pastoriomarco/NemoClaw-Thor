@@ -5,6 +5,7 @@ translation layer can be tested without a live NemoClaw/OpenShell sandbox.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -191,6 +192,57 @@ def build_openclaw_command(
     ]
 
 
+def derive_gateway_session_key(payload: dict[str, Any]) -> str:
+    """Compute the OpenClaw session key for one Composer chat request.
+
+    The key isolates one Composer conversation from another at the
+    OpenClaw gateway scheduler so stuck-session diagnostics, lifecycle
+    events, and queue state from a prior conversation do not leak into
+    the next one's prompt context. The key is also rotated when any of
+    catalogHash / programRevision / deploymentId changes within the
+    same conversation, so a deployment reload or draft-apply mid-stream
+    invalidates the agent's stale context the next time the user sends
+    a message.
+
+    Inputs (all optional; the function is permissive):
+
+    - ``conversationId`` (top-level; assigned by Composer per chat
+      thread): the primary scope for the session.
+    - ``context.catalogHash``: changes when the deployment YAML's tool
+      catalog rotates.
+    - ``context.programRevision`` / ``context.draftRevision``: change
+      when the operator adopts a draft, loads a new program, or
+      hot-edits the tree.
+    - ``context.deploymentId``: changes when a different deployment is
+      loaded in Composer.
+
+    The returned key is sent verbatim as the ``x-openclaw-session-key``
+    HTTP header on ``/v1/chat/completions`` (per
+    docs.openclaw.ai/gateway/openai-http-api). Value shape is opaque to
+    the gateway; we use a prefixed compact hash so it is recognizable in
+    logs and short enough to fit header length limits.
+    """
+
+    conversation_id = str(payload.get("conversationId") or "").strip()
+    if not conversation_id:
+        # Fall back to requestId when Composer doesn't pass a
+        # conversationId, so we still get one-session-per-request
+        # isolation rather than no isolation at all.
+        conversation_id = request_id_from_payload(payload)
+
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    parts = [
+        conversation_id,
+        str(context.get("catalogHash") or ""),
+        str(context.get("programRevision") or ""),
+        str(context.get("draftRevision") or ""),
+        str(context.get("deploymentId") or ""),
+    ]
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    safe_conv = re.sub(r"[^A-Za-z0-9_-]+", "_", conversation_id)[:40] or "conv"
+    return f"manyforge-{safe_conv}-{digest}"
+
+
 def build_gateway_chat_completions_command(
     *,
     config: AdapterConfig,
@@ -219,6 +271,15 @@ def build_gateway_chat_completions_command(
     ``manyforge-composer`` preset shipped with this repo provides this;
     apply it via ``setup-manyforge-assistant.sh``.
 
+    Session isolation: every request is stamped with an
+    ``x-openclaw-session-key`` header derived from the Composer
+    conversationId plus the catalog and revision metadata in the
+    request context. This isolates conversations at the gateway
+    scheduler and rotates the session whenever a relevant identifier
+    changes, preventing the stuck-session / observability-leak class of
+    bug where one conversation inherits a prior conversation's stale
+    state.
+
     The persistent gateway eliminates the per-call ~40s CLI bootstrap of
     the openclaw-agent shell-out path; warm calls drop to 5-10s.
     """
@@ -234,6 +295,7 @@ def build_gateway_chat_completions_command(
     }
     body_json = json.dumps(request_body)
     curl_timeout = max(5, int(timeout_s) - 1)
+    session_key = derive_gateway_session_key(payload)
     args = [
         "curl",
         "-sS",
@@ -241,6 +303,8 @@ def build_gateway_chat_completions_command(
         str(curl_timeout),
         "-H",
         "Content-Type: application/json",
+        "-H",
+        f"x-openclaw-session-key: {session_key}",
         "-X",
         "POST",
         f"http://127.0.0.1:{config.gateway_port}/v1/chat/completions",
@@ -249,7 +313,8 @@ def build_gateway_chat_completions_command(
     ]
     token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
     if token:
-        args = args[:6] + ["-H", f"Authorization: Bearer {token}"] + args[6:]
+        # Insert Authorization header just before the URL.
+        args = args[:8] + ["-H", f"Authorization: Bearer {token}"] + args[8:]
     return args
 
 
@@ -355,6 +420,33 @@ def normalize_chat_completions_response(
         message = "OpenClaw gateway returned an empty assistant message."
         warnings.append("gateway response had no choices[0].message.content")
 
+    # Filter OpenClaw scheduler/lifecycle telemetry that the gateway can
+    # inject into the agent's input context (stuck-session warnings,
+    # failover decisions, queue-depth notices). When the model echoes any
+    # of these patterns in its visible answer, replace the message with a
+    # generic clarification and surface the leakage as a structured warning
+    # so reviewers can see what happened. Without this, stuck-session
+    # diagnostics get mistaken for real assistant questions ("which session
+    # do you mean?") that the user has no way to answer. Pure-prefix /
+    # exact-substring detection is conservative — false positives in normal
+    # answers are unlikely because these phrases are OpenClaw-internal.
+    leakage_match = _detect_observability_leakage(message)
+    if leakage_match is not None:
+        warnings.append(
+            "openclaw_observability_leakage: model echoed an OpenClaw "
+            f"scheduler diagnostic ({leakage_match!r}); message replaced "
+            "with a neutral fallback. The gateway scheduler likely had a "
+            "stuck/dirty session for this conversationId; restart the "
+            "gateway via configure-local-provider.sh and consider whether "
+            "session isolation is wired through correctly."
+        )
+        message = (
+            "I couldn't form a useful answer. The OpenClaw gateway's "
+            "internal scheduler emitted a diagnostic that bled into my "
+            "context. Please retry your request; if the problem persists, "
+            "restart the gateway."
+        )
+
     return {
         "version": SUPPORTED_VERSION_FAMILY,
         "schemaVersion": DEFAULT_SCHEMA_VERSION,
@@ -367,6 +459,61 @@ def normalize_chat_completions_response(
         "draftMutated": False,
         "requiresReview": True,
     }
+
+
+# OpenClaw scheduler/lifecycle phrases that have been observed leaking
+# into the agent's input context and then echoed back into model output.
+# Match conservatively (case-insensitive substring) so a user genuinely
+# discussing "stuck sessions" or "lane errors" in conversation isn't
+# false-positive'd. The patterns here come from real gateway log
+# observation, not speculation; add new ones as they're seen in the
+# wild.
+#
+# Two categories of pattern:
+#   1) Direct echoes of gateway diagnostic strings (`stuck session`,
+#      `lane task error`, etc.). Low risk of false positive — these are
+#      OpenClaw-internal phrasings unlikely to appear in normal
+#      ManyForge conversation.
+#   2) Model "asking for a session" responses that arise when the agent
+#      has only `session_status` in its tool list and conflates the
+#      user's ManyForge question with a session lookup. Patterns here
+#      are broader because the model varies wording; ManyForge's domain
+#      (scenes, behavior trees, programs) doesn't naturally include
+#      "session" terminology, so substring matches are safe.
+_OPENCLAW_LEAKAGE_PATTERNS: tuple[str, ...] = (
+    # Category 1: direct gateway diagnostic echoes
+    "stuck session",
+    "lane task error",
+    "embedded_run_failover_decision",
+    "embedded_run_agent_end",
+    "queue depth",
+    # Category 2: model asking for a "session" identifier in response
+    # to a ManyForge question (the actual symptom we observed)
+    "session key",
+    "session id",
+    "session identifier",
+    "which session",
+    "the session you",
+    "the session for",
+    "clarify which session",
+)
+
+
+def _detect_observability_leakage(message: str) -> str | None:
+    """Return the matched leakage phrase, or None if the message is clean.
+
+    Matches case-insensitive substrings against
+    ``_OPENCLAW_LEAKAGE_PATTERNS``. The first match wins; we surface that
+    one in the warning so a reviewer can correlate it with gateway logs.
+    """
+
+    if not isinstance(message, str) or not message.strip():
+        return None
+    lowered = message.lower()
+    for pattern in _OPENCLAW_LEAKAGE_PATTERNS:
+        if pattern.lower() in lowered:
+            return pattern
+    return None
 
 
 def mcp_allowed_tools_from_payload(payload: dict[str, Any]) -> list[str]:

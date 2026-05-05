@@ -48,12 +48,15 @@ network_policies:
           - allow:
               method: POST
               path: /api/mcp/sse
+          # Path templates use OpenShell's `/**` wildcard; `{name}`-style
+          # placeholders are NOT honored by the L7 enforcer (verified
+          # 2026-05-05 — `{mode}` failed with "denied by L7 policy").
           - allow:
               method: GET
-              path: /api/assistant/modes/{mode}
+              path: /api/assistant/modes/**
           - allow:
               method: POST
-              path: /api/assistant/bridge/tools/{toolId}
+              path: /api/assistant/bridge/tools/**
       # vLLM inference endpoint — host.openshell.internal:8000.
       # The OPA path is already covered by ``local-inference``; this entry
       # exists solely to add ``allowed_ips`` so the SSRF guard accepts the

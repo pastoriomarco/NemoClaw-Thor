@@ -40,6 +40,13 @@ MANYFORGE_ROOT="${MANYFORGE_ROOT:-/home/tndlux/workspaces/dev_ws/src/manyforge}"
 # Preset is co-located with this script under manyforge/policies/.
 PRESET_PATH="${SCRIPT_DIR}/policies/manyforge-composer.preset.yaml"
 SKILL_SRC="${MANYFORGE_ROOT}/agent-skills/manyforge-composer"
+# Workspace files versioned in this repo, injected into the agent's
+# prompt at every run via OpenClaw's standard workspace-file slots.
+# Without these, the agent's prompt contains only OpenClaw's built-in
+# session_status tool — meaning the model has no awareness of the
+# ManyForge MCP tools and either asks for "session keys" or
+# hallucinates plausible-sounding but wrong answers.
+WORKSPACE_SRC="${SCRIPT_DIR}/agent-workspace"
 
 step() {
   printf '\n==> %s\n' "$*"
@@ -165,8 +172,17 @@ MCP_PRINCIPAL="${MANYFORGE_PRINCIPAL:-openclaw-${SANDBOX}}"
 # envelope (assistantMode + catalogHash + requestId + conversationId +
 # principal). Server-side enforcement is the source of truth; the bridge
 # only narrows the visible surface.
+#
+# Proxy envs: OpenClaw spawns MCP servers with a SCRUBBED environment
+# (HOME, PATH, USER, SHELL, MANYFORGE_*, plus the keys listed here only).
+# host.openshell.internal:9000 is reachable only via OpenShell's egress
+# proxy at 10.200.0.1:3128, so we MUST forward the proxy envs explicitly
+# — without them urllib tries direct-connect to 172.17.0.1:9000 and
+# fails with [Errno 111] Connection refused (verified 2026-05-05).
+HTTP_PROXY_VAL="${HTTP_PROXY:-${http_proxy:-http://10.200.0.1:3128}}"
+NO_PROXY_VAL="${NO_PROXY:-${no_proxy:-127.0.0.1,localhost,::1}}"
 MCP_CONFIG_JSON=$(cat <<JSON
-{"command":"python3","args":["${MCP_BRIDGE_PATH}"],"env":{"MANYFORGE_COMPOSER_BASE":"${COMPOSER_BASE}","MANYFORGE_ASSISTANT_MODE":"${ASSISTANT_MODE}","MANYFORGE_PRINCIPAL":"${MCP_PRINCIPAL}"}}
+{"command":"python3","args":["${MCP_BRIDGE_PATH}"],"env":{"MANYFORGE_COMPOSER_BASE":"${COMPOSER_BASE}","MANYFORGE_ASSISTANT_MODE":"${ASSISTANT_MODE}","MANYFORGE_PRINCIPAL":"${MCP_PRINCIPAL}","HTTP_PROXY":"${HTTP_PROXY_VAL}","HTTPS_PROXY":"${HTTP_PROXY_VAL}","NO_PROXY":"${NO_PROXY_VAL}","http_proxy":"${HTTP_PROXY_VAL}","https_proxy":"${HTTP_PROXY_VAL}","no_proxy":"${NO_PROXY_VAL}"}}
 JSON
 )
 "${KEX_USER[@]}" "openclaw mcp set manyforge '${MCP_CONFIG_JSON}'" >/dev/null
@@ -221,6 +237,30 @@ PY
 "${KEX_USER[@]}" "printf %s '${PROFILE_SCRIPT_B64}' | base64 -d | python3 -" >/dev/null
 ok "agent profile 'manyforge-composer' installed"
 "${KEX_USER[@]}" "openclaw agents list --json 2>/dev/null | head -c 1200 || openclaw agents list" 2>&1 | sed 's/^/    /'
+
+step "Step 5b/5: install workspace guidance files (AGENTS.md, TOOLS.md)"
+# These are injected into every agent run via OpenClaw's standard
+# workspace-file slots. Without them, the agent's prompt contains only
+# OpenClaw's built-in session_status tool — see the file headers for
+# the failure mode this prevents.
+if [[ ! -d "${WORKSPACE_SRC}" ]]; then
+  fail "workspace source not found at ${WORKSPACE_SRC}"
+fi
+WORKSPACE_DIR_REMOTE="/sandbox/.openclaw/workspace"
+"${KEX_USER[@]}" "mkdir -p ${WORKSPACE_DIR_REMOTE}" >/dev/null
+for ws_file in AGENTS.md TOOLS.md; do
+  if [[ ! -f "${WORKSPACE_SRC}/${ws_file}" ]]; then
+    continue
+  fi
+  # Base64 the file content so we can ship it through the kubectl-exec
+  # shell layer without quoting headaches.
+  WS_B64="$(base64 -w0 < "${WORKSPACE_SRC}/${ws_file}")"
+  "${KEX_USER[@]}" "printf %s '${WS_B64}' | base64 -d > ${WORKSPACE_DIR_REMOTE}/${ws_file}" >/dev/null
+  ok "installed ${ws_file} into ${WORKSPACE_DIR_REMOTE}"
+done
+# Confirm the agent will see them at next warmup. injectedWorkspaceFiles
+# in systemPromptReport should now show missing: false for these names.
+"${KEX_USER[@]}" "ls -la ${WORKSPACE_DIR_REMOTE}/" 2>&1 | sed 's/^/    /'
 
 step "Composer reachability check (mode-scoped manifest)"
 MODE_URL="${COMPOSER_BASE}/api/assistant/modes/${ASSISTANT_MODE}"
