@@ -29,15 +29,15 @@ matched methodology: coding prompts + `enable_thinking: false` + temp 0.2):
 ```bash
 # Terminal 1: start the fastest model
 cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
-./start-model.sh
+./serving/start-model.sh
 
 # Terminal 2: wire the sandbox + sanity-check
-./configure-local-provider.sh
-./status.sh
+./setup/configure-local-provider.sh
+./setup/status.sh
 nemoclaw my-assistant connect          # inside sandbox: `openclaw tui`
 ```
 
-`./start-model.sh` with no args picks up the default profile
+`./serving/start-model.sh` with no args picks up the default profile
 `qwen3.6-35b-a3b-prismaquant-dflash` (mixed-precision 4.75 bpp, claimed
 quality within −0.56 pp of BF16 vs uniform NVFP4's −2.21 pp).
 
@@ -45,8 +45,8 @@ For **lower weight memory** or **max-context / low-latency-critical** paths, the
 uniform NVFP4 variant is a close fallback:
 
 ```bash
-./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
-./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-dflash
+./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
+./setup/configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-dflash
 ```
 
 Numbers (matched methodology): 44.6 tok/s single peak, 140.2 @ 5-concurrent.
@@ -55,8 +55,8 @@ Numbers (matched methodology): 44.6 tok/s single peak, 140.2 @ 5-concurrent.
 For **many concurrent sequences or huge context**, use the TQ-MTP variant:
 
 ```bash
-./start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
-./configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
+./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
+./setup/configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
 ```
 
 Trade-off: 28.6 tok/s single but **2.22M KV tokens**, 29× concurrency at 256K
@@ -143,8 +143,8 @@ Stop vLLM (Ctrl-C), drop caches, start new model, reconfigure:
 
 ```bash
 sudo sync && sudo sysctl -w vm.drop_caches=3
-./start-model.sh <new-profile>
-./configure-local-provider.sh <new-profile>
+./serving/start-model.sh <new-profile>
+./setup/configure-local-provider.sh <new-profile>
 ```
 
 Always drop caches between model switches — Thor's unified memory is not
@@ -179,7 +179,7 @@ after a version bump.
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | Vision+text, BF16 |
 
 **Default profile**: `qwen3.6-35b-a3b-prismaquant-dflash` — what
-`./start-model.sh` (no args) loads. Beats the uniform NVFP4 variant on
+`./serving/start-model.sh` (no args) loads. Beats the uniform NVFP4 variant on
 single-stream and all tested concurrency levels (matched methodology, today's
 drafter). ~22 GB weights + the DFlash drafter (gated — HF token required).
 
@@ -187,11 +187,11 @@ If you need max context or fewer weight GB (e.g. when running other services
 alongside vLLM), fall back to the uniform-NVFP4 variant:
 
 ```bash
-./start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
+./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
 ```
 
 If you can't use NVFP4 at all (no HF token, or prefer FP8 weights), run:
-`./start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
+`./serving/start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
 
 ## Architecture
 

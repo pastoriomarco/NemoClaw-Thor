@@ -62,7 +62,7 @@ onboard.
 ```bash
 # 1. Start the model first
 cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
-./start-model.sh <profile-slug>           # e.g. nemotron3-nano-omni-30b-a3b-nvfp4
+./serving/start-model.sh <profile-slug>           # e.g. nemotron3-nano-omni-30b-a3b-nvfp4
 
 # Wait for /v1/models to respond
 curl -s http://127.0.0.1:8000/v1/models | head -c 300
@@ -134,7 +134,7 @@ overrides the in-sandbox `baseUrl` to
 the step that makes the assistant actually able to call the model.
 
 ```bash
-./configure-local-provider.sh <profile-slug>
+./setup/configure-local-provider.sh <profile-slug>
 ```
 
 Without this step the agent dispatch fails with
@@ -149,7 +149,7 @@ re-onboarding (same script, different `<profile-slug>`).
 
 ```bash
 cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
-./start-model.sh cosmos-reason2-8b
+./serving/start-model.sh cosmos-reason2-8b
 ```
 
 What this does (see [../serving/launch.sh](../serving/launch.sh) for the full profile):
@@ -172,7 +172,7 @@ Use the same env hooks [start-duo.sh](start-duo.sh) uses:
 ```bash
 export HF_TOKEN="$(tr -d '[:space:]' < ~/.cache/huggingface/token)"
 THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-cosmos-reason2-8b" THOR_VLLM_PORT=8000 \
-    ./start-model.sh cosmos-reason2-8b
+    ./serving/start-model.sh cosmos-reason2-8b
 ```
 
 ## Wiring OpenShell to route OpenClaw to the local endpoint
@@ -185,7 +185,7 @@ THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-cosmos-reason2-8b" THOR_VLLM_PORT=80
 > the bound model on a sandbox you already have.
 
 ```bash
-./configure-local-provider.sh cosmos-reason2-8b
+./setup/configure-local-provider.sh cosmos-reason2-8b
 ```
 
 What this does:
@@ -321,15 +321,16 @@ vLLM reserves more activation memory for a larger attention window, which
 comes out of the same gpu_mem_util budget. For single-agent OpenClaw use
 this is fine. If you need 3 concurrent agents at 64 K, raise
 `gpu_memory_utilization` to 0.35–0.40 (env override:
-`THOR_GPU_MEMORY_UTILIZATION=0.35 ./start-model.sh cosmos-reason2-8b`).
+`THOR_GPU_MEMORY_UTILIZATION=0.35 ./serving/start-model.sh cosmos-reason2-8b`).
 
 ### HF_TOKEN must be in env, not just the cache file
 Cosmos-Reason-2 is a gated repo. Even with the model weights on disk,
 vLLM re-fetches `processor_config.json` at cold start, and Transformers'
 gated-repo check specifically wants `HF_TOKEN` in the environment (the
 mounted `~/.cache/huggingface/token` file is **not** consulted by that
-code path). [start-duo.sh](start-duo.sh) handles this automatically;
-manual launches must `export HF_TOKEN=…` before `./start-model.sh`.
+code path). [serving/start-duo.sh](../serving/start-duo.sh) handles this
+automatically; manual launches must `export HF_TOKEN=…` before
+`./serving/start-model.sh`.
 
 ### Cosmos-2B (not 8B) has fragile zero-arg tool calls
 An earlier test run showed `Cosmos-Reason2-2B` emitting malformed JSON
@@ -448,10 +449,10 @@ export HF_TOKEN="$(tr -d '[:space:]' < ~/.cache/huggingface/token)"
 # 1. Start the model
 cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
 THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-cosmos-reason2-8b" \
-    ./start-model.sh cosmos-reason2-8b
+    ./serving/start-model.sh cosmos-reason2-8b
 
 # 2. Route OpenClaw to it
-./configure-local-provider.sh cosmos-reason2-8b
+./setup/configure-local-provider.sh cosmos-reason2-8b
 
 # 3. Use it (interactive)
 nemoclaw my-assistant connect

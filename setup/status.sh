@@ -57,7 +57,7 @@ vllm_response=$(curl -s --max-time 10 \
 if [[ -z "${vllm_response}" ]]; then
     fail "vLLM server is not reachable at ${THOR_HOST_VLLM_MODELS_URL}"
     info "The local model server is not running or is still starting up."
-    fix "Start the selected model server: ./start-model.sh ${THOR_MODEL_PROFILE}"
+    fix "Start the selected model server: ./serving/start-model.sh ${THOR_MODEL_PROFILE}"
     record 1
 else
     if echo "${vllm_response}" | python3 -c "

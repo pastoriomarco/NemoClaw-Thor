@@ -140,7 +140,7 @@ container start. Key properties:
 ### Verification
 
 ```bash
-./start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
+./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp
 # [entrypoint] Applying mod: fix-pr39931-turboquant
 # Applying PR #39931 (TurboQuant hybrid support) — replaying rejected hunks...
 #   [arg_utils.py] patched ...

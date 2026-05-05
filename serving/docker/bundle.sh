@@ -51,7 +51,7 @@ fi
 if [ ! -d "$FLASHINFER_CACHE" ] || [ -z "$(ls -A "$FLASHINFER_CACHE" 2>/dev/null)" ]; then
     echo "ERROR: FlashInfer cache is empty or missing: $FLASHINFER_CACHE" >&2
     echo "  Start the model at least once to populate the JIT caches:" >&2
-    echo "  ./start-model.sh qwen3.5-35b-a3b-nvfp4" >&2
+    echo "  ./serving/start-model.sh qwen3.5-35b-a3b-nvfp4" >&2
     exit 1
 fi
 

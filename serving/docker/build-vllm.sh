@@ -254,5 +254,5 @@ echo "  Transformers >= 5: $([ "$PRE_TRANSFORMERS" = "1" ] && echo "yes" || echo
 echo ""
 echo "To use with NemoClaw-Thor:"
 echo "  export THOR_VLLM_IMAGE=${IMAGE_NAME}:${IMAGE_TAG}"
-echo "  ./start-model.sh qwen3.6-35b-a3b-fp8-dflash"
+echo "  ./serving/start-model.sh qwen3.6-35b-a3b-fp8-dflash"
 echo ""

@@ -160,7 +160,7 @@ no single agent can hog all subagent slots.
 | gemma4-26b-a4b | 17 | 4 | 13 | 4 | 1 |
 
 Override main concurrency at launch:
-`THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT=N ./configure-local-provider.sh`
+`THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT=N ./setup/configure-local-provider.sh`
 
 ## Calibration data (actual vLLM logs)
 
@@ -218,7 +218,7 @@ Update max_num_seqs in config.sh if actuals differ significantly.
 
 If model weights or overhead change (new vLLM version, different quant):
 
-1. Start the model: `./start-model.sh <profile>`
+1. Start the model: `./serving/start-model.sh <profile>`
 2. Read from vLLM log: `Available KV cache memory: XX.XX GiB`
 3. Look up KV/seq from the table above
 4. max_num_seqs = floor(available_kv / kv_per_seq)

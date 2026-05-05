@@ -120,8 +120,11 @@ shopt -s nullglob
 for f in "${SKILL_SRC}"/*; do
   base="$(basename "$f")"
   case "${base}" in
-    SKILL.md|.*) continue ;;
+    SKILL.md|.*|__pycache__|*.pyc|node_modules) continue ;;
   esac
+  # Skip source-tree artifacts (pycache, venv, etc.) — only flat
+  # companion files belong in the staged bundle.
+  [[ -d "$f" && ! -L "$f" ]] && continue
   cp -L "$f" "${STAGING_DIR}/${base}"
 done
 shopt -u nullglob
