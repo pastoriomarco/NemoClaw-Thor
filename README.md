@@ -7,10 +7,10 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 > compile expectations, sandbox workflows, cleanup procedure,
 > troubleshooting — see
 > [**USER_QUICKSTART_MANUAL.md**](USER_QUICKSTART_MANUAL.md).
-> Additional deep-dive docs: [KV-CACHE-BUDGET.md](KV-CACHE-BUDGET.md),
-> [DFLASH-INVESTIGATION.md](DFLASH-INVESTIGATION.md),
-> [TOOL-EVAL-BENCH-THOR.md](TOOL-EVAL-BENCH-THOR.md),
-> [docker/NOTES.md](docker/NOTES.md).
+> Additional deep-dive docs: [serving/docs/KV-CACHE-BUDGET.md](serving/docs/KV-CACHE-BUDGET.md),
+> [serving/docs/DFLASH-INVESTIGATION.md](serving/docs/DFLASH-INVESTIGATION.md),
+> [serving/docs/TOOL-EVAL-BENCH-THOR.md](serving/docs/TOOL-EVAL-BENCH-THOR.md),
+> [serving/docker/NOTES.md](serving/docker/NOTES.md).
 
 > **⚠ Benchmark methodology**: DFlash throughput numbers in this repo
 > were all measured with **coding prompts**, **`enable_thinking: false`**,
@@ -72,25 +72,24 @@ Prerequisites: 32 GiB swap active, HF token at `~/.cache/huggingface/token`
 
 | Component | Pin source |
 |-----------|------------|
-| NemoClaw, OpenShell CLI, OpenShell cluster, OpenClaw | See the verified-versions table in [AGENTS.md](AGENTS.md). One source of truth, updated on each tested upgrade. |
-| vLLM image | Custom SM110 build owned by this repo. CUDA base, vLLM/FlashInfer commits, every pip package pinned in `docker/Dockerfile.vllm` and documented in `docker/NOTES.md`. |
+| NemoClaw, OpenShell CLI, OpenShell cluster, OpenClaw | See [VERSIONS.md § A](VERSIONS.md#a-setup--control-plane). |
+| vLLM image | Custom SM110 build owned by this repo. See [VERSIONS.md § B](VERSIONS.md#b-model-serving-container) for the canonical image generation and per-pin status; `serving/docker/Dockerfile.vllm` header carries the per-pin rationale. |
 | Sandbox | Created via `nemoclaw onboard`. Landlock + seccomp + netns. |
-| Provider | `vllm-local` route on the OpenShell gateway. Direct HTTP to host vLLM (`:8000`); see `configure-local-provider.sh`. |
+| Provider | `vllm-local` route on the OpenShell gateway. Direct HTTP to host vLLM (`:8000`); see `setup/configure-local-provider.sh`. |
+| ManyForge integration | See [VERSIONS.md § C](VERSIONS.md#c-manyforge--nemoclaw-integration) for the active phase and artifacts. |
 
-**Authoritative version references**:
-- **NemoClaw / OpenShell / OpenClaw**: see the version table in
-  [AGENTS.md](AGENTS.md). Reproduction commands live in
-  [USER_QUICKSTART_MANUAL.md](USER_QUICKSTART_MANUAL.md).
-- **vLLM image pins** (CUDA base, vLLM/FlashInfer commits, every pip
-  package): see [docker/NOTES.md → Pinned versions](docker/NOTES.md#pinned-versions).
+**Authoritative version reference**: [VERSIONS.md](VERSIONS.md) is the
+single source of truth across all three scopes. Reproduction commands for
+the control-plane bring-up live in
+[USER_QUICKSTART_MANUAL.md](USER_QUICKSTART_MANUAL.md).
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `start-model.sh <profile>` | Launch vLLM with a model profile |
-| `configure-local-provider.sh [OPTIONS] [profile]` | Wire OpenShell provider + patch sandbox config |
-| `status.sh [profile]` | System health checks |
+| `serving/start-model.sh <profile>` | Launch vLLM with a model profile |
+| `setup/configure-local-provider.sh [OPTIONS] [profile]` | Wire OpenShell provider + patch sandbox config |
+| `setup/status.sh [profile]` | System health checks |
 
 ## Usage
 
@@ -100,16 +99,16 @@ Prerequisites: 32 GiB swap active, HF token at `~/.cache/huggingface/token`
 cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
 
 # Terminal 1: start vLLM with the default profile
-./start-model.sh                       # loads qwen3.6-35b-a3b-prismaquant-dflash
+./serving/start-model.sh               # loads qwen3.6-35b-a3b-prismaquant-dflash
 
 # Terminal 2: configure and verify
-./configure-local-provider.sh          # picks up the same default
-./status.sh
+./setup/configure-local-provider.sh    # picks up the same default
+./setup/status.sh
 nemoclaw my-assistant connect
 ```
 
 Pass a profile name to either script to pick a non-default (e.g.
-`./start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp` for max context).
+`./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp` for max context).
 
 ### ManyForge-integrated mode
 
@@ -117,8 +116,8 @@ If the OpenClaw main agent must reach ManyForge tools through the verified
 workspace-plugin path, switch the provider to the muxed route first:
 
 ```bash
-./configure-local-provider.sh --with-manyforge-mux qwen3.6-35b-a3b-prismaquant-dflash
-./status.sh
+./setup/configure-local-provider.sh --with-manyforge-mux qwen3.6-35b-a3b-prismaquant-dflash
+./setup/status.sh
 ```
 
 This keeps the OpenClaw-side provider name the same (`vllm-local`) but points
@@ -130,13 +129,13 @@ In this mode the ManyForge mux forwards normal inference to vLLM and
 To restore the default direct-vLLM path:
 
 ```bash
-./configure-local-provider.sh --without-manyforge-mux
+./setup/configure-local-provider.sh --without-manyforge-mux
 ```
 
 ### After reboot
 
-Same sequence: `start-model.sh`, then `configure-local-provider.sh`, then
-`status.sh`.
+Same sequence: `serving/start-model.sh`, then `setup/configure-local-provider.sh`,
+then `setup/status.sh`.
 
 ### Switch model
 
@@ -223,12 +222,12 @@ Host (Jetson AGX Thor)
 | `timeoutSeconds` | (unset) | 1800 | Long reasoning sessions need 30min timeout |
 | Concurrency | (unset) | Per-profile | Matches vLLM max_num_seqs budget |
 
-The `configure-local-provider.sh` script patches these via `kubectl exec` into
+The `setup/configure-local-provider.sh` script patches these via `kubectl exec` into
 the sandbox. This bypasses Landlock (kubectl exec starts a new process, not a
 child of the sandbox entrypoint) and DAC restrictions (runs as root).
 
 When ManyForge integration is enabled, the same script also persists the mux
-state in `~/.config/nemoclaw-thor/config.env` so `status.sh` and later runs
+state in `~/.config/nemoclaw-thor/config.env` so `setup/status.sh` and later runs
 stay consistent.
 
 ## Building images
@@ -238,10 +237,10 @@ a production bundle of the vLLM image with baked-in JIT caches.
 
 | Goal | Command | Dockerfile | Output image |
 |---|---|---|---|
-| Build/rebuild vLLM | `cd docker && ./build-vllm.sh` | `Dockerfile.vllm` | `nemoclaw-thor/vllm:<tag>` + `:latest` |
-| Build/rebuild TRT-Edge-LLM | `cd docker && ./build-trt.sh` | `Dockerfile.trt` | `nemoclaw-thor/trt-edge-llm:<tag>` + `:latest` |
-| Build vLLM production bundle | `cd docker && ./bundle.sh` | `Dockerfile.bundle` | `nemoclaw-thor/vllm:<tag>-bundled` |
-| Add a package without full rebuild | `cd docker && docker build -f Dockerfile.overlay -t nemoclaw-thor/vllm:latest .` | `Dockerfile.overlay` | overrides `:latest` |
+| Build/rebuild vLLM | `cd serving/docker && ./build-vllm.sh` | `Dockerfile.vllm` | `nemoclaw-thor/vllm:<tag>` + `:latest` |
+| Build/rebuild TRT-Edge-LLM | `cd serving/docker && ./build-trt.sh` | `Dockerfile.trt` | `nemoclaw-thor/trt-edge-llm:<tag>` + `:latest` |
+| Build vLLM production bundle | `cd serving/docker && ./bundle.sh` | `Dockerfile.bundle` | `nemoclaw-thor/vllm:<tag>-bundled` |
+| Add a package without full rebuild | `cd serving/docker && docker build -f Dockerfile.overlay -t nemoclaw-thor/vllm:latest .` | `Dockerfile.overlay` | overrides `:latest` |
 
 Each `build-*.sh` accepts `--help` for arg reference. Both vLLM and TRT
 builds share apt cache (`id=apt-cache-thor`) and pip cache mounts so package
@@ -252,31 +251,44 @@ delete or rebuild either without affecting the other. They co-exist on disk
 fine; the host filesystem deduplicates layers where possible.
 
 For the **runtime tradeoff** between vLLM and TRT-Edge-LLM (memory, throughput,
-which model classes work best with which runtime), see `PERFORMANCE-V7.md`.
+which model classes work best with which runtime), see [`serving/docs/PERFORMANCE-V7.md`](serving/docs/PERFORMANCE-V7.md).
 
 ## Key files
 
 ```
 NemoClaw-Thor/
-├── start-model.sh              # vLLM launcher (picks profile, mounts caches)
-├── configure-local-provider.sh # OpenShell provider + sandbox config sync
-├── status.sh                   # Health checks
-├── lib/
-│   ├── config.sh               # Model profiles, concurrency math, runtime config
-│   ├── launch.sh               # Docker run logic, cache mounts, env vars
-│   ├── sandbox-runtime.sh      # sync_sandbox_runtime_config(), sandbox helpers
-│   └── checks.sh               # Diagnostic checks for status.sh
-├── docker/
-│   ├── Dockerfile.vllm         # Multi-stage vLLM build for SM110
-│   ├── Dockerfile.trt          # TensorRT-Edge-LLM standalone build for SM110
-│   ├── Dockerfile.bundle       # vLLM bundled with baked-in JIT caches (production)
-│   ├── Dockerfile.overlay      # Quick add-package overlay (dev convenience)
-│   ├── build-vllm.sh           # vLLM build orchestration (multi-phase)
-│   ├── build-trt.sh            # TRT-Edge-LLM build orchestration (single-stage)
-│   ├── bundle.sh               # vLLM production bundle wrapper
-│   ├── patches/                # Build-time patches (FlashInfer, TRT-Edge-LLM)
-│   └── NOTES.md                # SM110 compatibility map, build history
-└── KV-CACHE-BUDGET.md          # Memory planning reference
+├── README.md                       # This file (entrypoint)
+├── AGENTS.md                       # Agent/LLM instructions for working in this repo
+├── VERSIONS.md                     # Single source of truth for current versions across all scopes
+├── USER_QUICKSTART_MANUAL.md       # Operator quickstart
+│
+├── setup/                          # Scope A: NemoClaw / OpenShell / OpenClaw control plane
+│   ├── configure-local-provider.sh #   OpenShell provider + sandbox config sync
+│   ├── status.sh                   #   System health checks
+│   ├── checks.sh                   #   Diagnostic check functions (sourced)
+│   ├── sandbox-runtime.sh          #   sync_sandbox_runtime_config(), sandbox helpers
+│   ├── policies/                   #   Egress policy presets (dynamic/, static/)
+│   └── NEMOCLAW-OPENCLAW-WORKFLOW.md
+│
+├── serving/                        # Scope B: vLLM model serving + benchmarks
+│   ├── start-model.sh              #   vLLM launcher (picks profile, mounts caches)
+│   ├── start-duo.sh                #   Two-model co-serving (Qwen3.6 + Cosmos-2B)
+│   ├── config.sh                   #   Model profiles, concurrency math, runtime config
+│   ├── launch.sh                   #   Docker run logic, cache mounts, env vars
+│   ├── docker/                     #   Image builds: vLLM, TRT-Edge-LLM, bundle, overlay
+│   ├── benchmarks/                 #   Loose perf probes (bench-throughput.py, etc.)
+│   ├── agentic-bench/              #   lm-eval-harness wrappers + tool-call proxy
+│   ├── templates/                  #   Tokenizer chat templates (qwen3 tool-call jinjas)
+│   ├── scripts/                    #   Model-serving prep scripts (patch-minimax-w4a16-config.sh)
+│   └── docs/                       #   KV-CACHE-BUDGET, PERFORMANCE-V*, TOOL-EVAL-BENCH-THOR,
+│                                   #   *-INVESTIGATION.md, COSMOS-REASON2-32B-QUANTIZATION
+│
+└── manyforge/                      # Scope C: ManyForge ↔ NemoClaw integration
+    ├── setup-manyforge-assistant.sh#   Idempotent provisioner (skill + preset + MCP register)
+    ├── policies/                   #   manyforge-composer.preset.yaml (egress preset)
+    ├── bridge/                     #   Audit-log mount point (bridge service lives in manyforge repo)
+    └── docs/                       #   MANYFORGE-MCP-INTEGRATION, -ASSISTANT-DEPLOYMENT-PLAN,
+                                    #   -PROFILE-CALIBRATION
 ```
 
 ## References
@@ -286,3 +298,14 @@ NemoClaw-Thor/
 - [OpenClaw](https://github.com/openclaw/openclaw) — agent runtime
 - [PLAN-v5-transition.md](PLAN-v5-transition.md) — v5 upgrade plan (historical)
 - [DFLASH-INVESTIGATION.md](DFLASH-INVESTIGATION.md) — DFlash speculative decoding investigation and results
+
+## Acknowledgements
+
+Originally forked from [`jetsonhacks/NemoClaw-Thor`](https://github.com/jetsonhacks/NemoClaw-Thor)
+in March 2026. That project has since been archived (2026-04-17), and this
+repository's scope has grown well beyond the original installer-script set —
+adding a vLLM container build pipeline, an agentic evaluation harness, and the
+ManyForge integration layer. As of May 2026 the fork relationship has been
+detached on GitHub; this is now an independent project. Credit to the
+original maintainer for the initial Thor onboarding scaffolding that made the
+first weeks easier.

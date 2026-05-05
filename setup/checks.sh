@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/checks.sh — Prerequisite check functions for NemoClaw-Thor
+# setup/checks.sh — Prerequisite check functions for NemoClaw-Thor
 #
 # Source this file; do not execute it directly.
 # Each check_* function prints its own result line and returns:
@@ -7,8 +7,11 @@
 #   1 — fail
 #   2 — warning (condition is unusual but not necessarily blocking)
 #
-# Usage in calling scripts:
-#   source "$(dirname "$0")/lib/checks.sh"
+# Usage in calling scripts within setup/:
+#   source "$(dirname "${BASH_SOURCE[0]}")/checks.sh"
+#
+# Usage from a script in a sibling scope (e.g. serving/start-model.sh):
+#   source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/setup/checks.sh"
 
 # Guard against direct execution
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

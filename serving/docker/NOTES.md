@@ -89,13 +89,13 @@ PR application. The PR diff does not touch `kv_cache_interface.py`.
 
 #### The runtime mod
 
-`docker/mods/fix-pr39931-turboquant/run.sh` applies all 5 hunks as
+`mods/fix-pr39931-turboquant/run.sh` applies all 5 hunks as
 exact-string `str.replace` operations with verify + idempotent markers. It is
 **not baked into the image** — it lives in the NemoClaw-Thor repo and is
 delivered at container start via launch.sh's bind mount:
 
 ```bash
-# From lib/launch.sh
+# From ../launch.sh
 docker_mount_args+=(-v "${THOR_MODS_HOST_DIR}:/workspace/mods:ro")
 ```
 
@@ -126,7 +126,7 @@ with "pattern not found" — a loud signal that it's no longer needed. At
 that point, delete the mod, remove `VLLM_MODS=fix-pr39931-turboquant` from
 launch.sh, and the build is cleanly on upstream.
 
-See `DFLASH-INVESTIGATION.md` "Known Problems" section for the full
+See `../docs/DFLASH-INVESTIGATION.md` "Known Problems" section for the full
 chronology of the investigation.
 
 ### Key runtime env vars

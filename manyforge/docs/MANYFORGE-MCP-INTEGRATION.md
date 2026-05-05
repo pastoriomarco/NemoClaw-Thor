@@ -18,7 +18,7 @@ Status:
   `requestId`, `conversationId`, `principal`). Server-side enforcement —
   the same gates we use for the in-Composer assistant — is the source of
   truth. Provisioning artifacts are in this repo; setup is reproducible
-  via `scripts/setup-manyforge-assistant.sh`.
+  via `manyforge/setup-manyforge-assistant.sh`.
 - **Phase 2 — composer's chat endpoint routes through OpenClaw:** designed,
   not yet implemented. Sketch and contract are in this doc.
 - **Phase 3 — A/B harness comparing direct-vLLM vs OpenClaw-skill paths:**
@@ -97,7 +97,7 @@ through it.
 | `manyforge/agent-skills/manyforge-composer/SKILL.md` | OpenClaw skill — vocabulary, tool routing, canonical ids, anti-patterns, recovery protocol, worked examples. Frontmatter `metadata.contract` declares the assistant mode the skill is rev'd against; the provisioner refuses to install if the running Composer doesn't expose that mode. |
 | `manyforge/agent-skills/manyforge-composer/manyforge-mcp-bridge.py` | Symlink → `manyforge/scripts/manyforge-mcp-bridge.py` (single-source). Bundled into the skill at install time. The script is a *mode-scoped MCP wrapper*: it fetches the manifest from `/api/assistant/modes/{mode}`, exposes only the tools that mode permits, and forwards each `tools/call` to `/api/assistant/bridge/tools/{toolId}` with a full bounded-autonomy envelope. |
 | `nemoclaw/src/NemoClaw-Thor/policies/manyforge-composer.preset.yaml` | NemoClaw custom egress preset opening `host.openshell.internal:9000` to the agent's permitted binaries. |
-| `nemoclaw/src/NemoClaw-Thor/scripts/setup-manyforge-assistant.sh` | Idempotent provisioner. Verifies that Composer exposes the configured assistant mode (refuses to install otherwise), applies the preset, stages the skill, installs it, registers the MCP server with the mode + principal env. |
+| `nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh` | Idempotent provisioner. Verifies that Composer exposes the configured assistant mode (refuses to install otherwise), applies the preset, stages the skill, installs it, registers the MCP server with the mode + principal env. |
 
 ### What the provisioner does — the four official routes
 
@@ -283,7 +283,7 @@ calls) and *"What does the manyforge-composer skill say about Repeat?"*
 
 ```bash
 cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
-./scripts/setup-manyforge-assistant.sh         # default sandbox: my-assistant
+./manyforge/setup-manyforge-assistant.sh         # default sandbox: my-assistant
 
 # Plus, in the manyforge demo lane:
 cd ../../../dev_ws/src/manyforge
@@ -324,7 +324,7 @@ A small adapter service — provisional name **`openclaw_assistant_bridge`** —
 
 ### Where it lives
 
-Sibling to the existing `bridge/` directory in this repo:
+Sibling to the existing `../bridge/` directory in this repo:
 
 ```
 nemoclaw/src/NemoClaw-Thor/
@@ -470,7 +470,7 @@ composer instances on different ports).
   `480-assistant-modes-and-bounded-autonomy.md` §5.1,
   `485-assistant-bridge-architecture.md` §3.
 - NemoClaw onboarding workflow this integration plugs into:
-  `NEMOCLAW-OPENCLAW-WORKFLOW.md`.
+  `../../setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`.
 - Profile selection for the assistant model:
   `MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md`.
 - OpenClaw skill format and `mcp set` semantics: `https://docs.openclaw.ai/`.
@@ -484,7 +484,7 @@ the production deployment shape once Phase 2 lands; the direct-vLLM path
 in `manyforge_assistant_bridge/` may eventually retire after Phase 3 shows
 the OpenClaw-routed path matches or exceeds the baseline on every metric.
 
-The custom egress preset (`policies/manyforge-composer.preset.yaml`) is
+The custom egress preset (`../policies/manyforge-composer.preset.yaml`) is
 the only piece that may need updating if the composer's MCP endpoint moves
 or if NemoClaw's preset format changes upstream. That's a small,
 localized change.

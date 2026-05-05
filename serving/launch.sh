@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/launch.sh — Shared vLLM launcher logic for NemoClaw-Thor
+# serving/launch.sh — Shared vLLM launcher logic for NemoClaw-Thor
 #
 # Source this file; do not execute it directly.
 
@@ -49,7 +49,7 @@ prepare_thor_launch_profile() {
 
     case "${profile}" in
         # minimax-m2.7-139b-a10b-nvfp4 profile removed 2026-04-23.
-        # See MINIMAX-M27-INVESTIGATION.md for the why — W4A4 NVFP4 MoE on SM110
+        # See docs/MINIMAX-M27-INVESTIGATION.md for the why — W4A4 NVFP4 MoE on SM110
         # has no fast kernel path; MARLIN fallback gave degraded output at 12 tok/s.
         # Runtime mod fix-nvfp4-moe-scale-merge is still shipped for potential
         # reuse with other NVFP4 split-scale checkpoints.
@@ -63,7 +63,7 @@ prepare_thor_launch_profile() {
         # the burst-throughput edge while staying in the v6 87/100 ★★★★ band).
         # qwen3.6-27b-fp8-dflash REMOVED 2026-04-28 — DFlash N=15 scored TEB 40
         # (★★ Weak); dominated by qwen3.6-27b-fp8-mtp-kvfp8 (TEB 84). 27B-DFlash
-        # drafter is gated and adds no value on Thor at this N. See PERFORMANCE-V7.md.
+        # drafter is gated and adds no value on Thor at this N. See docs/PERFORMANCE-V7.md.
         # qwen3.6-35b-a3b-fp8-mtp-fp8kv REMOVED 2026-04-28 — FP8-weights variant
         # of an NVFP4 profile that's strictly better at every metric. NVFP4 weights
         # available via RedHatAI/Qwen3.6-35B-A3B-NVFP4 → use nvfp4-mtp-fp8kv (TEB
@@ -180,7 +180,7 @@ prepare_thor_launch_profile() {
             # rely solely on pip's bundled nvidia-cudnn-cu13.
             THOR_LAUNCH_MODEL_SOURCE="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
             # gpu_memory_utilization=0.50 calibrated 2026-04-30 against
-            # max_model_len=262144 + max_num_seqs=16 (see lib/config.sh
+            # max_model_len=262144 + max_num_seqs=16 (see config.sh
             # nemotron3-nano-omni profile branch + MANYFORGE-PROFILE-
             # CALIBRATION.md). Yields ~25 GB KV pool, ~32x supportable
             # concurrency at 256K vs the 16 we configure, frees ~14 GB
@@ -218,7 +218,7 @@ prepare_thor_launch_profile() {
         # Qwen3.6-35B-A3B-NVFP4-MTP-FP8KV at 93/100. Worth re-evaluating if
         # NVIDIA ships a v2 with stronger tool-call training, but the Qwen3.6
         # MTP family is empirically dominant at this scale on Thor for now.
-        # See PERFORMANCE-V7.md for the cross-bench data.
+        # See docs/PERFORMANCE-V7.md for the cross-bench data.
         # qwen3.6-35b-a3b-fp8-turboquant REMOVED 2026-04-28 — FP8-weights variant
         # of qwen3.6-35b-a3b-nvfp4-tq-mtp (TEB 90, +27% tps, +1.4× ctx). NVFP4
         # alternative is strictly better on every metric.
@@ -328,7 +328,7 @@ prepare_thor_launch_profile() {
         # qwen3.6-35b-a3b-nvfp4-tq-mtp-2 REMOVED 2026-04-28 — N=2 hypothesis-
         # test profile, dominated. TEB 87 (vs 90 for nvfp4-tq-mtp at same KV
         # with N=4). With TQ KV, N=4 wins; with FP8 KV, N=2 wins. See full
-        # 2×2 KV×N matrix in PERFORMANCE-V7.md.
+        # 2×2 KV×N matrix in docs/PERFORMANCE-V7.md.
         # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv removed — crashes under 8-concurrent
         # (MoE autotuner picks invalid SM110 tile at M=128). Superseded by
         # qwen3.6-35b-a3b-nvfp4-tq-mtp which is strictly better on all axes.

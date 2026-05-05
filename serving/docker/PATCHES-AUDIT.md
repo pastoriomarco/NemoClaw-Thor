@@ -14,7 +14,7 @@ build attempts.
 
 | Mechanism | Target | Fires? | Effect |
 |---|---|---|---|
-| `docker/patches/flashinfer_cache.patch` | `flashinfer/artifacts.py` (FlashInfer v0.6.9) | **Yes** (fuzzy +50) | Adds checksum-validated local-cache fast path for cubin downloads. Pure build-speed optimization. |
+| `patches/flashinfer_cache.patch` | `flashinfer/artifacts.py` (FlashInfer v0.6.9) | **Yes** (fuzzy +50) | Adds checksum-validated local-cache fast path for cubin downloads. Pure build-speed optimization. |
 | Inline RUN: CMakeLists.txt 11.0f verification | `vllm/CMakeLists.txt` | **Yes** | Read-only `grep -c` reporting; does NOT modify. Prints expected counts (FP4=1, SCALED=2, MLA=1, total=8) for sanity. |
 | Inline RUN: MoE backend verification | `flashinfer_cutlass_moe.py` + 4 `experts/trtllm_*_moe.py` | **Yes** | **Read-only** — confirms CUTLASS MoE has SM110 family check upstream, prints presence info for the 4 TRT-LLM Gen MoE files. Does NOT modify any source. |
 
@@ -24,7 +24,7 @@ build attempts.
 
 ## Detailed audit
 
-### Patch 1 — `docker/patches/flashinfer_cache.patch` ✓ KEPT
+### Patch 1 — `patches/flashinfer_cache.patch` ✓ KEPT
 
 **Target:** `flashinfer/artifacts.py`, hunk header `@@ -203,9 +203,13 @@`.
 

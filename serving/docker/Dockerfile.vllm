@@ -1,10 +1,44 @@
 # syntax=docker/dockerfile:1.6
 #
-# NemoClaw-Thor vLLM Container — v8 generation
+# NemoClaw-Thor vLLM Container — v8.1 generation
 # Builds vLLM + FlashInfer from source for Jetson AGX Thor (sm110 / Blackwell).
 #
 # Adapted from spark-vllm-docker (sm121) — stripped of Ray/cluster logic,
 # retargeted for single-node Thor with CUDA 13.0 and JetPack 7.1.
+#
+# v8.1 changes vs v8 (2026-05-05):
+#   - BUMPED vLLM v0.20.0 → v0.20.1. Patch release with several non-DeepSeek
+#     fixes that hit our active profiles: PTX `cvt` for FP32→FP4 conversion
+#     (#41015) speeds NVFP4 dequant on every NVFP4 weight; CUDA-graph
+#     max_num_batched_token capture fix (#40734); num_gpu_blocks_override
+#     vs max_model_len reconciliation (#41069); cumem expandable_segments
+#     auto-disable (#40812); reasoning-parser kwargs propagated to structured
+#     output (#41199).
+#   - BUMPED FlashInfer v0.6.9 → v0.6.10. NVFP4 KV cache for prefill+attention
+#     (PR #3097, all arch ≥ SM80) — opens a parallel option to TurboQuant K8V4
+#     for evaluation; autotuner hybrid token bucketing + missing
+#     routing_replay_out arg fix (PR #3115) — autotuner runs hot on Omni since
+#     v8 dropped the disable-workaround; vLLM OOB fix (PR #2762); trtllm-gen
+#     FMHA SWA cubin update (PR #3089); CuTe DSL FMHA prefill cubin (PR #3039).
+#   - BUMPED flash-attn-4 4.0.0b10 → 4.0.0b11 (released 2026-04-29). First-class
+#     head_dim=256 forward+backward in CUTE DSL (PR #2412); 3–9% hd256 perf
+#     gain from exp2 FMA emulation (PR #2488); SM100 MLA stream fix (PR #2505);
+#     SM100 empty-tile gO None guard (PR #2504). Direct wins for the Qwen3.6
+#     head_dim=256 line.
+#   - BUMPED nvidia-cudnn-cu13 9.20.0.48 → 9.21.1.3 (both stages). Two minor
+#     bumps. Safe now that v8 fixed the apt-vs-pip mismatch root cause; cuDNN
+#     is the canary so smoke-test Omni audio after promotion.
+#   - BUMPED apache-tvm-ffi 0.1.10 → 0.1.11. Single patch release.
+#   - HELD nvidia-cutlass-dsl at 4.4.2. 4.5.0.dev0 (2026-04-08) is a
+#     pre-release; its primary new content is "optimal code generation with
+#     CUDA toolkit 13.2", which doesn't apply at our CUDA 13.0.3 pin. Revisit
+#     when 4.5.0 ships stable AND we move to CUDA 13.2.
+#   - HELD CUDA at 13.0.3-ubuntu24.04. JetPack 7.1 ships CUDA 13.0; container
+#     CUDA ahead of host driver adds avoidable risk. Bump when JetPack 7.2
+#     lands.
+#   - HELD torch nightly at 2026-04-26+cu130. Tied to the CUDA pin —
+#     bumping torch implies revalidating cu130 ABI against everything else.
+#   - HELD transformers at 5.7.0 (already latest as of 2026-04-28).
 #
 # v8 changes vs v7 (2026-04-29):
 #   - DROPPED apt libcudnn9-cuda-13 in both stages. v7 had apt cuDNN 9.21.1
@@ -26,21 +60,27 @@
 #     fixes, continuous batching memory/KV-dedup fixes ≥16K (we run 64K),
 #     NVFP4+torchao serialization fix. All directly relevant to active profiles.
 #
-# Recommended invocation for the v8 image:
-#   ./build-vllm.sh --vllm-ref v0.20.0 --flashinfer-ref v0.6.9
+# Recommended invocation for the v8.1 image:
+#   ./build-vllm.sh --vllm-ref v0.20.1 --flashinfer-ref v0.6.10
 #
-# Why those pins (researched 2026-04-27, still current 2026-04-29):
-#   - vLLM v0.20.0 (tagged 2026-04-27) is the first stable release containing all
-#     the Thor-relevant fixes: PR #39233 (sm_110 build target), PR #39546 (SM100+
+# Why those pins (researched 2026-05-05):
+#   - vLLM v0.20.1 (tagged 2026-05-04) — patch release on v0.20.0 with
+#     PTX FP32→FP4 codegen and several CUDA-graph / KV-block / cumem fixes
+#     that all touch our active serving paths. v0.20.0 base still carries the
+#     Thor enablement set: PR #39233 (sm_110 build target), PR #39546 (SM100+
 #     spec-decode test fix), PR #40092 (TurboQuant FA3/FA4 prefill enablement),
 #     PR #40654 (avoid seq_lens_cpu GPU->CPU sync), MRv2 acceptance fixes.
-#   - FlashInfer v0.6.9 (released 2026-04-24) — the version vLLM v0.20.0 expects.
-#     Pure-Python wheel + CuTe-DSL JIT, SM110 detected at runtime, no special args.
-#   - flash-attn-4==4.0.0b10 (pinned in runner stage below) — adds SM100 FP8 e4m3/
-#     e5m2 forward (PR #2109), unblocks DFlash + FP8 KV combo on Blackwell.
+#   - FlashInfer v0.6.10 (released 2026-05-04) — first release after the
+#     v0.6.9 vLLM v0.20.x is pinned against; NVFP4 KV path opens for
+#     evaluation, autotuner correctness fix lands, plus several free wins.
+#     Pure-Python wheel + CuTe-DSL JIT, SM110 detected at runtime.
+#   - flash-attn-4==4.0.0b11 (pinned in runner stage below) — head_dim=256
+#     forward+backward graduates to first-class in CUTE DSL with measurable
+#     perf gain. b10 added SM100 FP8 e4m3/e5m2 forward (PR #2109); b11 keeps
+#     that path and adds the hd256 work.
 #
 # Usage:
-#   ./build-vllm.sh --vllm-ref v0.20.0 --flashinfer-ref v0.6.9   # canonical v8 build
+#   ./build-vllm.sh --vllm-ref v0.20.1 --flashinfer-ref v0.6.10  # canonical v8.1 build
 #   ./build-vllm.sh --vllm-ref main                              # bleeding edge, NOT recommended
 #   ./build-vllm.sh --build-jobs 8                               # lower parallelism if constrained
 
@@ -94,11 +134,12 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
     && pip install uv
 
 # PyTorch nightly (cu130 — matches host CUDA 13.0 driver, avoids PTX version mismatch).
-# Pinned to 2026-04-26 nightly for v7 build. Note: vLLM v0.20.0 pins torch==2.11.0
-# stable, but no 2.11.0 stable cu130/aarch64 wheel exists for Thor — we ride the
-# nightly. The 2026-04-15 nightly used in v6 has been pruned from the index, so
-# v6 is no longer rebuildable; v7 uses the 2.13-nightly that is currently live.
-# Triton ships bundled inside the torch wheel — no explicit pin needed.
+# Pinned to 2026-04-26 nightly for v7 build, retained through v8 and v8.1. Note:
+# vLLM v0.20.x pins torch==2.11.0 stable, but no 2.11.0 stable cu130/aarch64
+# wheel exists for Thor — we ride the nightly. The 2026-04-15 nightly used in
+# v6 has been pruned from the index, so v6 is no longer rebuildable; v7+ uses
+# the 2.13-nightly that is currently live. Triton ships bundled inside the
+# torch wheel — no explicit pin needed.
 ENV UV_HTTP_TIMEOUT=300
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
      uv pip install \
@@ -108,14 +149,15 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
          "torchvision==0.27.0.dev20260426+cu130" \
          "torchaudio==2.11.0.dev20260426+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-     uv pip install "nvidia-nvshmem-cu13==3.6.5" "apache-tvm-ffi==0.1.10" filelock pynvml requests tqdm
+     uv pip install "nvidia-nvshmem-cu13==3.6.5" "apache-tvm-ffi==0.1.11" filelock pynvml requests tqdm
 
-# v8: pin pip cuDNN explicitly so it can't drift in the resolver. torch nightly
+# v8.1: pin pip cuDNN explicitly so it can't drift in the resolver. torch nightly
 # pulls nvidia-cudnn-cu13 transitively; pinning here documents the exact build
 # version and keeps base+runner stages aligned. Drop or bump only when both
-# stages are bumped together.
+# stages are bumped together. v8.1 bumps 9.20.0.48 → 9.21.1.3 (two minor steps;
+# safe now that v8 resolved the apt-vs-pip mismatch by going pip-only).
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-     uv pip install "nvidia-cudnn-cu13==9.20.0.48"
+     uv pip install "nvidia-cudnn-cu13==9.21.1.3"
 
 # Ccache
 ENV PATH=/usr/lib/ccache:$PATH
@@ -273,7 +315,7 @@ RUN echo "Verifying SM110 arch inclusion in CMakeLists.txt..." && \
 
 # MoE backend selection on SM110 — informational verification only (v7+).
 #
-# vLLM v0.20.0 has TWO FlashInfer MoE backend families:
+# vLLM v0.20.x has TWO FlashInfer MoE backend families:
 #   1. FlashInfer CUTLASS MoE  (vllm/.../flashinfer_cutlass_moe.py)
 #         — already includes SM110 in its family-capability gate upstream.
 #   2. FlashInfer TRT-LLM Gen MoE (vllm/.../experts/trtllm_{bf16,fp8,mxfp4,nvfp4}_moe.py)
@@ -399,7 +441,8 @@ ARG PRE_TRANSFORMERS=1
 ENV UV_HTTP_TIMEOUT=300
 
 # PyTorch (cu130 — matches host CUDA 13.0 driver) — pinned to 2026-04-26 nightly.
-# v7 pin retained for v8 (still the latest live nightly with all our fixes).
+# v7 pin retained through v8 and v8.1 (still the latest live nightly with all
+# our fixes; bumping torch is coupled to a CUDA bump and deferred to v9).
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
      uv pip install \
          "torch==2.13.0.dev20260426+cu130" \
@@ -408,12 +451,12 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
          "torchvision==0.27.0.dev20260426+cu130" \
          "torchaudio==2.11.0.dev20260426+cu130" \
          --index-url https://download.pytorch.org/whl/nightly/cu130 && \
-     uv pip install "nvidia-nvshmem-cu13==3.6.5" "apache-tvm-ffi==0.1.10"
+     uv pip install "nvidia-nvshmem-cu13==3.6.5" "apache-tvm-ffi==0.1.11"
 
-# v8: pin pip cuDNN to match the base stage. Same version both sides keeps the
+# v8.1: pin pip cuDNN to match the base stage. Same version both sides keeps the
 # torch ABI happy and avoids any chance of a runtime/build-time mismatch.
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-     uv pip install "nvidia-cudnn-cu13==9.20.0.48"
+     uv pip install "nvidia-cudnn-cu13==9.21.1.3"
 
 # Install FlashInfer + vLLM wheels (bind-mounted from host ./wheels/)
 # Exclude flashinfer_cubin wheel: precompiled cubins are downloaded from upstream
@@ -461,15 +504,19 @@ COPY mods/ /workspace/mods/
 # - fastsafetensors/instanttensor: fast model loading (--load-format instanttensor)
 # - triattention: KV cache compression via trigonometric frequency-domain scoring
 #   (vLLM plugin — transparent, up to 10.7x KV memory reduction for long reasoning)
-# - flash-attn-4 beta10: FA4 with SM110a/SM110f support (JIT via CuTeDSL).
+# - flash-attn-4 beta11: FA4 with SM110a/SM110f support (JIT via CuTeDSL).
 #   Enables --attention-backend flash_attn for DFlash on SM110 with head_dim=256.
-#   Beta10 (2026-04-22) adds SM100 FP8 e4m3/e5m2 forward (PR #2109), unblocking
-#   DFlash + FP8 KV combo. Plus SM100 seqlen_k=0 crash fix (PR #2470).
-#   Requires nvidia-cutlass-dsl >= 4.4.x
+#   Beta10 (2026-04-22) added SM100 FP8 e4m3/e5m2 forward (PR #2109) and
+#   SM100 seqlen_k=0 crash fix (PR #2470). Beta11 (2026-04-29) adds first-class
+#   head_dim=256 forward+backward in CUTE DSL (PR #2412), 3–9% hd256 perf
+#   improvement via exp2 FMA emulation (PR #2488), and SM100 MLA stream +
+#   empty-tile gO None fixes (PRs #2505, #2504).
+#   Requires nvidia-cutlass-dsl >= 4.4.x (held at 4.4.2; 4.5.0.dev0 gates new
+#   value on CTK 13.2 which we don't have at CUDA 13.0.3).
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv pip install "fastsafetensors==0.3" "instanttensor==0.1.8" && \
     uv pip install "triattention @ git+https://github.com/WeianMao/triattention.git@325297218a" && \
-    uv pip install "flash-attn-4==4.0.0b10" "nvidia-cutlass-dsl==4.4.2"
+    uv pip install "flash-attn-4==4.0.0b11" "nvidia-cutlass-dsl==4.4.2"
 
 # v8: vLLM audio extras — librosa + soundfile cover Nemotron 3 Nano Omni's
 # audio modality (Parakeet encoder feed). audioread is librosa's fallback

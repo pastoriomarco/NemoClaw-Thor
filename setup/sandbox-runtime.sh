@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/sandbox-runtime.sh — Helpers for syncing NemoClaw runtime config inside a sandbox
+# setup/sandbox-runtime.sh — Helpers for syncing NemoClaw runtime config inside a sandbox
 #
 # Source this file; do not execute it directly.
 

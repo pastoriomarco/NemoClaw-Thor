@@ -37,7 +37,7 @@ fit the 30-40 GB LLM envelope while leaving enough memory for the robotics and
 perception stack.
 
 The Thor v7 bench already established the agentic-quality ceiling for each
-candidate (see `PERFORMANCE-V7.md`). What's outstanding is
+candidate (see `../../serving/docs/PERFORMANCE-V7.md`). What's outstanding is
 **workload-specific validation against the manyforge-assistant agent's actual
 tool calls and pipeline workflows** and **whether each profile fits the Orin
 AGX shared-memory budget with the rest of the stack present**.
@@ -153,7 +153,7 @@ sudo docker run -it --rm --pull always --runtime=nvidia --network host \
 - ASR (audio in): T=0.2, top_k=1
 
 Note: our T=0 deterministic baseline finding from
-`PERFORMANCE-V7.md` § "Recommended-sampling probe" likely still applies
+`../../serving/docs/PERFORMANCE-V7.md` § "Recommended-sampling probe" likely still applies
 — vendor-recommended sampling consistently cost 2–4 TEB points on the
 Qwen3.6-MTP tests. The Omni model's `T=0.2 top_k=1` "Instruct" mode is
 much closer to deterministic and may not show the same gap.
@@ -220,7 +220,7 @@ A candidate is the **winner** if:
 
 ### If Outcome A wins (Cosmos-8B alone)
 
-- Move `cosmos-reason2-8b` profile from `lib/launch.sh` to a new
+- Move `cosmos-reason2-8b` profile from `../../serving/launch.sh` to a new
   `orin/lib/launch-orin.sh` (or similar) with Orin-tuned defaults
 - Drop manyforge profile from the Orin deployment entirely
 - ManyForge orchestrator routes ALL queries to Cosmos-8B endpoint
@@ -246,7 +246,7 @@ A candidate is the **winner** if:
 
 ### If Outcome D wins (Nemotron 3 Nano Omni)
 
-Profile already added to `lib/launch.sh` + `lib/config.sh` and
+Profile already added to `../../serving/launch.sh` + `../../serving/config.sh` and
 benched 2026-04-28 (TEB 80 / IFEval 87.7% at vendor tool-call
 recipe). Remaining steps to ship:
 
@@ -321,4 +321,4 @@ For context, the per-candidate Thor v7 results that underpin this plan:
 | `qwen3.6-35b-a3b-nvfp4-tq-mtp` | 90 ★★★★★ | 89.0% | 24.8 | manyforge family; +27% tps, +1.4× ctx |
 | `nemotron3-nano-omni-30b-a3b-nvfp4` | 80 ★★★★ | 87.7% | ~11.7 | Outcome D — multimodal (vision/audio/video). Vendor tool-call recipe wins by +5 TEB over T=0 |
 
-Full bench results in `PERFORMANCE-V7.md`.
+Full bench results in `../../serving/docs/PERFORMANCE-V7.md`.

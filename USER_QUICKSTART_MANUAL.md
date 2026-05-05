@@ -3,9 +3,9 @@
 Operator manual for `NemoClaw-Thor` on a Jetson AGX Thor.
 
 The currently verified versions of NemoClaw, OpenShell (CLI + cluster
-image), and OpenClaw live in [AGENTS.md](AGENTS.md) — single source of
+image), and OpenClaw live in [VERSIONS.md](VERSIONS.md) — single source of
 truth, updated on each tested upgrade. The vLLM image is owned by this
-repo and fully pinned in `docker/Dockerfile.vllm` (see `docker/NOTES.md`
+repo and fully pinned in `serving/docker/Dockerfile.vllm` (see `serving/docker/NOTES.md`
 for build details).
 
 **Operating shape:**
@@ -20,14 +20,14 @@ for build details).
 build; NemoClaw and OpenShell install from their respective upstream
 release channels via the install script in NemoClaw's `scripts/`
 directory. To reproduce a specific tested baseline on a new host, pin
-to the versions in AGENTS.md using the commands in section 3.
+to the versions in VERSIONS.md using the commands in section 3.
 
 Important rule:
 
-- `./start-model.sh <profile>` only starts vLLM.
-- `./configure-local-provider.sh [profile]` binds OpenShell to the running
+- `./serving/start-model.sh <profile>` only starts vLLM.
+- `./setup/configure-local-provider.sh [profile]` binds OpenShell to the running
   model, patches openclaw.json inside the sandbox, and sends a warmup request.
-- `./configure-local-provider.sh --with-manyforge-mux [profile]` switches the
+- `./setup/configure-local-provider.sh --with-manyforge-mux [profile]` switches the
   provider to `http://host.openshell.internal:8888/v1` so the embedded
   OpenClaw agent can use the verified ManyForge workspace-plugin path.
 
@@ -102,7 +102,7 @@ cd ~/NemoClaw && git pull origin main && npm install && npm link
 **For reproducing a specific verified baseline:**
 
 Replace `<NEMOCLAW_REF>` and `<OPENSHELL_VERSION>` below with the
-values from the AGENTS.md verified-versions table.
+values from VERSIONS.md.
 
 ```bash
 # Pin NemoClaw to the verified ref (commit hash or tag like v0.0.31)
@@ -114,7 +114,7 @@ npm install && npm link
 # Pin OpenShell CLI to the verified version
 bash ~/NemoClaw/scripts/install-openshell.sh
 # (the installer reads min/max version pins from NemoClaw's blueprint
-#  and downloads the appropriate release; falls within AGENTS.md range)
+#  and downloads the appropriate release; falls within VERSIONS.md range)
 
 # OpenClaw is pinned automatically by NemoClaw's Dockerfile.base —
 # it gets installed into the sandbox image during `nemoclaw onboard`.
@@ -128,7 +128,7 @@ openshell --version
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c agent -- openclaw --version
 ```
 
-Cross-check the printed versions against AGENTS.md.
+Cross-check the printed versions against VERSIONS.md.
 
 2. Run the NemoClaw onboard wizard:
 
@@ -138,27 +138,27 @@ nemoclaw onboard
 
 This creates the sandbox (e.g. `thor-v5`), the OpenShell gateway, and bakes a
 base config into the sandbox image. Some onboard defaults are wrong for local
-vLLM inference — `configure-local-provider.sh` fixes them (see Section 11).
+vLLM inference — `setup/configure-local-provider.sh` fixes them (see Section 11).
 
 3. Start the model server and leave it running in that terminal:
 
 ```bash
-./start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
+./serving/start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
 ```
 
 4. In a second terminal, configure and verify:
 
 ```bash
-./configure-local-provider.sh
-./status.sh
+./setup/configure-local-provider.sh
+./setup/status.sh
 nemoclaw my-assistant connect
 ```
 
 If you are enabling ManyForge tool access for the embedded OpenClaw agent, use:
 
 ```bash
-./configure-local-provider.sh --with-manyforge-mux
-./status.sh
+./setup/configure-local-provider.sh --with-manyforge-mux
+./setup/status.sh
 ```
 
 ## 4. Start After Reboot
@@ -168,29 +168,29 @@ Same sequence every time — no special reboot handling needed:
 1. Start the model server:
 
 ```bash
-./start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
+./serving/start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
 ```
 
 2. Rebind the provider and patch the sandbox:
 
 ```bash
-./configure-local-provider.sh
+./setup/configure-local-provider.sh
 ```
 
 To restore direct local inference after using ManyForge mode:
 
 ```bash
-./configure-local-provider.sh --without-manyforge-mux
+./setup/configure-local-provider.sh --without-manyforge-mux
 ```
 
 3. Verify and connect:
 
 ```bash
-./status.sh
+./setup/status.sh
 nemoclaw my-assistant connect
 ```
 
-If `./status.sh` says the sandbox is missing, re-run `nemoclaw onboard`.
+If `./setup/status.sh` says the sandbox is missing, re-run `nemoclaw onboard`.
 
 ## 5. Switch Model
 
@@ -199,8 +199,8 @@ reconfigure:
 
 ```bash
 sudo sync && sudo sysctl -w vm.drop_caches=3
-./start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
-./configure-local-provider.sh qwen3.6-35b-a3b-prismaquant-dflash
+./serving/start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
+./setup/configure-local-provider.sh qwen3.6-35b-a3b-prismaquant-dflash
 ```
 
 Always drop caches between model switches — Thor's unified memory is not
@@ -250,7 +250,7 @@ OpenClaw main agents (subagents fill remaining slots automatically).
 
 ### Launcher overrides
 
-The most relevant per-run overrides for `./start-model.sh`:
+The most relevant per-run overrides for `./serving/start-model.sh`:
 
 - `THOR_MAX_MODEL_LEN`
 - `THOR_KV_CACHE_DTYPE`
@@ -265,7 +265,7 @@ THOR_MAX_MODEL_LEN=65536 \
 THOR_KV_CACHE_DTYPE=fp8 \
 THOR_MAX_NUM_SEQS=20 \
 THOR_GPU_MEMORY_UTILIZATION=0.80 \
-./start-model.sh qwen3.6-35b-a3b-nvfp4-mtp-fp8kv
+./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-mtp-fp8kv
 ```
 
 Persistent defaults are saved in:
@@ -314,7 +314,7 @@ and head_dim=256/512 is incompatible with flash_attn on SM110.
 ### Full rebuild (FlashInfer + vLLM from source)
 
 ```bash
-cd docker/
+cd serving/docker/
 ./build-vllm.sh --skip-flashinfer --skip-vllm   # reuse cached wheels
 ./build-vllm.sh                                  # full rebuild from main
 ./build-vllm.sh --vllm-ref v0.8.5               # pin vLLM version
@@ -335,10 +335,10 @@ cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
 docker tag nemoclaw-thor/vllm:latest nemoclaw-thor/vllm:v4-base
 
 # Build overlay (seconds, not hours)
-docker build -f docker/Dockerfile.overlay -t nemoclaw-thor/vllm:latest docker/
+docker build -f serving/docker/Dockerfile.overlay -t nemoclaw-thor/vllm:latest serving/docker/
 ```
 
-Edit `docker/Dockerfile.overlay` to add more packages. The overlay
+Edit `serving/docker/Dockerfile.overlay` to add more packages. The overlay
 inherits everything from the base image and just adds a thin layer.
 
 ## 8. First Launch — FlashInfer JIT Compilation
@@ -368,7 +368,7 @@ docker top <container> | grep nvcc
 ```
 
 **Cache volumes must persist** for compilation results to survive across
-container recreations. The `start-model.sh` script bind-mounts host
+container recreations. The `serving/start-model.sh` script bind-mounts host
 directories into the container:
 
 | Container path | Host path | Contents |
@@ -459,7 +459,7 @@ This does not stop the sandbox, gateway, or model server.
 
 ### Stop the model server
 
-If `./start-model.sh` is running in the current terminal, press `Ctrl-C`.
+If `./serving/start-model.sh` is running in the current terminal, press `Ctrl-C`.
 
 If the vLLM container is running elsewhere:
 
@@ -489,13 +489,13 @@ openshell gateway stop
 ## 11. Practical Rules
 
 - **Swap must be active** before starting any model (see Section 2).
-  Verify with `swapon --show` before launching `start-model.sh`.
+  Verify with `swapon --show` before launching `serving/start-model.sh`.
 - Use `nemoclaw thor-v5 connect` as the normal shell entrypoint.
 - Use `openclaw tui` as the normal prompt UI.
 - If the TUI shows "gateway disconnected": `HOME=/sandbox openclaw gateway run &`
-- After any model change, run `./configure-local-provider.sh <profile>`.
-- After a reboot: verify swap (`swapon --show`), then `./start-model.sh`,
-  `./configure-local-provider.sh`, `./status.sh`, `nemoclaw thor-v5 connect`.
+- After any model change, run `./setup/configure-local-provider.sh <profile>`.
+- After a reboot: verify swap (`swapon --show`), then `./serving/start-model.sh`,
+  `./setup/configure-local-provider.sh`, `./setup/status.sh`, `nemoclaw thor-v5 connect`.
 - If you stop vLLM, always run `sudo sync && sudo sysctl -w vm.drop_caches=3`
   before loading another model.
 - First launch of a new model profile takes 20-60 min for kernel compilation
@@ -525,7 +525,7 @@ entrypoint) and DAC restrictions (runs as root).
 | Default model | `qwen3.5-27b-claude-distilled-v2-nvfp4` | `qwen3.6-35b-a3b-fp8-dflash` |
 | Best throughput | ~12 tok/s (27B NVFP4, MTP N=1) | **54.7 tok/s** (35B NVFP4, DFlash-15) |
 | DFlash backend | FlashInfer + 35 runtime mods | flash_attn native (head_dim=128, no mods) |
-| Runtime mods | 35 mods in docker/mods/ | **All deleted** — clean install |
+| Runtime mods | 35 mods in serving/docker/mods/ | **All deleted** — clean install |
 | KV compression | FP8 only | FP8, TurboQuant K8V4 (2.6x), BF16 |
 | MTP tokens | N=1-2 (`qwen3_next_mtp`) | N=4 (`mtp` method) |
 | Tool parser | `qwen3_xml` + `--reasoning-parser qwen3` | `qwen3_xml` only |

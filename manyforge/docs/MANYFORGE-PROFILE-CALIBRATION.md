@@ -4,8 +4,8 @@
 > and `gpu_memory_utilization` on Thor profiles intended to serve the
 > ManyForge assistant pipeline (composer-assistant, error-recovery,
 > query modes per `manyforge_specs/docs/spec/480-...md`). Concept-
-> focused; specific per-profile numbers live in `lib/config.sh` and
-> `lib/launch.sh`.
+> focused; specific per-profile numbers live in `../../serving/config.sh` and
+> `../../serving/launch.sh`.
 
 ---
 
@@ -13,8 +13,8 @@
 
 Read this before:
 
-- adding a new ManyForge-pipeline-targeted profile to `lib/config.sh` /
-  `lib/launch.sh`,
+- adding a new ManyForge-pipeline-targeted profile to `../../serving/config.sh` /
+  `../../serving/launch.sh`,
 - changing `THOR_TARGET_MAX_MODEL_LEN`, `THOR_TARGET_MAX_NUM_SEQS`, or
   `THOR_LAUNCH_GPU_MEMORY_UTILIZATION` for any existing
   ManyForge-pipeline profile,
@@ -197,11 +197,11 @@ workloads. Revisit when ManyForge live-test data arrives:
 
 - Tool-call parser selection (`hermes` vs `qwen3_xml` vs `qwen3_coder`)
   — see auto-memory `reference_vllm_tool_parsers` and per-profile
-  comments in `lib/launch.sh`.
+  comments in `../../serving/launch.sh`.
 - Speculative decoding (DFlash / MTP) tuning — see
-  `DFLASH-INVESTIGATION.md` and the per-profile comments in
-  `lib/config.sh` / `lib/launch.sh`.
-- Quality benchmark methodology — see `agentic-bench/README.md`.
+  `../../serving/docs/DFLASH-INVESTIGATION.md` and the per-profile comments in
+  `../../serving/config.sh` / `../../serving/launch.sh`.
+- Quality benchmark methodology — see `../../serving/agentic-bench/README.md`.
 - Profile selection for a given deployment target — see
   `MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md`.
 

@@ -2,16 +2,16 @@
 
 **Date**: 2026-04-22
 **Verdict on W4A4-GB10 variant**: not viable on Thor (SM110a). Profile kept in the source tree for reference, checkpoint removed from disk.
-**Next attempt**: the W4A16 sibling (`dervig/m51Lab-MiniMax-M2.7-REAP-139B-A10B-NVFP4`, no `-GB10` suffix) — scheduled for tonight. W4A16 uses a different GEMM kernel path and does not carry the split per-half scale mismatch, so both the MARLIN fallback and the 45%-attenuation damage above should be avoided. The config.json ignore-list patch for its 62 MoE router gates is already staged at [scripts/patch-minimax-w4a16-config.sh](scripts/patch-minimax-w4a16-config.sh).
+**Next attempt**: the W4A16 sibling (`dervig/m51Lab-MiniMax-M2.7-REAP-139B-A10B-NVFP4`, no `-GB10` suffix) — scheduled for tonight. W4A16 uses a different GEMM kernel path and does not carry the split per-half scale mismatch, so both the MARLIN fallback and the 45%-attenuation damage above should be avoided. The config.json ignore-list patch for its 62 MoE router gates is already staged at [../scripts/patch-minimax-w4a16-config.sh](../scripts/patch-minimax-w4a16-config.sh).
 
 ## What we tried
 
 Target: `dervig/m51Lab-MiniMax-M2.7-REAP-139B-A10B-NVFP4-GB10`
 (75 GB, 62 all-attention layers, head_dim=128, 154 experts × 10B active).
 
-Profile added in [lib/config.sh](lib/config.sh) + [lib/launch.sh](lib/launch.sh) as
+Profile added in [../config.sh](../config.sh) + [../launch.sh](../launch.sh) as
 `minimax-m2.7-139b-a10b-nvfp4`. Runtime mod created:
-[docker/mods/fix-nvfp4-moe-scale-merge/run.sh](docker/mods/fix-nvfp4-moe-scale-merge/run.sh)
+[../docker/mods/fix-nvfp4-moe-scale-merge/run.sh](../docker/mods/fix-nvfp4-moe-scale-merge/run.sh)
 (replaces `w13_weight_global_scale[:, 0]` with `torch.minimum(w1, w3)`).
 
 Tested matrix of attention and MoE backends until one produced readable output.
@@ -107,10 +107,10 @@ more factual errors and formatting mistakes than a healthy checkpoint of the sam
 
 ## Artifacts kept
 
-- [docker/mods/fix-nvfp4-moe-scale-merge/run.sh](docker/mods/fix-nvfp4-moe-scale-merge/run.sh) —
+- [../docker/mods/fix-nvfp4-moe-scale-merge/run.sh](../docker/mods/fix-nvfp4-moe-scale-merge/run.sh) —
   reusable for any future NVFP4 W4A4 checkpoint with split per-half scales. Not specific to
   MiniMax.
-- [lib/config.sh](lib/config.sh) + [lib/launch.sh](lib/launch.sh) profile block — left in
+- [../config.sh](../config.sh) + [../launch.sh](../launch.sh) profile block — left in
   place with a header comment pointing to this document. The working launch config (MARLIN
   forced, `VLLM_USE_FLASHINFER_MOE_FP4=0`, fp8 KV, `max_num_seqs=1`, `max_model_len=16384`)
   is preserved so it can be re-activated without re-deriving the right combination.

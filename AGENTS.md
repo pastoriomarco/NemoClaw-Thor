@@ -38,14 +38,26 @@ this repo configures and consumes it but does not own it.
 
 **Owns** (edit freely, version in this repo):
 
-- `docker/` — Thor-specific vLLM and TRT-Edge-LLM container builds and
-  Dockerfile-side runtime patches under `docker/mods/`.
-- `lib/` — model profiles, vLLM launch arg matrix, sandbox prereqs.
-- `start-model.sh`, `start-duo.sh`, `configure-local-provider.sh` — host
-  entry points wrapping the above.
-- `agentic-bench/` — runtime-agnostic benchmark harness.
-- Operational docs in this repo (workflow, deployment plan, performance
-  reports, investigations).
+- `setup/` — sandbox/control-plane scope: prerequisite checks
+  (`checks.sh`), sandbox runtime helpers (`sandbox-runtime.sh`), the
+  local-provider configuration entrypoint (`configure-local-provider.sh`),
+  the system-health entrypoint (`status.sh`), egress policies under
+  `setup/policies/`, and the canonical onboarding workflow doc
+  `setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`.
+- `serving/` — model-serving scope: vLLM model profile registry
+  (`config.sh`), launch-arg matrix (`launch.sh`), entry points
+  (`start-model.sh`, `start-duo.sh`), the Thor-specific Dockerfiles and
+  runtime patches under `serving/docker/`, the agentic benchmark harness
+  under `serving/agentic-bench/`, loose perf probes under
+  `serving/benchmarks/`, and per-scope investigation/perf docs under
+  `serving/docs/`.
+- `manyforge/` — ManyForge integration scope: the deployment-side
+  provisioner (`setup-manyforge-assistant.sh`), the egress preset
+  (`policies/manyforge-composer.preset.yaml`), the bridge audit-log
+  mount point (`bridge/`), and integration docs under `manyforge/docs/`.
+- Top-level docs: `README.md`, this file (`AGENTS.md`), `VERSIONS.md`
+  (single source of truth for verified versions across all three
+  scopes), and `USER_QUICKSTART_MANUAL.md`.
 
 This repo does **not** own the ManyForge assistant-provider bridge
 service. The bridge implements ManyForge's HTTP contract and lives in
@@ -135,7 +147,7 @@ Concretely:
 │  │                                            ▼                  │
 │  └─ vLLM container (this repo)  ────►  /v1/chat/completions      │
 │        nemoclaw-thor/vllm:latest        served at 127.0.0.1:8000 │
-│        (this repo: docker/, lib/, start-model.sh)                │
+│        (this repo: serving/{docker,config.sh,launch.sh,start-*})│
 └─────────────────────────────────────────────────────────────────┘
 
                                        ▲
@@ -153,19 +165,11 @@ Concretely:
                                        │ bridge architecture.
 ```
 
-**Verified working version pins.** Update on each tested upgrade. The
-`NEMOCLAW-OPENCLAW-WORKFLOW.md` version table is the more detailed
-record; this is the entry-point summary.
-
-| Component | Verified version | Audit date |
-|---|---|---|
-| NemoClaw CLI (host) | `v0.0.31` | 2026-04-30 |
-| OpenShell CLI | `0.0.36` | 2026-04-30 |
-| OpenShell cluster image | `0.0.36` | 2026-04-30 |
-| OpenClaw (in-sandbox) | `v2026.4.24` | 2026-04-30 |
-
-Latest-at-audit is the same as verified for these components on this
-date. Drift will reappear; expect to do a small upgrade pass periodically.
+**Verified working version pins** for all three repo scopes (setup,
+serving, ManyForge integration) live in [`VERSIONS.md`](VERSIONS.md). That
+is the single source of truth — update it on each tested upgrade rather
+than duplicating tables here. The setup-scope onboarding workflow detail
+lives in `setup/NEMOCLAW-OPENCLAW-WORKFLOW.md` (post-restructure path).
 
 ---
 
@@ -185,7 +189,7 @@ Manual steps (these stay manual; do not script around them):
    intend to use.
 5. Pre-pull model weights with `hf download <repo>` — vLLM cold starts
    faster from a populated cache.
-6. Start the model first (`./start-model.sh <profile>`), then run
+6. Start the model first (`./serving/start-model.sh <profile>`), then run
    `nemoclaw onboard` — the onboarding wizard probes the inference
    endpoint as part of step 3/8.
 
@@ -198,7 +202,7 @@ The detailed wizard walkthrough — exact prompt answers that produce a
 working `my-assistant` sandbox on Thor (inference option, base URL,
 served-model name, sandbox name, web-search/messaging skip, policy tier
 choice, minimum-egress preset selection, dashboard token handling) —
-lives in [NEMOCLAW-OPENCLAW-WORKFLOW.md](NEMOCLAW-OPENCLAW-WORKFLOW.md)
+lives in [NEMOCLAW-OPENCLAW-WORKFLOW.md](setup/NEMOCLAW-OPENCLAW-WORKFLOW.md)
 under "First-time NemoClaw onboard recipe". Read it before running
 `nemoclaw onboard` on a clean Thor.
 
@@ -207,11 +211,11 @@ under "First-time NemoClaw onboard recipe". Read it before running
 ```bash
 cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
 
-# 1. Start the model (one of the profiles in lib/config.sh)
-./start-model.sh <profile-slug>
+# 1. Start the model (one of the profiles in serving/config.sh)
+./serving/start-model.sh <profile-slug>
 
 # 2. Wire OpenShell to route the sandbox at it
-./configure-local-provider.sh <profile-slug>
+./setup/configure-local-provider.sh <profile-slug>
 
 # 3. Use it (interactive)
 nemoclaw <sandbox-name> connect
@@ -221,8 +225,8 @@ nemoclaw <sandbox-name> connect
 
 **Naming invariant.** The served-model-name advertised by vLLM equals
 the profile slug. A consumer (ManyForge, OpenShell route, BFCL, etc.)
-only needs to know the slug. The mechanism lives in `lib/config.sh`'s
-case-statement branches and `lib/launch.sh`'s `--served-model-name`
+only needs to know the slug. The mechanism lives in `serving/config.sh`'s
+case-statement branches and `serving/launch.sh`'s `--served-model-name`
 flag construction.
 
 ### C — End-of-session cleanup
@@ -238,7 +242,7 @@ leave unified-memory pages pinned after a stop or crash.
 
 ### D — Bench candidates
 
-See `agentic-bench/README.md` for the harness, current candidate
+See `serving/agentic-bench/README.md` for the harness, current candidate
 shortlist, and bench-menu rationale.
 
 ---
@@ -308,11 +312,12 @@ Mode taxonomy and bounded-autonomy spec live in `manyforge_specs/docs/spec/480-.
 
 ## Boundary rules for LLM agents working in this repo
 
-1. **Read before edit.** Before modifying any file under `lib/`,
-   `docker/`, or the top-level `start-*.sh` scripts, read the workflow
-   doc and any open `*-INVESTIGATION.md` notes that touch the same
-   area. The repo's value is mostly in the comments — they record
-   traps that took hours to find.
+1. **Read before edit.** Before modifying any file under `setup/`,
+   `serving/` (especially `serving/docker/`, `serving/config.sh`,
+   `serving/launch.sh`), or the `start-*.sh` entrypoints, read the
+   relevant scope's workflow doc and any open `*-INVESTIGATION.md`
+   notes that touch the same area. The repo's value is mostly in the
+   comments — they record traps that took hours to find.
 
    **Read-before-claim rule for cross-workspace work.** Before
    implementing or claiming scope for anything that crosses a
@@ -338,11 +343,11 @@ Mode taxonomy and bounded-autonomy spec live in `manyforge_specs/docs/spec/480-.
 
 4. **Don't bake secrets, models, or HF tokens into images or scripts.**
    Tokens live in `~/.cache/huggingface/token` and are exported by
-   `start-model.sh` / `start-duo.sh` from there. Models live in HF
+   `serving/start-model.sh` / `serving/start-duo.sh` from there. Models live in HF
    cache. The build pipeline pulls neither.
 
 5. **Profile changes go in pairs.** A new profile is two edits:
-   `lib/config.sh` (the runtime config) and `lib/launch.sh` (the vLLM
+   `serving/config.sh` (the runtime config) and `serving/launch.sh` (the vLLM
    args). Both must use the same case-statement label. The served name
    is the label.
 
@@ -367,7 +372,7 @@ Mode taxonomy and bounded-autonomy spec live in `manyforge_specs/docs/spec/480-.
 
 Keep these high-level — file names shift, scope endures.
 
-- **`NEMOCLAW-OPENCLAW-WORKFLOW.md`** — canonical end-to-end recipe
+- **`setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`** — canonical end-to-end recipe
   (start model, wire OpenShell, dispatch agent). Read first when
   answering anything operational.
 - **`MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md`** — profile-selection
@@ -384,16 +389,17 @@ Keep these high-level — file names shift, scope endures.
   stdio bridge, the `setup-manyforge-assistant.sh` provisioner, and
   the Phase 2 OpenClaw assistant bridge. Read first when answering
   "how does the agent talk to ManyForge?"
-- **`agentic-bench/README.md`** — bench harness and candidate plan.
-- **`docker/`** — Thor-specific build notes and patch rationale,
+- **`serving/agentic-bench/README.md`** — bench harness and candidate plan.
+- **`serving/docker/`** — Thor-specific build notes and patch rationale,
   including any active TRT-Edge-LLM evaluation.
-- **Performance reports** — `PERFORMANCE-V*.md`, `TOOL-EVAL-BENCH-THOR.md`,
-  and other dated bench docs capture point-in-time numbers; treat them
-  as historical evidence, not live state.
-- **Architectural investigations** — `*-INVESTIGATION.md` files
-  document durable lessons from substantial deep-dives (e.g.
-  speculative-decoding behaviour on SM110). These stay even after
-  the immediate work is done.
+- **Performance reports** under `serving/docs/` —
+  `PERFORMANCE-V*.md`, `TOOL-EVAL-BENCH-THOR.md`, and other dated bench
+  docs capture point-in-time numbers; treat them as historical
+  evidence, not live state.
+- **Architectural investigations** under `serving/docs/` —
+  `*-INVESTIGATION.md` files document durable lessons from substantial
+  deep-dives (e.g. speculative-decoding behaviour on SM110). These stay
+  even after the immediate work is done.
 
 **Transient incident docs** (file names matching `*-HANG-*.md` or
 `*-INVESTIGATION-*.md` tied to a single specific incident) are problem

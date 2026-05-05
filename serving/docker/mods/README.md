@@ -33,11 +33,11 @@ Idempotent (uses marker-based detection to skip if already applied).
 
 **To activate:** the v7 image needs to be either:
 1. **Rebuilt** (so `COPY mods/` picks up the restored files), OR
-2. Bind-mount the host's `docker/mods/` over `/workspace/mods/` at
+2. Bind-mount the host's `serving/docker/mods/` over `/workspace/mods/` at
    container start (one-line edit in `start-model.sh`'s docker run args)
 
 Then re-add `THOR_DOCKER_ENV_ARGS+=("-e" "VLLM_MODS=fix-pr39931-turboquant")`
-to the 3 TurboQuant profiles in `lib/launch.sh`.
+to the 3 TurboQuant profiles in `../../launch.sh`.
 
 **Until activated:** TurboQuant profiles are blocked on v7. The
 ManyForge production profile (`qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge`)
@@ -50,4 +50,4 @@ for ManyForge until this is wired up.
 
 If a future need for runtime patching arises, drop a `mod-name/run.sh`
 here and reference it via `VLLM_MODS=...` in the relevant profile in
-`lib/launch.sh`. Use `git log -- docker/mods/` to see prior structures.
+`../../launch.sh`. Use `git log -- serving/docker/mods/` to see prior structures.

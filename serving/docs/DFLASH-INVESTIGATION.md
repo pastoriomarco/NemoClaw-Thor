@@ -110,7 +110,7 @@ it was already in vLLM main at our pinned commit. The PR only modifies 4
 existing files, all of which failed to apply.)
 
 **As of commit `fc33d58`+, `VLLM_PRS=""` at build time** — the PR is delivered
-entirely via the runtime mod. See `docker/NOTES.md` for the full rationale.
+entirely via the runtime mod. See `../docker/NOTES.md` for the full rationale.
 
 **Historical image state (before the mod)**:
 
@@ -125,7 +125,7 @@ entirely via the runtime mod. See `docker/NOTES.md` for the full rationale.
 
 ### Fix: `fix-pr39931-turboquant` runtime mod
 
-`docker/mods/fix-pr39931-turboquant/run.sh` replays all 5 rejected edits as
+`../docker/mods/fix-pr39931-turboquant/run.sh` replays all 5 rejected edits as
 verbatim Python `str.replace` operations against the installed vLLM at
 container start. Key properties:
 
@@ -661,7 +661,7 @@ Remaining gap to z-lab's 47% is the SDPA vs flash_attn attention computation its
 
 ### Runtime Mods Summary
 
-All DFlash mods in `docker/mods/`:
+All DFlash mods in `../docker/mods/`:
 
 | Mod | Purpose | Required? |
 |-----|---------|-----------|

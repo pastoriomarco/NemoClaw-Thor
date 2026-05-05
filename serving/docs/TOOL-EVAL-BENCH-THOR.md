@@ -188,6 +188,6 @@ For production agent serving on Thor, treat the autotuner crash as a known first
 - Variance run results: `/tmp/35b-winner-variance-results.txt`
 
 **Profile definitions (repo):**
-- [lib/launch.sh](lib/launch.sh) — `qwen3.6-35b-a3b-nvfp4-mtp-fp8kv`, `qwen3.6-27b-fp8-mtp-kvfp8`, and the two DFlash variants
-- [lib/config.sh](lib/config.sh) — matching config blocks
+- [../launch.sh](../launch.sh) — `qwen3.6-35b-a3b-nvfp4-mtp-fp8kv`, `qwen3.6-27b-fp8-mtp-kvfp8`, and the two DFlash variants
+- [../config.sh](../config.sh) — matching config blocks
 - Sidecar runner image: `bench-runner` container (persistent; llama-benchy + tool-eval-bench installed)

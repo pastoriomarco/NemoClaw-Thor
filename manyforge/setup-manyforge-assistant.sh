@@ -31,10 +31,12 @@ set -euo pipefail
 
 SANDBOX="${1:-my-assistant}"
 
-NEMOCLAW_THOR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NEMOCLAW_THOR_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MANYFORGE_ROOT="${MANYFORGE_ROOT:-/home/tndlux/workspaces/dev_ws/src/manyforge}"
 
-PRESET_PATH="${NEMOCLAW_THOR_ROOT}/policies/manyforge-composer.preset.yaml"
+# Preset is co-located with this script under manyforge/policies/.
+PRESET_PATH="${SCRIPT_DIR}/policies/manyforge-composer.preset.yaml"
 SKILL_SRC="${MANYFORGE_ROOT}/agent-skills/manyforge-composer"
 
 step() {

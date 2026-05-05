@@ -55,7 +55,7 @@ auto-eval substring matches; both models did refuse cleanly.
   2.22M NVFP4-TQ KV tokens at full mem util).
 - **35B-FP8-DFlash earlier solo runs reported 30–42 tps** at peak;
   fair-comparison on the same A* prompt at temp 0.2 lands at 24.7 tps.
-  The headline `47.6 tok/s` in `lib/config.sh` is a single-shot
+  The headline `47.6 tok/s` in `../config.sh` is a single-shot
   best-case, not a fair-comparison number.
 - **DFlash vs MTP acceptance gap is huge** (DFlash ~20% per-position
   vs MTP ~85%) but absolute tokens-per-round are similar (DFlash
@@ -277,7 +277,7 @@ The earlier "merged into v0.20.0" claim from background research was wrong.
    layers all cached) so `COPY mods/ /workspace/mods/` picks up the
    restored mod directory.
 3. `THOR_DOCKER_ENV_ARGS+=("-e" "VLLM_MODS=fix-pr39931-turboquant")`
-   re-added to all 3 TurboQuant profiles in `lib/launch.sh`:
+   re-added to all 3 TurboQuant profiles in `../launch.sh`:
    - `qwen3.6-35b-a3b-fp8-turboquant`
    - `qwen3.6-35b-a3b-nvfp4-tq-mtp`
    - `qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge` (ManyForge production)
@@ -312,7 +312,7 @@ runs cleanly on SM110. The main NVFP4 MoE is unaffected and still
 uses FlashInfer CUTLASS via `VLLM_USE_FLASHINFER_MOE_FP4=1`.
 
 The env var is now committed to the manyforge profile in
-`lib/launch.sh`; ManyForge production can migrate to v7 once the
+`../launch.sh`; ManyForge production can migrate to v7 once the
 7-test reliability battery (the original v6 blessing run) passes
 against the rebuilt image.
 
@@ -340,7 +340,7 @@ max_num_batched_tokens.
 vLLM v0.20.0 has stricter MM encoder budget validation. Gemma 4's vision
 encoder needs ≥2496 tokens/item but the profile defaults
 `--max-num-batched-tokens` to 2048. **Fix:** add `--max-num-batched-tokens 4096`
-(or higher) to the gemma4 profile in `lib/launch.sh`. Not retested today.
+(or higher) to the gemma4 profile in `../launch.sh`. Not retested today.
 
 ---
 
@@ -361,7 +361,7 @@ encoder needs ≥2496 tokens/item but the profile defaults
 35B-DFlash is **slower than previously believed** when measured on
 the fair-comparison eval (the 35.4 tps v6 number used a different
 prompt mix). Choose the throughput leader by workload, not by the
-single-shot best-case in `lib/config.sh`.
+single-shot best-case in `../config.sh`.
 
 ---
 
@@ -369,7 +369,7 @@ single-shot best-case in `lib/config.sh`.
 
 - `z-lab/Qwen3.6-35B-A3B-DFlash`: only Apr 26 snapshot retained (`42d3b34d58…`); 7 older purged. Cache 5.3 GB → 905 MB.
 - `z-lab/Qwen3.6-27B-DFlash`: pre-downloaded Apr 27 commit (`0919688658…`), 3.3 GB. Repo is now gated/restricted on HF — auth required for fresh pulls.
-- All profile `revision:` pins removed from `lib/launch.sh` — drafter
+- All profile `revision:` pins removed from `../launch.sh` — drafter
   selection now follows HF `refs/main`.
 
 ---
@@ -415,13 +415,13 @@ single-shot best-case in `lib/config.sh`.
 
 ## Documents updated/created during this work
 
-- `docker/Dockerfile.vllm` (renamed from `Dockerfile`) — pin updates, build-job parallelism (12→14)
-- `docker/build-vllm.sh` (renamed from `build.sh`) — defaults updated to v0.20.0 / v0.6.9 / 14 jobs / CUDA 13.0.3
-- `docker/PATCHES-AUDIT.md` — full patch lifecycle audit
-- `docker/mods/README.md` — placeholder (mods all removed)
-- `docker/mods/{fix-pr39931-turboquant,fix-nvfp4-moe-scale-merge}/` — deleted
-- `docker/patches/vllm_sm110_no_sm100_cutsl_cutlass.patch` — deleted
-- `lib/launch.sh` — DFlash profiles updated to upstream config; TQ
+- `../docker/Dockerfile.vllm` (renamed from `Dockerfile`) — pin updates, build-job parallelism (12→14)
+- `../docker/build-vllm.sh` (renamed from `build.sh`) — defaults updated to v0.20.0 / v0.6.9 / 14 jobs / CUDA 13.0.3
+- `../docker/PATCHES-AUDIT.md` — full patch lifecycle audit
+- `../docker/mods/README.md` — placeholder (mods all removed)
+- `../docker/mods/{fix-pr39931-turboquant,fix-nvfp4-moe-scale-merge}/` — deleted
+- `../docker/patches/vllm_sm110_no_sm100_cutsl_cutlass.patch` — deleted
+- `../launch.sh` — DFlash profiles updated to upstream config; TQ
   profiles' VLLM_MODS env var removed; comments updated
 - `PERFORMANCE-V7.md` (this file) — coverage report
 - `/etc/systemd/system/docker.service.d/buildkit-loglimit.conf` — raised

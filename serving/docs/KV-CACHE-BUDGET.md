@@ -222,7 +222,7 @@ If model weights or overhead change (new vLLM version, different quant):
 2. Read from vLLM log: `Available KV cache memory: XX.XX GiB`
 3. Look up KV/seq from the table above
 4. max_num_seqs = floor(available_kv / kv_per_seq)
-5. Update THOR_TARGET_MAX_NUM_SEQS in lib/config.sh
+5. Update THOR_TARGET_MAX_NUM_SEQS in ../config.sh
 
 ## Why DeltaNet/SWA models need far fewer sequence slots than you'd expect
 

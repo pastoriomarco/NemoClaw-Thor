@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/config.sh — Shared runtime config for NemoClaw-Thor
+# serving/config.sh — Shared runtime config for NemoClaw-Thor
 #
 # Source this file; do not execute it directly.
 
@@ -189,7 +189,7 @@ resolve_model_profile() {
 
     case "${requested}" in
         # minimax-m2.7-139b-a10b-nvfp4 profile removed 2026-04-23.
-        # Investigation preserved at MINIMAX-M27-INVESTIGATION.md.
+        # Investigation preserved at docs/MINIMAX-M27-INVESTIGATION.md.
         # W4A4 NVFP4 MoE is blocked on SM110 — every fast kernel gated off, MARLIN
         # fallback produced 12 tok/s with degraded output. Not viable for production.
         # qwen3.5-122b-a10b-nvfp4 profile removed 2026-04-24 — superseded by qwen3.6.
@@ -373,7 +373,7 @@ resolve_model_profile() {
         # experiment, see launch.sh. Use cosmos-reason2-8b instead.
         # nemotron3-nano-30b-a3b-nvfp4 REMOVED 2026-04-28 — TEB 67/100
         # mid-pack on Thor (text-only). Replaced by nemotron3-nano-omni
-        # (multimodal Reasoning variant). See PERFORMANCE-V7.md.
+        # (multimodal Reasoning variant). See docs/PERFORMANCE-V7.md.
         gemma4-e4b-it)
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="gemma4-e4b-it"

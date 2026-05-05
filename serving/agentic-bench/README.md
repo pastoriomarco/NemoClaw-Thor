@@ -7,7 +7,7 @@ or any other server speaking the OAI protocol.
 
 This harness was written during the v0.7.0 TRT-Edge-LLM bake-off in
 April 2026. The findings from that session are in
-`docker/TRT-EDGE-LLM-NOTES.md`.
+`../docker/TRT-EDGE-LLM-NOTES.md`.
 
 ## What's here
 
@@ -97,7 +97,7 @@ TRT-Edge-LLM v0.7.0's experimental Python server is NOT thread-safe —
 concurrent requests crash the engine context with a Myelin
 "already-loaded binary graph" error and require a server restart. Use
 `num_concurrent=1` until v0.8 ships continuous batching. See
-`docker/TRT-EDGE-LLM-NOTES.md` for full details.
+`../docker/TRT-EDGE-LLM-NOTES.md` for full details.
 
 ## Cache locations
 
@@ -133,7 +133,7 @@ Five benchmarks are in the active set for the next bake-off cycle.
   scoring 0/1/2, scaled to 100. Community-comparable via NVIDIA
   developer-forum peers (Spark + Thor). Current Thor-best:
   `qwen3.6-35b-a3b-nvfp4-mtp-fp8kv` at 93/100. See
-  [TOOL-EVAL-BENCH-THOR.md](../TOOL-EVAL-BENCH-THOR.md).
+  [TOOL-EVAL-BENCH-THOR.md](../docs/TOOL-EVAL-BENCH-THOR.md).
 - **BFCL v3** via NVIDIA NeMo Evaluator. Leaderboard-comparable
   function-calling — anchors numbers against published Qwen / NVIDIA /
   OpenAI results, not just the Jetson community. Not yet run; setup

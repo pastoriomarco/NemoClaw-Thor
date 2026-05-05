@@ -93,7 +93,7 @@ oneshot(
 ```
 
 Then serve (drop into a new `cosmos-reason2-32b-nvfp4` profile in
-[lib/launch.sh](lib/launch.sh)):
+[../launch.sh](../launch.sh)):
 
 ```bash
 vllm serve cosmos-reason2-32b-nvfp4 \
@@ -182,7 +182,7 @@ this too on the v7 image. v8 image (drops apt cuDNN, keeps only pip cuDNN
 
 ## Validation gate
 
-Before merging the new profile to `lib/config.sh`:
+Before merging the new profile to `../config.sh`:
 
 1. **Boot test** — vLLM serves the quantized model, accepts `/v1/chat/completions`
 2. **Physical AI Bench Reason Task** — compare to BF16 baseline (50.60 if 2B
@@ -198,7 +198,7 @@ Before merging the new profile to `lib/config.sh`:
    verify both endpoints stable for ≥30 min under load
 
 If all five pass, add as `cosmos-reason2-32b-nvfp4` profile in
-[lib/config.sh](lib/config.sh) + [lib/launch.sh](lib/launch.sh) and amend the
+[../config.sh](../config.sh) + [../launch.sh](../launch.sh) and amend the
 deployment plan with a Thor-only "Outcome E" entry.
 
 ---

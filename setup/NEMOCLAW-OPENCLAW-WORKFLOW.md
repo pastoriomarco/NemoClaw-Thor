@@ -14,7 +14,7 @@ consumed by OpenClaw inside the `my-assistant` sandbox through an OpenShell
 | OpenShell cluster image | `0.0.36` |
 | OpenClaw (in-sandbox agent) | `v2026.4.24` |
 | vLLM image | `nemoclaw-thor/vllm:latest` (v8 container) |
-| Reference model used in this doc | `nvidia/Cosmos-Reason2-8B` (text+vision, 32K→262K context capable). Other profiles in `lib/config.sh`. |
+| Reference model used in this doc | `nvidia/Cosmos-Reason2-8B` (text+vision, 32K→262K context capable). Other profiles in `../serving/config.sh`. |
 | Host | NVIDIA Thor (SM110) |
 
 Update this table whenever a tested upgrade lands. The recipes below
@@ -82,7 +82,7 @@ The wizard walks through 8 steps. Answers that produced a working
 | 2/8 | Starting OpenShell gateway | (automatic; first run pulls `ghcr.io/nvidia/openshell/cluster:0.0.36`, ~60-180s) |
 | 3/8 | Inference options (1–7) | **`3`** — Other OpenAI-compatible endpoint |
 | 3/8 | OpenAI-compatible base URL | **`http://127.0.0.1:8000/v1`** (host loopback; the wizard probes from the host. `host.openshell.internal:8000` is the sandbox-internal name and won't resolve here) |
-| 3/8 | Endpoint model | **the served-model-name** (== profile slug per the alignment in `lib/config.sh`, e.g. `nemotron3-nano-omni-30b-a3b-nvfp4`) |
+| 3/8 | Endpoint model | **the served-model-name** (== profile slug per the alignment in `../serving/config.sh`, e.g. `nemotron3-nano-omni-30b-a3b-nvfp4`) |
 | 3/8 | Sandbox name | `my-assistant` (default; press Enter) |
 | 3/8 | Apply this configuration? | `Y` |
 | 4/8 | Setting up inference provider | (automatic; creates `compatible-endpoint` provider + route) |
@@ -152,7 +152,7 @@ cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
 ./start-model.sh cosmos-reason2-8b
 ```
 
-What this does (see [lib/launch.sh](lib/launch.sh) for the full profile):
+What this does (see [../serving/launch.sh](../serving/launch.sh) for the full profile):
 - Pulls the `nemoclaw-thor/vllm:latest` container.
 - Serves `nvidia/Cosmos-Reason2-8B` on `0.0.0.0:8000` (override with `THOR_VLLM_PORT=...`).
 - Uses `flashinfer` attention backend (required for FP8 KV on SM110).
@@ -431,8 +431,8 @@ can be dropped.
 
 | File | Role |
 |---|---|
-| [lib/launch.sh](lib/launch.sh) | `cosmos-reason2-8b` profile — vLLM args + env vars |
-| [lib/config.sh](lib/config.sh) | `cosmos-reason2-8b` runtime config — `max_model_len=65536`, `max_num_seqs=3` |
+| [../serving/launch.sh](../serving/launch.sh) | `cosmos-reason2-8b` profile — vLLM args + env vars |
+| [../serving/config.sh](../serving/config.sh) | `cosmos-reason2-8b` runtime config — `max_model_len=65536`, `max_num_seqs=3` |
 | [start-model.sh](start-model.sh) | Model launcher (honors `THOR_DETACH`, `THOR_CONTAINER_NAME`, `THOR_NO_RM`) |
 | [start-duo.sh](start-duo.sh) | Dual-serve launcher (Qwen3.6 + Cosmos) — kept for benchmark scenarios |
 | [configure-local-provider.sh](configure-local-provider.sh) | Wires OpenShell `vllm-local` provider + inference route + sandbox sync + gateway start |

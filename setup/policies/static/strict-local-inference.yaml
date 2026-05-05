@@ -7,8 +7,8 @@
 #
 # Note: OpenShell policy enforcement is application-level only.
 # Kernel-level enforcement requires the iptables egress firewall
-# (lib/egress-firewall.sh), which is applied automatically by
-# configure-local-provider.sh and enforce-egress-firewall.sh.
+# logic embedded in setup/configure-local-provider.sh, which applies
+# the rules automatically when a local-vLLM provider is configured.
 
 version: 1
 

@@ -13,9 +13,10 @@ if [[ -z "${HF_TOKEN:-}" && -f "${HOME}/.cache/huggingface/token" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/lib/checks.sh"
-source "${SCRIPT_DIR}/lib/config.sh"
-source "${SCRIPT_DIR}/lib/launch.sh"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+source "${REPO_ROOT}/setup/checks.sh"
+source "${SCRIPT_DIR}/config.sh"
+source "${SCRIPT_DIR}/launch.sh"
 
 for arg in "$@"; do
     if [[ "${arg}" == "-h" || "${arg}" == "--help" ]]; then
