@@ -212,7 +212,15 @@ profile = {
     "name": "ManyForge Composer Assistant",
     "skills": ["manyforge-composer"],
     "thinkingDefault": "off",
-    "tools": {"profile": "minimal"},
+    # The "minimal" CORE_TOOL_PROFILES allow list does NOT include
+    # "bundle-mcp" (only "coding"/"messaging"/"full" do). With profile
+    # alone, manyforge MCP tools register and advertise to the model,
+    # the model emits tool_calls correctly, but execution is policy-
+    # blocked → "Manyforge Scene-inspect failed" → retry-until-timeout.
+    # Verified 2026-05-05 by reading
+    # /usr/local/lib/node_modules/openclaw/dist/tool-policy-DArLXMH2.js.
+    # alsoAllow keeps the minimal core surface but unblocks bundle-mcp.
+    "tools": {"profile": "minimal", "alsoAllow": ["bundle-mcp"]},
     "skillsLimits": {"maxSkillsPromptChars": 24000},
     "contextLimits": {
         "toolResultMaxChars": 20000,
