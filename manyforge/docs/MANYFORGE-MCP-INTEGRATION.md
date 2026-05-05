@@ -617,6 +617,136 @@ Known Phase 2 limitations:
   when the bounded ManyForge callback succeeded; Composer audit logs remain
   the source of truth for exact callback payloads in this phase.
 
+### Phase 2 latency leap — 2026-05-05 evening (canonical fix)
+
+After the post-restart prefix-caching probe pinpointed the cost as
+OpenClaw bootstrap (not vLLM, not the prompt), we switched the adapter
+from per-request `openclaw agent` shell-out to the persistent gateway's
+`/v1/chat/completions` endpoint.
+
+#### What we shipped (all via official routes — no workarounds)
+
+- **OpenClaw config**: enabled `gateway.http.endpoints.chatCompletions.enabled
+  = true`; pruned 4 unused plugins (`browser`, `device-pair`,
+  `phone-control`, `talk-voice`). Gateway boots with `1 plugin: acpx;
+  2.6s` instead of `5 plugins; 3.2s`.
+- **OpenShell policy**: shipped `manyforge-composer.preset.yaml` with the
+  canonical `allowed_ips` field on both endpoints
+  (`host.openshell.internal:8000` for vLLM and `:9000` for Composer),
+  per [OpenShell policy schema](https://docs.nvidia.com/openshell/latest/reference/policy-schema.html)
+  and `OpenShell/examples/private-ip-routing`.
+  The provisioner now removes the built-in `local-inference` preset and
+  applies our combined preset instead (see "Why local-inference is
+  removed" below).
+- **Adapter**: [openclaw_assistant_bridge/adapter.py](../openclaw_assistant_bridge/adapter.py)
+  has a gateway-HTTP path gated by `OPENCLAW_ASSISTANT_USE_GATEWAY=true`,
+  using a host-side curl through the openshell port-forward tunnel
+  (`127.0.0.1:18789`) — the path the canonical
+  `configure-local-provider.sh` already maintains.
+
+#### Measured results
+
+Same prompt ("Reply with just OK"), through the full canonical stack
+(host → SSH tunnel → SSH-session gateway → vLLM):
+
+- Cold call: ~47-57 s.
+- Warm calls: 5-12 s (best 5.5 s observed; matches the speed the user
+  sees in the TUI). **10-20× speedup over the original 65-130 s CLI
+  shell-out baseline.**
+
+Composer audit log + OpenShell policy log show only allowed traffic;
+no SSRF DENY events fire on the canonical lane after the policy update.
+
+#### Why we remove `local-inference`
+
+OpenShell's SSRF guard blocks RFC 1918 destinations by default. The
+documented opt-in is the per-endpoint `allowed_ips` CIDR allowlist.
+The built-in `local-inference` preset declares `host.openshell.internal:8000`
+WITHOUT that field, and we observed empirically that the SSRF engine
+honors the **first matching endpoint** rather than the union of all
+applied presets. So leaving `local-inference` active causes the SSRF
+guard to consult an endpoint definition that has no `allowed_ips`, and
+the connection is rejected — even when a second preset (ours) declares
+the same endpoint with the field set correctly.
+
+The cleanest fix that uses ONLY official functionalities:
+
+- ship a single combined preset (`manyforge-composer`) that declares
+  the same vLLM endpoint plus its Composer endpoint, both with
+  `allowed_ips: ["172.17.0.0/16"]` (the Docker-bridge CIDR that
+  hosts `host.openshell.internal` in this deployment),
+- have the provisioner remove `local-inference` before applying our
+  preset. Our preset is a strict superset of `local-inference`'s
+  surface (same trusted binaries, same vLLM endpoint, plus the
+  composer endpoint), so no functionality is lost.
+
+This is configure-only. No NemoClaw / OpenShell / OpenClaw upstream
+patches required. A future upstream improvement worth proposing would
+be adding `allowed_ips` to the built-in `local-inference` preset by
+default, or making the SSRF engine union allowlists across matching
+presets — see the open-point in `manyforge_specs/docs/open-points.md`.
+
+#### Side findings (not blockers, recorded for completeness)
+
+- `openclaw gateway restart` does not auto-respawn the gateway in
+  this sandbox — there is no systemd/launchd inside it, and the only
+  CMD is `sleep infinity`. The canonical
+  `ensure_sandbox_gateway_running` function in
+  `setup/sandbox-runtime.sh` handles spawn via `nohup openclaw
+  gateway run`; if the gateway crashes, re-running
+  `configure-local-provider.sh` brings it back. No daemon supervisor
+  exists in the design.
+- The OpenClaw gateway listens in the network namespace it was spawned
+  in. The canonical (SSH-session) namespace is reachable from the host
+  via the openshell port-forward tunnel; fresh `kubectl exec` shells
+  enter a different namespace and cannot see it. This matters when
+  testing — always probe via host curl, not `kubectl exec curl`.
+
+### Phase 3 A/B harness — first run, 2026-05-05 evening
+
+After the canonical-fix wins landed, ran [`manyforge/ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py)
+with N=3 over 3 prompts (trivial "OK", short factual, decorator
+description) against both inference paths. The full results live in
+`/tmp/ab-results.json`; aggregate:
+
+| path | runs | success | P50 | P95 | min | max |
+|---|---:|---:|---:|---:|---:|---:|
+| direct_vllm | 9 | 100% | **2.14 s** | 2.78 s | 0.35 s | 2.76 s |
+| openclaw_gw | 9 | 100% | **15.04 s** | 67.30 s | 4.92 s | 61.19 s |
+
+Reliability: 18/18 calls returned non-empty content on both paths.
+**The Nemotron #71847 null-content fingerprint is gone** after we
+applied `chat_template_kwargs: {enable_thinking: false,
+force_nonempty_content: true}` via
+`agents.defaults.models.<id>.params.chat_template_kwargs` — that is
+the canonical OpenClaw config knob per
+[docs.openclaw.ai/providers/vllm](https://docs.openclaw.ai/providers/vllm).
+
+Latency: direct vLLM is **~7× faster at P50, ~24× faster at P95**.
+OpenClaw's agent loop adds a roughly constant 5-7 s on simple prompts
+(visible as the trivial "OK" minimum) plus high variance (5-67 s)
+that scales with how much internal reasoning the model decides to do
+even with `enable_thinking: false`. The variance is the next thing to
+investigate before declaring the OpenClaw lane production-default;
+direct vLLM remains the known-good demo path.
+
+Side observation: model accuracy is similar across paths (both
+hallucinate "MCP" answers) but OpenClaw's responses tend to be shorter
+and more conservative ("the context does not specify"), consistent
+with the slim `manyforge-composer` skill's prose biasing the answer
+shape. Worth quantifying with a real prompt suite (Phase 3 expansion).
+
+#### How to reproduce
+
+```bash
+cd nemoclaw/src/NemoClaw-Thor
+./manyforge/ab-direct-vs-openclaw.py --runs 5 --json /tmp/ab.json
+```
+
+Default uses 3 prompts × N runs × 2 paths. `--paths direct_vllm` or
+`--paths openclaw_gw` runs only one side. Results: per-call wall +
+content + success table, plus aggregates.
+
 ---
 
 ## Cross-references
