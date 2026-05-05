@@ -2,25 +2,39 @@ preset:
   name: manyforge-composer
   description: |
     Allow the in-sandbox OpenClaw agent (and the bundled manyforge-mcp-bridge.py
-    spawned as an MCP stdio server) to reach the ManyForge composer's MCP/HTTP
-    endpoint on the host gateway. Required for the agent to invoke ManyForge
-    tools (scene.inspect, scene.draft.*, tree.draft.*, etc.).
+    spawned as an MCP stdio server) to reach BOTH the ManyForge composer's
+    HTTP/MCP endpoint (port 9000) AND the local vLLM inference endpoint
+    (port 8000) on the host gateway.
 
-    Companion to the `local-inference` preset (which opens vLLM:8000). This
-    preset opens the composer's :9000 endpoint to the same trusted bundle of
-    binaries already permitted by local-inference.
+    Both endpoints are exposed via host.openshell.internal, which resolves to
+    a private/Docker-bridge IP (172.17.0.1 in this deployment). OpenShell's
+    SSRF guard rejects connections to RFC 1918 addresses by default, so we
+    opt-in via the canonical ``allowed_ips`` field per
+    docs.nvidia.com/openshell/latest/reference/policy-schema and
+    OpenShell/examples/private-ip-routing.
 
-    Apply with:
+    This is the SAME hostname/port pair that the built-in ``local-inference``
+    preset already allows at the OPA layer for vLLM. Without ``allowed_ips``
+    here, the SSRF check still fires and the persistent gateway agent loop
+    cannot reach vLLM (CLI ``--local`` shell-out goes through a different
+    code path that is unaffected — the symptom appears only on the
+    persistent ``/v1/chat/completions`` lane).
+
+    Companion to ``local-inference`` (which opens vLLM:8000 at OPA but
+    leaves the SSRF guard restrictive). Apply with:
       nemoclaw <sandbox> policy-add --from-file policies/manyforge-composer.preset.yaml
 
 network_policies:
   manyforge_composer:
     name: manyforge_composer
     endpoints:
+      # Composer HTTP/MCP surface — host.openshell.internal:9000.
       - host: host.openshell.internal
         port: 9000
         protocol: rest
         enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"     # Docker-bridge subnet that hosts host.openshell.internal
         rules:
           - allow:
               method: GET
@@ -34,6 +48,35 @@ network_policies:
           - allow:
               method: POST
               path: /api/mcp/sse
+          - allow:
+              method: GET
+              path: /api/assistant/modes/{mode}
+          - allow:
+              method: POST
+              path: /api/assistant/bridge/tools/{toolId}
+      # vLLM inference endpoint — host.openshell.internal:8000.
+      # The OPA path is already covered by ``local-inference``; this entry
+      # exists solely to add ``allowed_ips`` so the SSRF guard accepts the
+      # private-IP resolution on the persistent gateway lane.
+      - host: host.openshell.internal
+        port: 8000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+        rules:
+          - allow:
+              method: GET
+              path: /v1/models
+          - allow:
+              method: POST
+              path: /v1/chat/completions
+          - allow:
+              method: POST
+              path: /v1/completions
+          - allow:
+              method: POST
+              path: /v1/embeddings
     binaries:
       - path: /usr/local/bin/openclaw
       - path: /usr/local/bin/node

@@ -102,7 +102,24 @@ if [[ -z "${PRECHECK_HASH}" ]]; then
 fi
 ok "composer mode '${PRECHECK_MODE}' reachable (catalogHash: ${PRECHECK_HASH:0:16}…)"
 
-step "Step 1/5: apply egress preset 'manyforge-composer'"
+step "Step 1/5: apply egress preset 'manyforge-composer' (replaces 'local-inference')"
+# Why we remove 'local-inference': OpenShell's SSRF guard rejects the
+# private-IP resolution of host.openshell.internal (172.17.0.1) by default.
+# The canonical workaround per OpenShell policy schema is the per-endpoint
+# `allowed_ips` field. The built-in 'local-inference' preset does not set
+# that field, and the SSRF engine appears to honor the first matching
+# endpoint rather than the union — so leaving 'local-inference' active
+# causes the persistent gateway lane (/v1/chat/completions) to fail with
+# `internal error` even when our preset DOES include `allowed_ips`. Our
+# 'manyforge-composer' preset is a strict superset of 'local-inference'
+# (same vLLM endpoint, plus the Composer endpoint, plus `allowed_ips` on
+# both), so removing 'local-inference' in favor of it loses no
+# functionality. This is the configure-only fix; no openshell or nemoclaw
+# upstream patches are required.
+if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*local-inference"; then
+  nemoclaw "${SANDBOX}" policy-remove local-inference --yes
+  ok "removed built-in 'local-inference' preset (superseded by manyforge-composer)"
+fi
 if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-composer"; then
   ok "preset 'manyforge-composer' already applied"
 else

@@ -6,6 +6,7 @@ translation layer can be tested without a live NemoClaw/OpenShell sandbox.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import time
@@ -34,6 +35,18 @@ class AdapterConfig:
     thinking: str = "off"
     auto_tool_window: bool = True
     allowed_tools_file: str = "/tmp/manyforge-openclaw-allowed-tools.txt"
+    # Gateway HTTP path: when use_gateway is true, the adapter calls the
+    # in-sandbox OpenClaw gateway's /v1/chat/completions endpoint via
+    # `kubectl exec curl` instead of shelling out a fresh `openclaw agent`
+    # process per request. The persistent gateway eliminates the per-call
+    # ~40s CLI bootstrap; warm calls drop from minute-scale to single-digit
+    # seconds. The gateway internally runs the tool-call loop, so this
+    # adapter only sees the final assistant message in the response.
+    # Mode-scoped enforcement is preserved by the manyforge MCP wrapper
+    # (registered with the gateway at provisioner time).
+    use_gateway: bool = False
+    gateway_port: int = 18789
+    gateway_max_tokens: int = 4096
 
 
 @dataclass(frozen=True)
@@ -176,6 +189,184 @@ def build_openclaw_command(
         "-c",
         shell_command,
     ]
+
+
+def build_gateway_chat_completions_command(
+    *,
+    config: AdapterConfig,
+    payload: dict[str, Any],
+    timeout_s: float,
+) -> list[str]:
+    """Return a host-side curl command that calls the OpenClaw gateway.
+
+    The canonical NemoClaw setup (``configure-local-provider.sh`` ->
+    ``ensure_sandbox_gateway_running``) spawns the gateway inside the
+    openshell SSH-session network namespace and exposes it on the host
+    as ``127.0.0.1:<gateway_port>`` via the openshell port-forward
+    tunnel. We call directly from the host through that tunnel; no
+    kubectl-exec wrapper is needed.
+
+    The provisioner uses ``--auth none`` (the documented default) so the
+    SSH-tunnel hop already enforces auth. If the gateway is configured
+    for token auth instead, set ``OPENCLAW_GATEWAY_TOKEN`` to inject a
+    Bearer header.
+
+    Required policy precondition: the sandbox network policy must include
+    an endpoint for ``host.openshell.internal:8000`` (vLLM) with the
+    canonical ``allowed_ips`` field opting in to the resolved private IP.
+    Without that, OpenShell's SSRF guard rejects the gateway's outbound
+    fetch to vLLM and chat-completions return ``internal error``. The
+    ``manyforge-composer`` preset shipped with this repo provides this;
+    apply it via ``setup-manyforge-assistant.sh``.
+
+    The persistent gateway eliminates the per-call ~40s CLI bootstrap of
+    the openclaw-agent shell-out path; warm calls drop to 5-10s.
+    """
+
+    user_message = payload.get("message")
+    if not isinstance(user_message, str):
+        user_message = json.dumps(user_message, sort_keys=True)
+    request_body = {
+        "model": f"openclaw/{config.agent}",
+        "messages": [{"role": "user", "content": user_message}],
+        "max_tokens": config.gateway_max_tokens,
+        "stream": False,
+    }
+    body_json = json.dumps(request_body)
+    curl_timeout = max(5, int(timeout_s) - 1)
+    args = [
+        "curl",
+        "-sS",
+        "--max-time",
+        str(curl_timeout),
+        "-H",
+        "Content-Type: application/json",
+        "-X",
+        "POST",
+        f"http://127.0.0.1:{config.gateway_port}/v1/chat/completions",
+        "-d",
+        body_json,
+    ]
+    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+    if token:
+        args = args[:6] + ["-H", f"Authorization: Bearer {token}"] + args[6:]
+    return args
+
+
+def parse_chat_completions_response(
+    stdout: str,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Extract the OpenAI-shaped chat-completions response.
+
+    Curl emits a single JSON document. We accept either that or a JSON
+    object embedded in noisier output (e.g., warning lines from tooling).
+    """
+
+    text = stdout.strip()
+    if not text:
+        return None, ["gateway returned empty body"]
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None, []
+    except ValueError:
+        pass
+
+    decoder = JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            candidate, _ = decoder.raw_decode(text[index:])
+        except ValueError:
+            continue
+        if isinstance(candidate, dict):
+            return candidate, []
+    return None, ["could not parse JSON from gateway response"]
+
+
+def normalize_chat_completions_response(
+    *,
+    payload: dict[str, Any],
+    response_json: dict[str, Any] | None,
+    stdout: str,
+    stderr: str = "",
+    parse_warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    """Convert an OpenAI chat-completions response into the ManyForge envelope.
+
+    The OpenClaw gateway runs the tool-call loop internally, so the response
+    we see has only the final assistant message. Tool-call audit lives on
+    the ManyForge side (bridge audit records carry requestId + assistantMode
+    + catalogHash + principal). The envelope we return therefore has empty
+    toolCalls/proposals; draftMutated is conservatively false here and gets
+    its real value from Composer's own state delta after the request lands.
+    """
+
+    request_id = request_id_from_payload(payload)
+    warnings = list(parse_warnings or [])
+    if stderr.strip():
+        warnings.append(f"gateway stderr: {_truncate(stderr.strip(), 500)}")
+
+    if response_json is None:
+        message = _truncate(stdout.strip(), 2000) or (
+            "OpenClaw gateway returned no parseable response."
+        )
+        return {
+            "version": SUPPORTED_VERSION_FAMILY,
+            "schemaVersion": DEFAULT_SCHEMA_VERSION,
+            "requestId": request_id,
+            "message": message,
+            "toolCalls": [],
+            "proposals": [],
+            "warnings": warnings,
+            "mutated": False,
+            "draftMutated": False,
+            "requiresReview": True,
+        }
+
+    err = response_json.get("error")
+    if isinstance(err, dict):
+        detail = err.get("message") or err.get("type") or "gateway returned an error"
+        return {
+            "version": SUPPORTED_VERSION_FAMILY,
+            "schemaVersion": DEFAULT_SCHEMA_VERSION,
+            "requestId": request_id,
+            "message": str(detail),
+            "toolCalls": [],
+            "proposals": [],
+            "warnings": warnings + [f"gateway error: {detail}"],
+            "mutated": False,
+            "draftMutated": False,
+            "requiresReview": True,
+            "error": {"code": err.get("type") or "gateway_error", "detail": str(detail)},
+        }
+
+    message = ""
+    choices = response_json.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            msg = first.get("message")
+            if isinstance(msg, dict):
+                content = msg.get("content")
+                if isinstance(content, str) and content.strip():
+                    message = content.strip()
+    if not message:
+        message = "OpenClaw gateway returned an empty assistant message."
+        warnings.append("gateway response had no choices[0].message.content")
+
+    return {
+        "version": SUPPORTED_VERSION_FAMILY,
+        "schemaVersion": DEFAULT_SCHEMA_VERSION,
+        "requestId": request_id,
+        "message": message,
+        "toolCalls": [],
+        "proposals": [],
+        "warnings": warnings,
+        "mutated": False,
+        "draftMutated": False,
+        "requiresReview": True,
+    }
 
 
 def mcp_allowed_tools_from_payload(payload: dict[str, Any]) -> list[str]:

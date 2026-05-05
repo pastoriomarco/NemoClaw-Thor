@@ -15,10 +15,13 @@ from .adapter import (
     AdapterConfig,
     AgentRunResult,
     build_agent_prompt,
+    build_gateway_chat_completions_command,
     build_openclaw_command,
     error_envelope,
     mcp_allowed_tools_from_payload,
     normalize_agent_response,
+    normalize_chat_completions_response,
+    parse_chat_completions_response,
     parse_openclaw_json,
     request_id_from_payload,
 )
@@ -52,6 +55,12 @@ def _config_from_env() -> AdapterConfig:
         allowed_tools_file=os.environ.get(
             "OPENCLAW_ASSISTANT_ALLOWED_TOOLS_FILE",
             "/tmp/manyforge-openclaw-allowed-tools.txt",
+        ),
+        use_gateway=os.environ.get("OPENCLAW_ASSISTANT_USE_GATEWAY", "false").lower()
+        in {"1", "true", "yes"},
+        gateway_port=int(os.environ.get("OPENCLAW_ASSISTANT_GATEWAY_PORT", "18789")),
+        gateway_max_tokens=int(
+            os.environ.get("OPENCLAW_ASSISTANT_GATEWAY_MAX_TOKENS", "4096")
         ),
     )
 
@@ -138,20 +147,33 @@ async def assistant(request: Request) -> JSONResponse:
     cfg = _config_from_env()
     total_started = time.perf_counter()
     prompt_started = time.perf_counter()
-    inferred_mcp_tools = (
-        mcp_allowed_tools_from_payload(payload) if cfg.auto_tool_window else []
-    )
-    allowed_mcp_tools: list[str] | None = inferred_mcp_tools or None
-    prompt = build_agent_prompt(payload, mcp_allowed_tools=allowed_mcp_tools)
+    # Gateway path skips the prompt-augmentation work the CLI path needs.
+    # The persistent gateway has the manyforge MCP server registered with
+    # mode-scoped enforcement at provisioner time, so the model already sees
+    # the right tool surface; we only need to forward the user message.
+    if cfg.use_gateway:
+        allowed_mcp_tools: list[str] | None = None
+        prompt = (
+            payload.get("message")
+            if isinstance(payload.get("message"), str)
+            else json.dumps(payload.get("message"), sort_keys=True)
+        )
+    else:
+        inferred_mcp_tools = (
+            mcp_allowed_tools_from_payload(payload) if cfg.auto_tool_window else []
+        )
+        allowed_mcp_tools = inferred_mcp_tools or None
+        prompt = build_agent_prompt(payload, mcp_allowed_tools=allowed_mcp_tools)
     prompt_ms = (time.perf_counter() - prompt_started) * 1000.0
     timeout_s = _request_timeout(payload, cfg.timeout_s)
     session_id = str(payload.get("conversationId") or request_id)
     _ACTIVE_REQUESTS[request_id] = {
         "startedPerf": time.perf_counter(),
-        "stage": "dispatching_openclaw",
+        "stage": "dispatching_openclaw_gateway" if cfg.use_gateway else "dispatching_openclaw",
         "allowedMcpTools": allowed_mcp_tools or [],
         "promptChars": len(prompt),
         "sessionId": session_id,
+        "transport": "gateway_http" if cfg.use_gateway else "cli_shell_out",
     }
     _log_event(
         "openclaw_request_started",
@@ -159,17 +181,26 @@ async def assistant(request: Request) -> JSONResponse:
         timeoutS=timeout_s,
         allowedMcpTools=allowed_mcp_tools or [],
         promptChars=len(prompt),
+        transport="gateway_http" if cfg.use_gateway else "cli_shell_out",
     )
     try:
-        result = await _run_agent(
-            request_id=request_id,
-            command=build_openclaw_command(
+        if cfg.use_gateway:
+            command = build_gateway_chat_completions_command(
+                config=cfg,
+                payload=payload,
+                timeout_s=timeout_s,
+            )
+        else:
+            command = build_openclaw_command(
                 config=cfg,
                 message=prompt,
                 timeout_s=timeout_s,
                 session_id=session_id,
                 mcp_allowed_tools=allowed_mcp_tools,
-            ),
+            )
+        result = await _run_agent(
+            request_id=request_id,
+            command=command,
             timeout_s=timeout_s,
         )
     except asyncio.TimeoutError:
@@ -217,20 +248,32 @@ async def assistant(request: Request) -> JSONResponse:
         return JSONResponse(status_code=502, content=body)
 
     parse_started = time.perf_counter()
-    output_stream = result.stdout if result.stdout.strip() else result.stderr
-    diagnostic_stderr = result.stderr if result.stdout.strip() else ""
-    agent_json, parse_warnings = parse_openclaw_json(output_stream)
-    body = normalize_agent_response(
-        payload=payload,
-        agent_json=agent_json,
-        stdout=output_stream,
-        stderr=diagnostic_stderr,
-        parse_warnings=parse_warnings,
-    )
+    if cfg.use_gateway:
+        # Gateway returns OpenAI chat.completion shape on stdout.
+        response_json, parse_warnings = parse_chat_completions_response(result.stdout)
+        body = normalize_chat_completions_response(
+            payload=payload,
+            response_json=response_json,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            parse_warnings=parse_warnings,
+        )
+    else:
+        output_stream = result.stdout if result.stdout.strip() else result.stderr
+        diagnostic_stderr = result.stderr if result.stdout.strip() else ""
+        agent_json, parse_warnings = parse_openclaw_json(output_stream)
+        body = normalize_agent_response(
+            payload=payload,
+            agent_json=agent_json,
+            stdout=output_stream,
+            stderr=diagnostic_stderr,
+            parse_warnings=parse_warnings,
+        )
     parse_normalize_ms = (time.perf_counter() - parse_started) * 1000.0
     total_ms = (time.perf_counter() - total_started) * 1000.0
     body["openclaw"] = {
         "adapter": "openclaw_assistant_bridge",
+        "transport": "gateway_http" if cfg.use_gateway else "cli_shell_out",
         "durationMs": round(result.duration_ms, 1),
         "timings": {
             "promptBuildMs": round(prompt_ms, 1),

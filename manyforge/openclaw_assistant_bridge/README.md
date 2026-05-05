@@ -1,8 +1,20 @@
 # openclaw_assistant_bridge
 
-Experimental Phase 2 adapter for routing the ManyForge Composer assistant
-provider through the OpenClaw agent running in the NemoClaw `my-assistant`
-sandbox.
+> **Lane status**: as of 2026-05-05 this is the **default assistant-provider
+> lane** for the ManyForge demo launcher
+> ([`manyforge/scripts/demo-assistant-known-good.sh`](https://github.com/tndlux/manyforge)
+> in the manyforge repo). Composer's `openclaw` provider sends requests
+> here; this adapter forwards them to `/v1/chat/completions` on the
+> persistent OpenClaw gateway running in the NemoClaw sandbox. The
+> in-tree `manyforge_assistant_bridge` (`nemoclaw` provider id, port
+> :8100) remains available as the direct-vLLM fallback.
+>
+> Lane comparison and when to choose which:
+> [`manyforge/docs/operations/ASSISTANT_E2E_COOKBOOK.md`](https://github.com/tndlux/manyforge/blob/main/docs/operations/ASSISTANT_E2E_COOKBOOK.md)
+> "Recipe: Known-Good Assistant Demo Launcher".
+
+Phase 2 adapter for routing the ManyForge Composer assistant provider
+through the OpenClaw agent running in the NemoClaw `my-assistant` sandbox.
 
 The adapter speaks the same HTTP provider contract Composer already uses:
 
