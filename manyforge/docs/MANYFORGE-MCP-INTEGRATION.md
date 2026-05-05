@@ -10,17 +10,26 @@ for tools, modes, and draft mutations.
 
 Status:
 - **Phase 1 — sandbox can call ManyForge tools via MCP, mode-scoped:**
-  validated end-to-end on 2026-05-04 against the broad `/api/mcp`
-  surface (capability proof). On 2026-05-05 the path was narrowed to the
-  mode-scoped bridge endpoint: the in-sandbox MCP wrapper now translates
-  every tool call into a `/api/assistant/bridge/tools/{toolId}` call with
-  the bounded-autonomy envelope (`assistantMode`, `catalogHash`,
-  `requestId`, `conversationId`, `principal`). Server-side enforcement —
-  the same gates we use for the in-Composer assistant — is the source of
-  truth. Provisioning artifacts are in this repo; setup is reproducible
-  via `manyforge/setup-manyforge-assistant.sh`.
-- **Phase 2 — composer's chat endpoint routes through OpenClaw:** designed,
-  not yet implemented. Sketch and contract are in this doc.
+  capability proof against the broad `/api/mcp` surface validated
+  end-to-end on 2026-05-04. On 2026-05-05 the path was narrowed in
+  code to the mode-scoped bridge endpoint: the in-sandbox MCP wrapper
+  translates every tool call into a `/api/assistant/bridge/tools/{toolId}`
+  call with the bounded-autonomy envelope (`assistantMode`,
+  `catalogHash`, `requestId`, `conversationId`, `principal`).
+  Server-side enforcement — the same gates the in-Composer assistant
+  uses — is the source of truth. The mode-scoped path was
+  **wrapper-layer-validated end-to-end on 2026-05-05** (host probe,
+  Composer-reload, provisioner against `my-assistant`, sandbox-side
+  `tools/list` returning 23 mode-permitted tools with zero broad-MCP
+  leakage); see "Validation log" at the bottom for evidence and the
+  one outstanding gap (full agent → `tools/call` round-trip).
+  Provisioning artifacts are in this repo; setup is reproducible via
+  `manyforge/setup-manyforge-assistant.sh`.
+- **Phase 2 — composer's chat endpoint routes through OpenClaw:**
+  designed, not yet implemented. Sketch and contract are in this doc.
+  Placement under the post-refactor layout:
+  `nemoclaw/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge/`
+  (sibling to the existing `manyforge/bridge/` audit-log mount).
 - **Phase 3 — A/B harness comparing direct-vLLM vs OpenClaw-skill paths:**
   designed, not yet implemented.
 
@@ -324,16 +333,24 @@ A small adapter service — provisional name **`openclaw_assistant_bridge`** —
 
 ### Where it lives
 
-Sibling to the existing `../bridge/` directory in this repo:
+Under the post-refactor layout, sibling to the existing
+`manyforge/bridge/` audit-log mount in this repo:
 
 ```
 nemoclaw/src/NemoClaw-Thor/
-├── bridge/                          # the existing assistant_bridge (vLLM path)
-└── openclaw_assistant_bridge/       # new — Phase 2
-    ├── README.md
-    ├── service.py                   # the adapter (FastAPI, ~200 LoC)
-    ├── pyproject.toml
-    └── tests/
+└── manyforge/                                   # ManyForge integration scope
+    ├── bridge/                                  # audit-log mount for the
+    │                                            # in-ManyForge bridge service
+    │                                            # (vLLM path runs there)
+    ├── openclaw_assistant_bridge/               # new — Phase 2
+    │   ├── README.md
+    │   ├── service.py                           # the adapter (FastAPI, ~200 LoC)
+    │   ├── pyproject.toml
+    │   └── tests/
+    ├── policies/manyforge-composer.preset.yaml
+    ├── setup-manyforge-assistant.sh
+    └── docs/
+        └── MANYFORGE-MCP-INTEGRATION.md         # this doc
 ```
 
 Versioned with the deployment recipe; no manyforge-side changes required
@@ -458,6 +475,56 @@ The harness is a simple Python script that invokes
 `POST /api/assistant/chat` with the same `message` payload, varying
 `MANYFORGE_ASSISTANT_PROVIDER` between runs (or running side-by-side
 composer instances on different ports).
+
+---
+
+## Validation log
+
+### 2026-05-05 — Phase 1 mode-scoped path, wrapper-layer end-to-end
+
+Stack at validation time: vLLM `nemotron3-nano-omni-30b-a3b-nvfp4` on
+`:8000`; Composer reloaded against the new code with
+`REBUILD_FRONTEND_ON_COMPOSER_RELOAD=false` (2 s startup); assistant
+bridge on `:8100`; sandbox `my-assistant` running OpenClaw against the
+local vLLM endpoint; deployment YAML
+`examples/assistant_modes_scene_authoring.deployment.yaml` loaded into
+Composer.
+
+Passes:
+
+- **1a — host probe of `GET /api/assistant/modes/composer-assistant`**:
+  HTTP 200; 23 mode-permitted tools (including `tree.draft.wrap_node`),
+  12 allowed node kinds, catalogHash `710496b1e801997d…`.
+- **1b — `manyforge/setup-manyforge-assistant.sh my-assistant`**:
+  runtime-compat precheck found the same catalogHash; egress preset
+  applied; skill staged + installed; MCP server registered with
+  `{MANYFORGE_COMPOSER_BASE, MANYFORGE_ASSISTANT_MODE,
+  MANYFORGE_PRINCIPAL}` env shape; sandbox-side fetch returned the
+  same catalogHash. (One small staging-loop hardening landed during
+  this run: skip `__pycache__/*.pyc/node_modules` and bare directories.)
+- **1c — stdio wrapper inside the sandbox** (`initialize` +
+  `tools/list`): wrapper reports `manyforge-composer 0.2.0
+  mode=composer-assistant`; returns the same 23 tools the manifest
+  exposed; **zero broad-MCP leakage** (no `manyforge_*` operator
+  tools).
+
+Composer's HTTP audit log during this run shows only mode-scoped
+manifest fetches from `172.18.0.2` (sandbox); no `/api/mcp` traffic
+and no broad-tool exposure.
+
+Outstanding gap (Tier 1d):
+
+- **OpenClaw agent → MCP wrapper → bridge → tool result → back to
+  agent** did not complete a `tools/call`. A test prompt asking the
+  agent to call `program.read` produced repeated `tools/list`
+  manifests (all 200) but no `tools/call`; the agent process hung
+  past its `--timeout 180` and was killed at +11 min. Worth
+  investigating before Phase 2 measurements: tool-name mangling at
+  the OpenClaw boundary (e.g., `manyforge__tree.draft.wrap_node` may
+  not survive the agent's name validator), the SKILL.md not being
+  read at warmup (it's load-on-demand), and 23-tool overload on a
+  small model. None of these are integration-layer issues — the
+  wrapper layer is doing exactly what it should.
 
 ---
 

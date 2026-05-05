@@ -2,7 +2,7 @@
 # configure-local-provider.sh — Configure NemoClaw/OpenShell to use a local vLLM endpoint
 #
 # Usage:
-#   ./configure-local-provider.sh [model-profile]
+#   ./setup/configure-local-provider.sh [model-profile]
 
 set -euo pipefail
 
@@ -29,7 +29,7 @@ while [[ "${1:-}" == --* ]]; do
             shift
             ;;
         -h|--help)
-            echo "Usage: ./configure-local-provider.sh [OPTIONS] [model-profile]"
+            echo "Usage: ./setup/configure-local-provider.sh [OPTIONS] [model-profile]"
             echo ""
             echo "Options:"
             echo "  --with-manyforge-mux      Route inference.local through the ManyForge mux"
@@ -60,7 +60,7 @@ fi
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Local Provider Configuration${NC}"
-echo "Repo: ${SCRIPT_DIR}"
+echo "Repo: ${REPO_ROOT}"
 echo ""
 print_thor_runtime_config
 echo ""
@@ -169,7 +169,7 @@ vllm_response=$(curl -s --max-time 5 \
     "${THOR_HOST_VLLM_MODELS_URL}" 2>/dev/null || echo "")
 if [[ -z "${vllm_response}" ]]; then
     warn "Host vLLM endpoint is not reachable yet"
-    fix "Start the local model server, then run ./status.sh"
+    fix "Start the local model server, then run ./setup/status.sh"
 else
     if echo "${vllm_response}" | python3 -c "
 import json, sys
@@ -221,5 +221,5 @@ echo ""
 echo -e "${GREEN}${BOLD}  Local provider configuration complete.${NC}"
 echo ""
 echo "  Next:"
-echo "    ./status.sh ${THOR_MODEL_PROFILE}"
+echo "    ./setup/status.sh ${THOR_MODEL_PROFILE}"
 echo ""

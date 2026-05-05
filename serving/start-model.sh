@@ -2,7 +2,7 @@
 # start-model.sh — Start a local inference server for NemoClaw-Thor
 #
 # Usage:
-#   ./start-model.sh [model-profile]
+#   ./serving/start-model.sh [model-profile]
 
 set -euo pipefail
 
@@ -20,7 +20,7 @@ source "${SCRIPT_DIR}/launch.sh"
 
 for arg in "$@"; do
     if [[ "${arg}" == "-h" || "${arg}" == "--help" ]]; then
-        echo "Usage: ./start-model.sh [model-profile]"
+        echo "Usage: ./serving/start-model.sh [model-profile]"
         echo ""
         print_supported_model_profiles
         echo ""
@@ -42,7 +42,7 @@ prepare_thor_launch_profile "${THOR_MODEL_PROFILE}"
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor Local Model Launcher${NC}"
-echo "Repo: ${SCRIPT_DIR}"
+echo "Repo: ${REPO_ROOT}"
 echo ""
 print_thor_launch_summary
 echo ""

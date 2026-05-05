@@ -2,7 +2,7 @@
 # status.sh — NemoClaw-Thor system health check
 #
 # Usage:
-#   ./status.sh [model-profile]
+#   ./setup/status.sh [model-profile]
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ source "${REPO_ROOT}/serving/config.sh"
 source "${SCRIPT_DIR}/sandbox-runtime.sh"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    echo "Usage: ./status.sh [model-profile]"
+    echo "Usage: ./setup/status.sh [model-profile]"
     echo ""
     print_supported_model_profiles
     exit 0
@@ -23,7 +23,7 @@ load_thor_runtime_config "${1:-}"
 
 echo ""
 echo -e "${BOLD}NemoClaw-Thor System Status${NC}"
-echo "Repo: ${SCRIPT_DIR}"
+echo "Repo: ${REPO_ROOT}"
 echo ""
 print_thor_runtime_config
 echo ""
@@ -140,7 +140,7 @@ else
 
     if [[ -z "${gateway_secret}" || -z "${sandbox_secret}" ]]; then
         warn "Could not inspect sandbox SSH handshake state"
-        fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+        fix "Run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 2
     elif [[ "${gateway_secret}" == "${sandbox_secret}" ]]; then
         pass "Sandbox SSH handshake secret matches the gateway"
@@ -148,7 +148,7 @@ else
     else
         fail "Sandbox SSH handshake secret does not match the gateway"
         info "Native 'nemoclaw thor-assistant connect' will fail until the sandbox is resynced."
-        fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+        fix "Run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 1
     fi
 fi
@@ -166,7 +166,7 @@ else
 
     if [[ -z "${provider}" ]]; then
         fail "No inference route configured"
-        fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+        fix "Run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 1
     elif [[ "${provider}" == "${THOR_LOCAL_PROVIDER_NAME}" ]]; then
         pass "Inference provider: ${provider}"
@@ -176,14 +176,14 @@ else
             record 0
         else
             warn "Inference model is '${model}' — expected '${THOR_MODEL_ID}'"
-            fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 0
             record 2
         fi
     else
         warn "Inference provider is '${provider}' — expected '${THOR_LOCAL_PROVIDER_NAME}'"
         info "The stack is not currently pointing at the saved local vLLM provider."
-        fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+        fix "Run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 2
     fi
 fi
@@ -198,7 +198,7 @@ else
     runtime_summary=$(sandbox_runtime_config_summary_json "${sandbox_name}" 2>/dev/null || echo "")
     if [[ -z "${runtime_summary}" ]]; then
         warn "Could not inspect runtime config inside sandbox '${sandbox_name}'"
-        fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+        fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
         record 2
     else
         onboard_model=$(printf '%s' "${runtime_summary}" | python3 -c '
@@ -264,7 +264,7 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox onboard model is '${onboard_model:-unknown}' — expected '${THOR_MODEL_ID}'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi
 
@@ -273,7 +273,7 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox primary model is '${primary_model:-unknown}' — expected 'inference/${THOR_MODEL_ID}'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi
 
@@ -282,7 +282,7 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox provider API is '${openclaw_api:-unknown}' — expected 'openai-completions'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi
 
@@ -291,7 +291,7 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox context window is '${openclaw_context_window:-unknown}' — expected '${THOR_TARGET_MAX_MODEL_LEN}'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi
 
@@ -322,7 +322,7 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox main max concurrent is '${openclaw_main_max_concurrent:-unknown}' — expected '${THOR_EFFECTIVE_OPENCLAW_MAIN_MAX_CONCURRENT}'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi
 
@@ -331,7 +331,7 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox subagent max concurrent is '${openclaw_subagents_max_concurrent:-unknown}' — expected '${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CONCURRENT}'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi
 
@@ -340,7 +340,7 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox max children per agent is '${openclaw_subagents_max_children:-unknown}' — expected '${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_CHILDREN}'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi
 
@@ -349,7 +349,7 @@ print("" if value is None else value)
             record 0
         else
             warn "Sandbox max spawn depth is '${openclaw_subagents_max_spawn_depth:-unknown}' — expected '${THOR_EFFECTIVE_OPENCLAW_SUBAGENTS_MAX_SPAWN_DEPTH}'"
-            fix "Re-run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Re-run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             record 2
         fi
     fi
@@ -400,7 +400,7 @@ except Exception as e:
         else
             warn "Host forward on port ${dashboard_port} is active but OpenClaw gateway is not responding"
             info "The gateway process may not be running inside the sandbox."
-            fix "Run: ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+            fix "Run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
             fix "Or inside the sandbox: HOME=/sandbox openclaw gateway run &"
             record 2
         fi
@@ -448,7 +448,7 @@ if [[ -n "${sandbox_name}" ]]; then
     echo "  while the model warms up — wait a moment and try again."
     echo ""
     echo "  If openclaw tui shows 'gateway disconnected':"
-    echo "    ./configure-local-provider.sh ${THOR_MODEL_PROFILE}"
+    echo "    ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
     echo "  Or inside the sandbox:"
     echo "    HOME=/sandbox openclaw gateway run &"
     echo ""

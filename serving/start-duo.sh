@@ -9,11 +9,11 @@
 # Requires: single-model containers must be stopped first.
 #
 # Usage:
-#   ./start-duo.sh              # starts both
-#   ./start-duo.sh stop         # stops both
-#   ./start-duo.sh status       # shows health of both endpoints
-#   ./start-duo.sh logs qwen    # tails qwen container logs
-#   ./start-duo.sh logs cosmos  # tails cosmos container logs
+#   ./serving/start-duo.sh              # starts both
+#   ./serving/start-duo.sh stop         # stops both
+#   ./serving/start-duo.sh status       # shows health of both endpoints
+#   ./serving/start-duo.sh logs qwen    # tails qwen container logs
+#   ./serving/start-duo.sh logs cosmos  # tails cosmos container logs
 
 set -euo pipefail
 
