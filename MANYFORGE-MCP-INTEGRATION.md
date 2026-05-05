@@ -9,10 +9,16 @@ plans the model's work, while ManyForge remains the enforcement boundary
 for tools, modes, and draft mutations.
 
 Status:
-- **Phase 1 — sandbox can call ManyForge tools via MCP:** validated
-  end-to-end on 2026-05-04 with `nemotron3-nano-omni-30b-a3b-nvfp4`.
-  Provisioning artifacts are in this repo; setup is reproducible via
-  `scripts/setup-manyforge-assistant.sh`.
+- **Phase 1 — sandbox can call ManyForge tools via MCP, mode-scoped:**
+  validated end-to-end on 2026-05-04 against the broad `/api/mcp`
+  surface (capability proof). On 2026-05-05 the path was narrowed to the
+  mode-scoped bridge endpoint: the in-sandbox MCP wrapper now translates
+  every tool call into a `/api/assistant/bridge/tools/{toolId}` call with
+  the bounded-autonomy envelope (`assistantMode`, `catalogHash`,
+  `requestId`, `conversationId`, `principal`). Server-side enforcement —
+  the same gates we use for the in-Composer assistant — is the source of
+  truth. Provisioning artifacts are in this repo; setup is reproducible
+  via `scripts/setup-manyforge-assistant.sh`.
 - **Phase 2 — composer's chat endpoint routes through OpenClaw:** designed,
   not yet implemented. Sketch and contract are in this doc.
 - **Phase 3 — A/B harness comparing direct-vLLM vs OpenClaw-skill paths:**
@@ -59,18 +65,24 @@ enforces every call exactly as it does today.
 ## Phase 1 — what's deployed
 
 ```
-Composer (host :9000) — bound to 0.0.0.0, --mcp-http
+Composer (host :9000) — bound to 0.0.0.0
   ▲                                             │
-  │  manyforge.assistant.provider_request.v0   │  /api/mcp (JSON-RPC, MCP)
-  │  (unchanged today; will route through       │
-  │   Phase 2 adapter once it lands)            │
+  │  manyforge.assistant.provider_request.v0   │  /api/assistant/modes/{mode}
+  │  (unchanged today; will route through       │     (HTTP GET, manifest)
+  │   Phase 2 adapter once it lands)            │  /api/assistant/bridge/tools/{toolId}
+  │                                             │     (HTTP POST, bounded-autonomy
+  │                                             │      envelope: mode + catalogHash
+  │                                             │      + requestId + conversationId)
   │                                             ▼
 manyforge_assistant_bridge       my-assistant sandbox (OpenClaw)
   → vLLM (today's path)            ├─ skill: manyforge-composer
                                    │    (procedural knowledge + bridge)
                                    ├─ MCP: manyforge (stdio)
                                    │    └─ python3 manyforge-mcp-bridge.py
-                                   │       → host.openshell.internal:9000/api/mcp
+                                   │       (mode-scoped wrapper: fetches the
+                                   │        manifest, exposes only mode-allowed
+                                   │        tools, stamps each call with the
+                                   │        bridge envelope)
                                    │
                                    └─ vLLM (host :8000) for inference
 ```
@@ -82,10 +94,10 @@ through it.
 
 | Path | Role |
 |---|---|
-| `manyforge/agent-skills/manyforge-composer/SKILL.md` | OpenClaw skill — vocabulary, tool routing, canonical ids, anti-patterns, recovery protocol, worked examples. |
-| `manyforge/agent-skills/manyforge-composer/manyforge-mcp-bridge.py` | Symlink → `manyforge/scripts/manyforge-mcp-bridge.py` (single-source). Bundled into the skill at install time. |
-| `nemoclaw/src/NemoClaw-Thor/policies/manyforge-composer.preset.yaml` | NemoClaw custom egress preset opening `host.openshell.internal:9000/api/mcp` to the agent's permitted binaries. |
-| `nemoclaw/src/NemoClaw-Thor/scripts/setup-manyforge-assistant.sh` | Idempotent provisioner. Applies the preset, stages the skill (resolving the symlink), installs it, registers the MCP server. |
+| `manyforge/agent-skills/manyforge-composer/SKILL.md` | OpenClaw skill — vocabulary, tool routing, canonical ids, anti-patterns, recovery protocol, worked examples. Frontmatter `metadata.contract` declares the assistant mode the skill is rev'd against; the provisioner refuses to install if the running Composer doesn't expose that mode. |
+| `manyforge/agent-skills/manyforge-composer/manyforge-mcp-bridge.py` | Symlink → `manyforge/scripts/manyforge-mcp-bridge.py` (single-source). Bundled into the skill at install time. The script is a *mode-scoped MCP wrapper*: it fetches the manifest from `/api/assistant/modes/{mode}`, exposes only the tools that mode permits, and forwards each `tools/call` to `/api/assistant/bridge/tools/{toolId}` with a full bounded-autonomy envelope. |
+| `nemoclaw/src/NemoClaw-Thor/policies/manyforge-composer.preset.yaml` | NemoClaw custom egress preset opening `host.openshell.internal:9000` to the agent's permitted binaries. |
+| `nemoclaw/src/NemoClaw-Thor/scripts/setup-manyforge-assistant.sh` | Idempotent provisioner. Verifies that Composer exposes the configured assistant mode (refuses to install otherwise), applies the preset, stages the skill, installs it, registers the MCP server with the mode + principal env. |
 
 ### What the provisioner does — the four official routes
 
@@ -114,20 +126,31 @@ filesystem patches, no kubectl `cp`, no /tmp persistence.
    {
      "command": "python3",
      "args": ["/sandbox/.openclaw/skills/manyforge-composer/manyforge-mcp-bridge.py"],
-     "env": {"MANYFORGE_ENDPOINT": "http://host.openshell.internal:9000/api/mcp"}
+     "env": {
+       "MANYFORGE_COMPOSER_BASE": "http://host.openshell.internal:9000",
+       "MANYFORGE_ASSISTANT_MODE": "composer-assistant",
+       "MANYFORGE_PRINCIPAL": "openclaw-my-assistant"
+     }
    }
    ```
 
    This persists into `/sandbox/.openclaw/openclaw.json`. The bridge is
-   spawned as a stdio child by OpenClaw on agent runs and forwards
-   JSON-RPC to the composer's MCP HTTP endpoint.
+   spawned as a stdio child by OpenClaw on agent runs. On each
+   `tools/list` it fetches the mode manifest from
+   `/api/assistant/modes/${MANYFORGE_ASSISTANT_MODE}`; on each
+   `tools/call` it POSTs to
+   `/api/assistant/bridge/tools/${tool_id}` with the bounded-autonomy
+   envelope. A 409 catalog-hash mismatch (deployment hot-reloaded)
+   triggers exactly one manifest refresh + retry.
 
 4. **Composer launch flags** — the demo launch script passes
    `--host ${COMPOSER_BIND_HOST:-0.0.0.0}` (sandbox-reachable bind via
-   `host.openshell.internal:9000`) and `--mcp-http` (mounts
-   `/api/mcp` and `/api/mcp/sse` under composer's existing FastAPI app).
-   Both are existing CLI flags ManyForge already supported; we just turn
-   them on by default for this deployment lane.
+   `host.openshell.internal:9000`). The mode-scoped MCP wrapper reaches
+   `/api/assistant/modes/{mode}` and `/api/assistant/bridge/tools/{toolId}`,
+   which are part of Composer's standard assistant routes (always mounted).
+   The `--mcp-http` flag is no longer required for the bounded-autonomy
+   path — keep it on if you want the broad `/api/mcp` surface available
+   for operator tooling, but the agent does not use it.
 
 ### Verification commands and expected outputs
 
@@ -141,30 +164,27 @@ ss -tlnp | grep ":9000"
 # expect: 0.0.0.0:9000  (not 127.0.0.1:9000)
 ```
 
-**b. MCP HTTP transport is mounted:**
+**b. Mode manifest is reachable from the host:**
 
 ```bash
-docker logs manyforge-e2e-composer 2>&1 | grep "MCP transport"
-# expect: HTTP/SSE MCP transport enabled on /api/mcp
+curl -fsS http://localhost:9000/api/assistant/modes/composer-assistant | \
+  python3 -m json.tool | head -20
+# expect: a JSON object with `mode`, `catalogHash`, `tools[]`, `nodes[]`.
+# `tools[]` should include tree.draft.wrap_node, scene.draft.add_object,
+# program.read, etc., each with `description`, `effect`, `inputSchema`.
 ```
 
-**c. Sandbox can reach composer's MCP endpoint (initialize handshake):**
+**c. Sandbox can reach the mode manifest (the wrapper's discovery call):**
 
 ```bash
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c agent \
   -- su sandbox -c \
-  "curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
-    -d '{\"jsonrpc\":\"2.0\",\"id\":\"x\",\"method\":\"initialize\",\
-        \"params\":{\"protocolVersion\":\"2024-11-05\",\
-        \"clientInfo\":{\"name\":\"probe\",\"version\":\"1\"},\
-        \"capabilities\":{}}}' \
-    http://host.openshell.internal:9000/api/mcp"
-# expect: {"jsonrpc":"2.0","result":{"protocolVersion":"2024-11-05",
-#         "capabilities":{"tools":{"listChanged":false}},
-#         "serverInfo":{"name":"ManyForge Composer","version":"1.0.0"}}, ...}
+  "curl -fsS --max-time 5 \
+    http://host.openshell.internal:9000/api/assistant/modes/composer-assistant | head -c 400"
+# expect: same JSON body, truncated.
 ```
 
-**d. Stdio bridge forwards correctly:**
+**d. Stdio wrapper exposes the mode-scoped tool list:**
 
 ```bash
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c agent \
@@ -175,12 +195,12 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c
          \"capabilities\":{}}}\n\
 {\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n\
 {\"jsonrpc\":\"2.0\",\"id\":\"2\",\"method\":\"tools/list\"}' | \
-   MANYFORGE_ENDPOINT=http://host.openshell.internal:9000/api/mcp \
+   MANYFORGE_COMPOSER_BASE=http://host.openshell.internal:9000 \
+   MANYFORGE_ASSISTANT_MODE=composer-assistant \
    python3 /sandbox/.openclaw/skills/manyforge-composer/manyforge-mcp-bridge.py"
-# expect: 19 tools listed under result.tools[]
-#   manyforge_scene_state, manyforge_scene_edit, manyforge_program_load,
-#   manyforge_program_tree, manyforge_program_validate,
-#   manyforge_cycle_control, manyforge_capabilities, manyforge_skills, ...
+# expect: only the tools the mode permits (tree.draft.*, scene.draft.*,
+# program.read, catalog.read, skills.read). NOT the broad operator tools
+# (manyforge_runtime_override, manyforge_intervention, manyforge_program_save).
 ```
 
 **e. The OpenClaw agent sees the manyforge MCP server and can call it:**
@@ -189,10 +209,12 @@ docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c agent \
   -- su sandbox -c \
   "openclaw agent --agent main \
-    --message 'Use the manyforge MCP server. Call its tools/list and report the names as a JSON array.' \
+    --message 'Use the manyforge MCP server. Call program.read and report the tree root node name.' \
     --json --timeout 120"
-# expect: toolSummary.tools includes 'manyforge__manyforge_capabilities' (or another manyforge_*)
-#   and finalAssistantVisibleText is a JSON list of capability ids returned by ManyForge.
+# expect: toolSummary.tools includes 'manyforge__program.read' or similar;
+# finalAssistantVisibleText reports the root node name from the loaded program.
+# The audit log on Composer's side carries the assistant mode + catalog hash
+# + the openclaw-* requestId for that call (visible in bridge audit records).
 ```
 
 The skill is loaded on demand, not eagerly: only the skill metadata
@@ -204,6 +226,27 @@ calls) and *"What does the manyforge-composer skill say about Repeat?"*
 
 ### Industrial properties
 
+- **Bounded autonomy is enforced server-side.** Every tool call from
+  OpenClaw transits `/api/assistant/bridge/tools/{toolId}`, which checks
+  `assistantMode`, validates `catalogHash`, enforces the mode tool
+  allowlist, gates effect-vs-mode (`composer_draft_mutating` only in
+  composer-assistant mode), enforces the node-kind allowlist for
+  tree-edit tools, and applies the same recovery-hint payloads the
+  in-Composer assistant sees. The MCP wrapper narrows the *visible*
+  surface client-side; the bridge endpoint is the source of truth.
+- **Request identity is preserved.** The wrapper assigns a fresh
+  `requestId` per tool call and a stable `conversationId` per stdio
+  session, both stamped onto the bridge envelope. Composer's bridge
+  audit records carry these alongside `assistantMode`, `catalogHash`,
+  `principal`, and `stuckTool` / `stuckRepeatCount` when applicable —
+  so OpenClaw-driven calls are attributable in the same audit trail
+  as direct-vLLM calls.
+- **Skill-vs-runtime compatibility check at install time.** The skill's
+  frontmatter declares the assistant mode it expects; the provisioner
+  GETs `/api/assistant/modes/{mode}` before installing the skill and
+  refuses if the mode is not loaded or the endpoint is unreachable. This
+  catches the "stale skill, hot-reloaded deployment" failure mode at
+  install rather than at first MCP call.
 - **No /tmp persistence.** Source files live in versioned repos.
   `mktemp -d` is used only at install time inside
   `setup-manyforge-assistant.sh`, removed via `trap EXIT`. The skill's
@@ -226,6 +269,15 @@ calls) and *"What does the manyforge-composer skill say about Repeat?"*
 - **Officially supported routes only.** `policy-add --from-file`,
   `skill install`, `openclaw mcp set` are all documented CLI commands
   with stable surfaces. No NemoClaw upstream patches.
+
+### Known gaps tracked in `manyforge_specs/docs/open-points.md`
+
+- The `/api/mcp` and `/api/assistant/mcp/{mode}` endpoints are
+  unauthenticated. Acceptable for single-developer experimentation against
+  `host.openshell.internal`. Required before multi-tenant or non-loopback
+  deployment: shared-secret token bound to a principal name, or a
+  stronger network boundary (Unix socket / loopback bind + sandbox-side
+  proxying). Tracked in open-points.
 
 ### Reproduce from a clean lane
 
