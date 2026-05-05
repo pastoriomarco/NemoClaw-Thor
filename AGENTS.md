@@ -25,9 +25,12 @@ It scopes to two concerns:
    ManyForge.
 
 The downstream consumer is the ManyForge composer running an assistant
-agent backed by these models. This repo also hosts the **assistant-provider
-bridge** that translates ManyForge's contract into model dispatches; see
-"ManyForge integration" below.
+agent backed by these models. This repo hosts the **deployment-side
+integration runbook** that wires the OpenClaw runtime in a NemoClaw
+sandbox to ManyForge's MCP surfaces (egress preset, skill bundle, MCP
+server registration); see "ManyForge integration" below. The
+assistant-provider bridge service itself lives in the ManyForge repo —
+this repo configures and consumes it but does not own it.
 
 ---
 
