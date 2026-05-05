@@ -76,12 +76,13 @@ No semver yet — phase-tagged as work lands.
 | Phase | Status | Landed | Notes |
 |---|---|---|---|
 | **Phase 1 — MCP integration** | shipped | 2026-05-04 (`1136a16`) | Custom egress preset for `host.openshell.internal:9000`; idempotent provisioner stages the `manyforge-composer` skill and registers it as an MCP server in the `my-assistant` sandbox |
-| Phase 2 — bridge handover | not started | — | Will fold the bounded-autonomy assistant bridge into the same MCP path |
+| Phase 2 — OpenClaw assistant-provider adapter | experimental live route validated | 2026-05-05 | `manyforge/openclaw_assistant_bridge/` speaks the Composer assistant-provider HTTP contract and invokes `openclaw agent` in `my-assistant`; Composer chat → OpenClaw → mode-scoped MCP → `/api/assistant/bridge/tools/{toolId}` was live-smoked with `catalog.read` and `tree.draft.wrap_node`. Direct vLLM remains the known-good default until the A/B harness qualifies reliability and latency. |
 
 Active artifacts:
 
 - Provisioner: [`manyforge/setup-manyforge-assistant.sh`](manyforge/setup-manyforge-assistant.sh)
 - Egress preset: [`manyforge/policies/manyforge-composer.preset.yaml`](manyforge/policies/manyforge-composer.preset.yaml)
+- Experimental OpenClaw adapter: [`manyforge/openclaw_assistant_bridge/`](manyforge/openclaw_assistant_bridge/)
 - Bridge audit log mount point: [`manyforge/bridge/`](manyforge/bridge/) (the bridge service code itself lives in the sibling `manyforge` repo at `manyforge_assistant_bridge/`)
 
 Wire contract / spec authority: in the sibling `manyforge_specs` repo, not here. See:

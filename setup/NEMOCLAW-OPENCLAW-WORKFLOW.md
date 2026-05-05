@@ -434,7 +434,7 @@ can be dropped.
 |---|---|
 | [../serving/launch.sh](../serving/launch.sh) | `cosmos-reason2-8b` profile — vLLM args + env vars |
 | [../serving/config.sh](../serving/config.sh) | `cosmos-reason2-8b` runtime config — `max_model_len=65536`, `max_num_seqs=3` |
-| [start-model.sh](start-model.sh) | Model launcher (honors `THOR_DETACH`, `THOR_CONTAINER_NAME`, `THOR_NO_RM`) |
+| [../serving/start-model.sh](../serving/start-model.sh) | Model launcher (honors `THOR_DETACH`, `THOR_CONTAINER_NAME`, `THOR_NO_RM`) |
 | [start-duo.sh](start-duo.sh) | Dual-serve launcher (Qwen3.6 + Cosmos) — kept for benchmark scenarios |
 | [configure-local-provider.sh](configure-local-provider.sh) | Wires OpenShell `vllm-local` provider + inference route + sandbox sync + gateway start |
 | `~/.cache/huggingface/token` | HF token for gated-repo access |

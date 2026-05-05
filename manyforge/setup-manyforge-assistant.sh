@@ -16,6 +16,8 @@
 #   3. Register the `manyforge` MCP server in the sandbox's openclaw.json
 #      via `openclaw mcp set manyforge '<json>'` (run inside the sandbox
 #      via `kubectl exec`). The MCP command points at the bundled bridge.
+#   4. Install a dedicated `manyforge-composer` OpenClaw agent profile that
+#      points at the ManyForge skill and keeps generic OpenClaw tools minimal.
 #
 # After this runs successfully, the OpenClaw agent in the sandbox can call
 # ManyForge tools via the `manyforge.*` MCP namespace.
@@ -100,7 +102,7 @@ if [[ -z "${PRECHECK_HASH}" ]]; then
 fi
 ok "composer mode '${PRECHECK_MODE}' reachable (catalogHash: ${PRECHECK_HASH:0:16}…)"
 
-step "Step 1/4: apply egress preset 'manyforge-composer'"
+step "Step 1/5: apply egress preset 'manyforge-composer'"
 if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-composer"; then
   ok "preset 'manyforge-composer' already applied"
 else
@@ -108,7 +110,7 @@ else
   ok "preset applied"
 fi
 
-step "Step 2/4: stage skill (resolves repo symlinks; no /tmp left in persistent state)"
+step "Step 2/5: stage skill (resolves repo symlinks; no /tmp left in persistent state)"
 STAGING_DIR="$(mktemp -d -t manyforge-skill-XXXX)"
 trap 'rm -rf "${STAGING_DIR}"' EXIT
 
@@ -131,11 +133,11 @@ shopt -u nullglob
 
 ok "staged $(ls "${STAGING_DIR}" | wc -l) file(s) under ${STAGING_DIR}"
 
-step "Step 3/4: install skill 'manyforge-composer'"
+step "Step 3/5: install skill 'manyforge-composer'"
 nemoclaw "${SANDBOX}" skill install "${STAGING_DIR}"
 ok "skill installed"
 
-step "Step 4/4: register 'manyforge' MCP server in sandbox openclaw.json"
+step "Step 4/5: register 'manyforge' MCP server in sandbox openclaw.json"
 KEX_USER=(docker exec openshell-cluster-nemoclaw kubectl exec -n openshell "${SANDBOX}" -c agent -- su sandbox -c)
 MCP_BRIDGE_PATH="/sandbox/.openclaw/skills/manyforge-composer/manyforge-mcp-bridge.py"
 COMPOSER_BASE="${MANYFORGE_COMPOSER_BASE:-http://host.openshell.internal:9000}"
@@ -154,6 +156,55 @@ JSON
 ok "MCP server 'manyforge' registered (mode: ${ASSISTANT_MODE}; principal: ${MCP_PRINCIPAL})"
 "${KEX_USER[@]}" "openclaw mcp show manyforge" 2>&1 | sed 's/^/    /'
 
+step "Step 5/5: install dedicated OpenClaw agent profile 'manyforge-composer'"
+PROFILE_SCRIPT_B64="$(cat <<'PY' | base64 -w0
+import json
+import os
+
+path = os.path.expanduser("~/.openclaw/openclaw.json")
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+except FileNotFoundError:
+    data = {}
+
+agents = data.setdefault("agents", {})
+entries = agents.get("list")
+if not isinstance(entries, list):
+    entries = []
+    agents["list"] = entries
+
+profile = {
+    "id": "manyforge-composer",
+    "name": "ManyForge Composer Assistant",
+    "skills": ["manyforge-composer"],
+    "thinkingDefault": "off",
+    "tools": {"profile": "minimal"},
+    "skillsLimits": {"maxSkillsPromptChars": 24000},
+    "contextLimits": {
+        "toolResultMaxChars": 20000,
+        "postCompactionMaxChars": 30000,
+    },
+}
+entries[:] = [
+    entry
+    for entry in entries
+    if not (isinstance(entry, dict) and entry.get("id") == "manyforge-composer")
+]
+entries.append(profile)
+
+tmp = f"{path}.tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(tmp, path)
+print("manyforge-composer")
+PY
+)"
+"${KEX_USER[@]}" "printf %s '${PROFILE_SCRIPT_B64}' | base64 -d | python3 -" >/dev/null
+ok "agent profile 'manyforge-composer' installed"
+"${KEX_USER[@]}" "openclaw agents list --json 2>/dev/null | head -c 1200 || openclaw agents list" 2>&1 | sed 's/^/    /'
+
 step "Composer reachability check (mode-scoped manifest)"
 MODE_URL="${COMPOSER_BASE}/api/assistant/modes/${ASSISTANT_MODE}"
 if curl -fsS -o /dev/null --max-time 3 "${MODE_URL}" 2>/dev/null; then
@@ -168,7 +219,7 @@ else
 fi
 
 step "Sandbox-side reachability probe (manyforge-composer policy)"
-"${KEX_USER[@]}" "curl -fsS --max-time 5 '${MODE_URL}' | head -c 400" 2>&1 | sed 's/^/    /'
+"${KEX_USER[@]}" "python3 -c 'import urllib.request; print(urllib.request.urlopen(\"${MODE_URL}\", timeout=5).read(400).decode(\"utf-8\", \"replace\"))'" 2>&1 | sed 's/^/    /'
 
 cat <<EOF
 
@@ -177,6 +228,6 @@ Setup complete.
 Next steps:
   - Verify the agent sees the manyforge MCP tools:
       kubectl exec -n openshell ${SANDBOX} -c agent -- su sandbox -c \\
-        "openclaw agent --agent main --message 'List the manyforge MCP tools you can call. Reply with a JSON array of tool names.' --json --timeout 60"
+        "openclaw agent --agent manyforge-composer --message 'List the manyforge MCP tools you can call. Reply with a JSON array of tool names.' --json --timeout 60"
   - Switch composer's assistant provider to 'openclaw' (Phase 2).
 EOF

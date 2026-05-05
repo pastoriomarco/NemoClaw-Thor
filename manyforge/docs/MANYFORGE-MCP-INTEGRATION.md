@@ -21,15 +21,21 @@ Status:
   **wrapper-layer-validated end-to-end on 2026-05-05** (host probe,
   Composer-reload, provisioner against `my-assistant`, sandbox-side
   `tools/list` returning 23 mode-permitted tools with zero broad-MCP
-  leakage); see "Validation log" at the bottom for evidence and the
-  one outstanding gap (full agent → `tools/call` round-trip).
+  leakage); see "Validation log" at the bottom for evidence. The
+  full agent → `tools/call` round-trip was subsequently validated
+  through the Phase 2 adapter.
   Provisioning artifacts are in this repo; setup is reproducible via
   `manyforge/setup-manyforge-assistant.sh`.
 - **Phase 2 — composer's chat endpoint routes through OpenClaw:**
-  designed, not yet implemented. Sketch and contract are in this doc.
-  Placement under the post-refactor layout:
-  `nemoclaw/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge/`
-  (sibling to the existing `manyforge/bridge/` audit-log mount).
+  adapter landed and was live-smoked on 2026-05-05 under
+  `manyforge/openclaw_assistant_bridge/`. It speaks the existing
+  assistant-provider HTTP contract, invokes `openclaw agent` inside
+  `my-assistant`, and translates OpenClaw JSON output back into the
+  Composer envelope. Live Composer chat validation passed for
+  `catalog.read` and `tree.draft.wrap_node`; the latter mutated the
+  Composer draft through `/api/assistant/bridge/tools/tree.draft.wrap_node`.
+  The route is still experimental because latency is high and the A/B
+  reliability harness is not implemented yet.
 - **Phase 3 — A/B harness comparing direct-vLLM vs OpenClaw-skill paths:**
   designed, not yet implemented.
 
@@ -105,7 +111,7 @@ through it.
 |---|---|
 | `manyforge/agent-skills/manyforge-composer/SKILL.md` | OpenClaw skill — vocabulary, tool routing, canonical ids, anti-patterns, recovery protocol, worked examples. Frontmatter `metadata.contract` declares the assistant mode the skill is rev'd against; the provisioner refuses to install if the running Composer doesn't expose that mode. |
 | `manyforge/agent-skills/manyforge-composer/manyforge-mcp-bridge.py` | Symlink → `manyforge/scripts/manyforge-mcp-bridge.py` (single-source). Bundled into the skill at install time. The script is a *mode-scoped MCP wrapper*: it fetches the manifest from `/api/assistant/modes/{mode}`, exposes only the tools that mode permits, and forwards each `tools/call` to `/api/assistant/bridge/tools/{toolId}` with a full bounded-autonomy envelope. |
-| `nemoclaw/src/NemoClaw-Thor/policies/manyforge-composer.preset.yaml` | NemoClaw custom egress preset opening `host.openshell.internal:9000` to the agent's permitted binaries. |
+| `nemoclaw/src/NemoClaw-Thor/manyforge/policies/manyforge-composer.preset.yaml` | NemoClaw custom egress preset opening `host.openshell.internal:9000` to the agent's permitted binaries. |
 | `nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh` | Idempotent provisioner. Verifies that Composer exposes the configured assistant mode (refuses to install otherwise), applies the preset, stages the skill, installs it, registers the MCP server with the mode + principal env. |
 
 ### What the provisioner does — the four official routes
@@ -306,7 +312,8 @@ Then run the verification commands above.
 
 ## Phase 2 — composer's chat endpoint routes through OpenClaw
 
-**Status:** designed, not implemented.
+**Status:** experimental live route validated on 2026-05-05 for
+`composer-assistant`.
 
 The composer's existing `openclaw` provider at
 `manyforge/manyforge_composer/backend/assistant_provider.py:584` accepts
@@ -317,15 +324,17 @@ runs the agent loop through OpenClaw inside the sandbox instead.
 
 ### Scope
 
-A small adapter service — provisional name **`openclaw_assistant_bridge`** — that:
+A small adapter service — **`openclaw_assistant_bridge`** — that:
 
 - Listens on HTTP for `manyforge.assistant.provider_request.v0` requests,
   same shape composer already speaks.
 - For each request, invokes the OpenClaw agent inside the sandbox via
-  `kubectl exec ... openclaw agent --agent main --message <user-msg>
+  `kubectl exec ... openclaw agent --local --thinking off --agent main
+  --session-id <conversation-or-request-id> --message <user-msg>
   --json --timeout <t>` (or the equivalent gateway WebSocket call).
-- Parses the JSON output: extracts `finalAssistantVisibleText`, the tool
-  summary, and any tool-call envelopes.
+- Parses the JSON output from stdout or stderr: extracts
+  `payloads[].text`, `finalAssistantVisibleText`, the tool summary, and
+  any tool-call envelopes.
 - Translates these into the composer's expected envelope: proposals,
   `toolCalls[]`, `draftMutated` flag, warnings, `requestId`, etc.
 - Returns the standard 200 envelope (or `_envelope_error` shape) to the
@@ -344,8 +353,10 @@ nemoclaw/src/NemoClaw-Thor/
     │                                            # (vLLM path runs there)
     ├── openclaw_assistant_bridge/               # new — Phase 2
     │   ├── README.md
-    │   ├── service.py                           # the adapter (FastAPI, ~200 LoC)
-    │   ├── pyproject.toml
+    │   ├── adapter.py                           # prompt/output translation
+    │   ├── service.py                           # FastAPI HTTP layer
+    │   ├── requirements.txt
+    │   ├── README.md
     │   └── tests/
     ├── policies/manyforge-composer.preset.yaml
     ├── setup-manyforge-assistant.sh
@@ -353,17 +364,19 @@ nemoclaw/src/NemoClaw-Thor/
         └── MANYFORGE-MCP-INTEGRATION.md         # this doc
 ```
 
-Versioned with the deployment recipe; no manyforge-side changes required
-beyond pointing `MANYFORGE_ASSISTANT_ENDPOINT_URL` at the new service.
+Versioned with the deployment recipe. The only manyforge-side runtime
+selection is pointing `MANYFORGE_ASSISTANT_ENDPOINT_URL` at the new
+service and setting `MANYFORGE_ASSISTANT_PROVIDER=openclaw`.
 
 ### Composer-side switch (no code change)
 
 ```bash
-# in scripts/demo-assistant-known-good.sh, the BRIDGE_URL becomes:
-BRIDGE_URL="${BRIDGE_URL:-http://127.0.0.1:8200}"   # openclaw_assistant_bridge
-# and the env passed to the composer container:
--e MANYFORGE_ASSISTANT_PROVIDER=openclaw \
--e MANYFORGE_ASSISTANT_ENDPOINT_URL="${BRIDGE_URL}/v1/manyforge/assistant" \
+cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+./manyforge/start-openclaw-assistant-bridge.sh
+
+# in the Composer launch environment:
+MANYFORGE_ASSISTANT_PROVIDER=openclaw
+MANYFORGE_ASSISTANT_ENDPOINT_URL=http://127.0.0.1:8200/v1/manyforge/assistant
 ```
 
 The composer's `openclaw` provider id (already in
@@ -405,7 +418,7 @@ Response (existing, unchanged):
 }
 ```
 
-Adapter internals (sketch):
+Adapter internals:
 
 ```python
 async def assistant(req: Request):
@@ -415,7 +428,7 @@ async def assistant(req: Request):
     #    don't pass the tools as OpenAI tools — they reach the agent via
     #    the manyforge MCP server already).
     agent_prompt = build_prompt(payload)
-    # 2. Invoke the in-sandbox agent.
+    # 2. Invoke the in-sandbox agent through docker/kubectl exec.
     result = await invoke_openclaw_agent(
         sandbox="my-assistant",
         agent="main",
@@ -428,11 +441,14 @@ async def assistant(req: Request):
 
 ### What stays unchanged (important)
 
-- ManyForge's MCP tool surface is the canonical authority. Every tool the
-  agent calls goes back through `host.openshell.internal:9000/api/mcp` →
-  composer's enforcement (mode allowlists, catalog validation, scope
-  rules, draft boundaries). No tool effect can reach state without
-  ManyForge's say-so.
+- ManyForge's mode-scoped assistant callback surface is the canonical
+  authority. Every ManyForge tool the agent calls goes through the
+  provisioned `manyforge` MCP wrapper, which forwards to
+  `host.openshell.internal:9000/api/assistant/bridge/tools/{toolId}`
+  with `assistantMode`, `catalogHash`, `requestId`, `conversationId`,
+  and `principal`. No tool effect can reach state without ManyForge's
+  mode allowlists, catalog validation, scope rules, and draft-boundary
+  enforcement.
 - The composer's `assistant_provider.py` is unchanged. The provider is
   just being pointed at a different endpoint.
 - The `manyforge_assistant_bridge` (vLLM path) stays in the repo as the
@@ -440,12 +456,27 @@ async def assistant(req: Request):
 
 ### Estimated work
 
-~1 person-day:
+Initial skeleton:
 
-- ~150 LoC FastAPI service translating the contract.
-- Smoke test exercising one end-to-end agent call.
-- Provisioning hook (systemd unit or `start-` script) sibling to the
-  existing assistant bridge launcher.
+- FastAPI service translating the contract.
+- Dependency-light adapter module with unit tests for prompt building,
+  command construction, JSON extraction, tool-name canonicalization, and
+  envelope normalization.
+- `manyforge/start-openclaw-assistant-bridge.sh` launcher.
+
+Remaining validation:
+
+- Live smoke proving OpenClaw emits an MCP `tools/call`, the MCP wrapper
+  forwards it to `/api/assistant/bridge/tools/{toolId}`, and the adapter
+  returns the expected Composer envelope.
+
+### Spec note
+
+The normative bridge spec currently locks the direct-vLLM bridge as the
+v0.1 assistant request path and explicitly says that bridge does not
+delegate to the sandbox runtime. This Phase 2 adapter is therefore an
+experimental deployment-side alternate provider until the specs are
+updated or the experiment is retired.
 
 ---
 
@@ -508,23 +539,83 @@ Passes:
   exposed; **zero broad-MCP leakage** (no `manyforge_*` operator
   tools).
 
-Composer's HTTP audit log during this run shows only mode-scoped
-manifest fetches from `172.18.0.2` (sandbox); no `/api/mcp` traffic
-and no broad-tool exposure.
+Composer's HTTP audit log during the Phase 1 wrapper run showed only
+mode-scoped manifest fetches from `172.18.0.2` (sandbox); no `/api/mcp`
+traffic and no broad-tool exposure.
 
-Outstanding gap (Tier 1d):
+### Phase 2 live validation — 2026-05-05
 
-- **OpenClaw agent → MCP wrapper → bridge → tool result → back to
-  agent** did not complete a `tools/call`. A test prompt asking the
-  agent to call `program.read` produced repeated `tools/list`
-  manifests (all 200) but no `tools/call`; the agent process hung
-  past its `--timeout 180` and was killed at +11 min. Worth
-  investigating before Phase 2 measurements: tool-name mangling at
-  the OpenClaw boundary (e.g., `manyforge__tree.draft.wrap_node` may
-  not survive the agent's name validator), the SKILL.md not being
-  read at warmup (it's load-on-demand), and 23-tool overload on a
-  small model. None of these are integration-layer issues — the
-  wrapper layer is doing exactly what it should.
+After the adapter fixes for `--thinking off`, stderr JSON parsing, and
+per-request/per-conversation OpenClaw session ids:
+
+- **2a — Composer configured with provider `openclaw`:** `GET
+  /api/assistant/providers` returned `configuredProviderId: openclaw`;
+  adapter `/healthz` returned `status: ok` on `:8200`.
+- **2b — read-only tool round-trip through Composer chat:** prompt forced
+  `manyforge__catalog-read` for `remove_collision_object`. Composer logs
+  showed `POST /api/assistant/bridge/tools/catalog.read 200`; the chat
+  response returned HTTP 200 with message "The catalog entry id for
+  remove_collision_object is remove_collision_object."
+- **2c — draft-mutating tool round-trip through Composer chat:** prompt
+  forced `manyforge__tree-draft-wrap_node` with `targetName: @root` and
+  wrapper `{id: repeat, name: repeat_node}`. Composer logs showed `POST
+  /api/assistant/bridge/tools/tree.draft.wrap_node 200`; the provider
+  response returned HTTP 200 with `draftMutated: true` and a completed
+  `tree.draft.wrap_node` tool call; `GET /api/program/tree` then showed
+  `repeat/repeat_node` as root with `sequence/pick_and_place` as its
+  child.
+
+Known Phase 2 limitations:
+
+- The sandbox MCP server is currently registered for `composer-assistant`;
+  a query-mode smoke asking for `program.read` timed out because that was
+  not the mode-scoped tool surface under test.
+- Latency is high on the local Omni route. Follow-up measurements after
+  request-scoped MCP tool-window support showed:
+  - host-to-sandbox shell launch (`docker exec` -> `kubectl exec` -> `su`) is
+    about 220-260 ms and is not the bottleneck;
+  - a trivial direct vLLM call with a capped response can complete in under one
+    second;
+  - a trivial OpenClaw agent turn with `--local --thinking off` and a narrowed
+    ManyForge MCP tool window still takes about 58-61 s;
+  - an unconstrained Composer root-wrap prompt through OpenClaw still timed out
+    at the 180 s Composer provider budget before issuing a ManyForge callback.
+  Direct vLLM remains the known-good demo default until the Phase 3 A/B harness
+  quantifies reliability and latency.
+- The OpenClaw adapter now passes request-scoped tool windows via a short-lived
+  sandbox file (`/tmp/manyforge-openclaw-allowed-tools.txt`) because OpenClaw's
+  configured MCP server environment is static and does not inherit
+  per-invocation environment variables.
+- The adapter also filters prompt-visible tool descriptions to the same
+  request-scoped window. A one-tool `catalog.read` probe dropped the adapter
+  prompt from ~7.6k chars to ~1.3k chars, but still timed out at 120 s; prompt
+  size reduction alone does not solve local OpenClaw turn latency.
+- `manyforge/setup-manyforge-assistant.sh` now installs a dedicated
+  `manyforge-composer` OpenClaw agent profile (`skills: [manyforge-composer]`,
+  `tools.profile: minimal`). The Phase 2 bridge launcher defaults to this
+  agent. A direct "Reply exactly OK" probe through that profile still took
+  ~50 s with a ~9.6k-char OpenClaw system prompt, so remaining work is in
+  OpenClaw runner/provider behavior rather than ManyForge callback handling.
+- Timeout/cancel cleanup must kill the sandbox-side `openclaw agent` process by
+  session id; killing only the host `docker exec` process can leave a model
+  request running after Composer has timed out.
+- The active vLLM container reported 0% prefix-cache hit rate during these
+  probes. The Nemotron-3 Omni launch profile now adds
+  `--enable-prefix-caching` on the next model restart unless disabled with
+  `THOR_ENABLE_PREFIX_CACHING=0`. A 2026-05-05 post-restart check confirmed
+  the running `manyforge-e2e-vllm` container includes the flag, but a direct
+  `manyforge-composer` OpenClaw "OK" turn still took ~81 s wall time and vLLM
+  still stayed slow. Direct vLLM controls prove prefix caching works on this
+  server: an identical ~10k-token prompt took 3.6 s on the first call, then
+  ~0.58 s on repeated calls with ~8.5k cached tokens. Repeated OpenClaw
+  same-session calls also produced partial cache hits (~2.1k cached tokens per
+  turn), but still took ~58 s and ~123 s. Before changing `max_num_seqs` or
+  `max_num_batched_tokens`, inspect OpenClaw output-token budgets, hidden
+  reasoning/request shaping, dynamic prompt sections, and whether OpenClaw is
+  issuing multiple model turns for simple requests.
+- OpenClaw's JSON output may omit detailed tool arguments/results even
+  when the bounded ManyForge callback succeeded; Composer audit logs remain
+  the source of truth for exact callback payloads in this phase.
 
 ---
 

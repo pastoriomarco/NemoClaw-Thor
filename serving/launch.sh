@@ -26,8 +26,8 @@ prepare_thor_launch_profile() {
     THOR_LAUNCH_SPECULATIVE_CONFIG=""
     THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
     THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
-    THOR_CHAT_TEMPLATE_HOST_DIR="${THOR_CHAT_TEMPLATE_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/templates}"
-    THOR_MODS_HOST_DIR="${THOR_MODS_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../docker/mods" && pwd)}"
+    THOR_CHAT_TEMPLATE_HOST_DIR="${THOR_CHAT_TEMPLATE_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/templates}"
+    THOR_MODS_HOST_DIR="${THOR_MODS_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/docker/mods" && pwd)}"
 
     THOR_DOCKER_ENV_ARGS=()
     THOR_VLLM_ARGS=()
@@ -203,6 +203,9 @@ prepare_thor_launch_profile() {
                 # bundled nvidia-cudnn-cu13==9.20.0.48, so the autotuner can
                 # run again. Re-enable verified at v8 boot 2026-04-29.
             )
+            if [[ "${THOR_ENABLE_PREFIX_CACHING:-1}" != "0" ]]; then
+                THOR_VLLM_ARGS+=("--enable-prefix-caching")
+            fi
             ;;
         # cosmos-reason2-8b-reasoning REMOVED 2026-04-28 — empirically
         # produced uniform 7-word responses on IFEval-lite vs ~160-word
