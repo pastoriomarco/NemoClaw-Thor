@@ -6,7 +6,7 @@
 # Adapted from spark-vllm-docker (sm121) — stripped of Ray/cluster logic,
 # retargeted for single-node Thor with CUDA 13.0 and JetPack 7.1.
 #
-# v8.1 changes vs v8 (2026-05-05):
+# v8.1 changes vs v8 (2026-05-06):
 #   - BUMPED vLLM v0.20.0 → v0.20.1. Patch release with several non-DeepSeek
 #     fixes that hit our active profiles: PTX `cvt` for FP32→FP4 conversion
 #     (#41015) speeds NVFP4 dequant on every NVFP4 weight; CUDA-graph
@@ -20,25 +20,35 @@
 #     routing_replay_out arg fix (PR #3115) — autotuner runs hot on Omni since
 #     v8 dropped the disable-workaround; vLLM OOB fix (PR #2762); trtllm-gen
 #     FMHA SWA cubin update (PR #3089); CuTe DSL FMHA prefill cubin (PR #3039).
-#   - BUMPED flash-attn-4 4.0.0b10 → 4.0.0b11 (released 2026-04-29). First-class
+#   - BUMPED flash-attn-4 4.0.0b10 → 4.0.0b12 (b11 released 2026-04-29 and b12
+#     released 2026-05-06; both bundled in this staging). b11 added first-class
 #     head_dim=256 forward+backward in CUTE DSL (PR #2412); 3–9% hd256 perf
 #     gain from exp2 FMA emulation (PR #2488); SM100 MLA stream fix (PR #2505);
-#     SM100 empty-tile gO None guard (PR #2504). Direct wins for the Qwen3.6
-#     head_dim=256 line.
+#     SM100 empty-tile gO None guard (PR #2504). b12 carries the post-b11 fix
+#     tail. Direct wins for the Qwen3.6 head_dim=256 line.
 #   - BUMPED nvidia-cudnn-cu13 9.20.0.48 → 9.21.1.3 (both stages). Two minor
 #     bumps. Safe now that v8 fixed the apt-vs-pip mismatch root cause; cuDNN
 #     is the canary so smoke-test Omni audio after promotion.
 #   - BUMPED apache-tvm-ffi 0.1.10 → 0.1.11. Single patch release.
-#   - HELD nvidia-cutlass-dsl at 4.4.2. 4.5.0.dev0 (2026-04-08) is a
-#     pre-release; its primary new content is "optimal code generation with
-#     CUDA toolkit 13.2", which doesn't apply at our CUDA 13.0.3 pin. Revisit
-#     when 4.5.0 ships stable AND we move to CUDA 13.2.
+#   - BUMPED transformers 5.7.0 → 5.8.0. Rolling minor update for the
+#     post-5.7.0 fix tail. Smoke-test all profiles after the build to confirm
+#     no regression in the 5.7.0-known-good areas (Qwen3.5 GDN, Gemma4 rotary,
+#     continuous batching ≥16K, NVFP4+torchao).
+#   - BUMPED nvidia-cutlass-dsl 4.4.2 → 4.5.0 stable. 4.5.0 stable shipped
+#     2026-05-XX. The release-line headline gain — "optimal code generation
+#     with CUDA toolkit 13.2" — does NOT apply at our CUDA 13.0.3, but the
+#     accumulated 4.4.2 → 4.5.0 bug fixes do, and pinning to stable keeps us
+#     on a non-pre-release line. Re-evaluate the codegen win after JetPack 7.2
+#     brings CUDA 13.2.
+#   - BUMPED fastsafetensors 0.3 → 0.3.1. Single patch release.
 #   - HELD CUDA at 13.0.3-ubuntu24.04. JetPack 7.1 ships CUDA 13.0; container
 #     CUDA ahead of host driver adds avoidable risk. Bump when JetPack 7.2
 #     lands.
 #   - HELD torch nightly at 2026-04-26+cu130. Tied to the CUDA pin —
 #     bumping torch implies revalidating cu130 ABI against everything else.
-#   - HELD transformers at 5.7.0 (already latest as of 2026-04-28).
+#   - HELD nvidia-nvshmem-cu13 at 3.6.5 (already latest).
+#   - HELD instanttensor at 0.1.8 (already latest).
+#   - HELD triattention at @325297218a (HEAD is one README-only commit ahead).
 #
 # v8 changes vs v7 (2026-04-29):
 #   - DROPPED apt libcudnn9-cuda-13 in both stages. v7 had apt cuDNN 9.21.1
@@ -63,7 +73,7 @@
 # Recommended invocation for the v8.1 image:
 #   ./build-vllm.sh --vllm-ref v0.20.1 --flashinfer-ref v0.6.10
 #
-# Why those pins (researched 2026-05-05):
+# Why those pins (researched 2026-05-05, refreshed 2026-05-06):
 #   - vLLM v0.20.1 (tagged 2026-05-04) — patch release on v0.20.0 with
 #     PTX FP32→FP4 codegen and several CUDA-graph / KV-block / cumem fixes
 #     that all touch our active serving paths. v0.20.0 base still carries the
@@ -74,10 +84,15 @@
 #     v0.6.9 vLLM v0.20.x is pinned against; NVFP4 KV path opens for
 #     evaluation, autotuner correctness fix lands, plus several free wins.
 #     Pure-Python wheel + CuTe-DSL JIT, SM110 detected at runtime.
-#   - flash-attn-4==4.0.0b11 (pinned in runner stage below) — head_dim=256
-#     forward+backward graduates to first-class in CUTE DSL with measurable
-#     perf gain. b10 added SM100 FP8 e4m3/e5m2 forward (PR #2109); b11 keeps
-#     that path and adds the hd256 work.
+#   - flash-attn-4==4.0.0b12 (pinned in runner stage below). b11 (2026-04-29)
+#     graduated head_dim=256 forward+backward to first-class in CUTE DSL with
+#     measurable perf gain; b10 added SM100 FP8 e4m3/e5m2 forward (PR #2109).
+#     b12 (2026-05-06) is the rolling fix tail on top of b11; the cumulative
+#     SM100/110 path remains intact.
+#   - nvidia-cutlass-dsl==4.5.0 (pinned in runner stage below). 4.5.0 stable
+#     shipped 2026-05-XX. The release-line headline ("optimal code generation
+#     with CUDA toolkit 13.2") does not apply at our CUDA 13.0.3, but the
+#     accumulated 4.4.2 → 4.5.0 bug fixes do. Revisit once JetPack 7.2 lands.
 #
 # Usage:
 #   ./build-vllm.sh --vllm-ref v0.20.1 --flashinfer-ref v0.6.10  # canonical v8.1 build
@@ -465,7 +480,7 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 # FLASHINFER_CUDA_ARCH_LIST=11.0a and contain valid sm_110a code.
 # This enables the FlashInfer attention backend on Thor.
 # With --tf5 (PRE_TRANSFORMERS=1, the default): override vLLM's and compressed-tensors'
-# transformers<5 constraint, then explicitly install transformers==5.7.0 (v8).
+# transformers<5 constraint, then explicitly install transformers==5.8.0 (v8.1).
 # transformers 5.2.0: first native Qwen3.5 support.
 # transformers 5.3.0: NVFP4 Blackwell quantization integration, Qwen3.5 bug fixes.
 # transformers 5.4.0: Qwen3.5 classification, FP8 grouped matmul speedup.
@@ -476,13 +491,17 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 #   multi-token forward fix (correctness), Gemma4 rotary kernel incompatibility
 #   fix + config-driven inference, continuous batching KV-dedup and memory
 #   estimation fixes for sequences ≥16K (we run 64K), NVFP4+torchao
-#   serialization fix. Smoke-test all profiles after the build to confirm.
+#   serialization fix.
+# transformers 5.8.0 (v8.1 staging bump, 2026-05-XX): rolling minor; pulls
+#   the post-5.7.0 fix tail. Smoke-test all profiles after the build to confirm
+#   no regression in the 5.7.0-known-good areas (Qwen3.5 GDN, Gemma4 rotary,
+#   continuous batching ≥16K, NVFP4+torchao).
 RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
     --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     if [ "$PRE_TRANSFORMERS" = "1" ]; then \
         echo "transformers>=5.0.0" > /tmp/tf-override.txt && \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin) --override /tmp/tf-override.txt && \
-        uv pip install "transformers==5.7.0" --override /tmp/tf-override.txt; \
+        uv pip install "transformers==5.8.0" --override /tmp/tf-override.txt; \
     else \
         uv pip install $(ls /workspace/wheels/*.whl | grep -v flashinfer_cubin); \
     fi
@@ -504,19 +523,24 @@ COPY mods/ /workspace/mods/
 # - fastsafetensors/instanttensor: fast model loading (--load-format instanttensor)
 # - triattention: KV cache compression via trigonometric frequency-domain scoring
 #   (vLLM plugin — transparent, up to 10.7x KV memory reduction for long reasoning)
-# - flash-attn-4 beta11: FA4 with SM110a/SM110f support (JIT via CuTeDSL).
+# - flash-attn-4 beta12: FA4 with SM110a/SM110f support (JIT via CuTeDSL).
 #   Enables --attention-backend flash_attn for DFlash on SM110 with head_dim=256.
 #   Beta10 (2026-04-22) added SM100 FP8 e4m3/e5m2 forward (PR #2109) and
-#   SM100 seqlen_k=0 crash fix (PR #2470). Beta11 (2026-04-29) adds first-class
+#   SM100 seqlen_k=0 crash fix (PR #2470). Beta11 (2026-04-29) added first-class
 #   head_dim=256 forward+backward in CUTE DSL (PR #2412), 3–9% hd256 perf
 #   improvement via exp2 FMA emulation (PR #2488), and SM100 MLA stream +
-#   empty-tile gO None fixes (PRs #2505, #2504).
-#   Requires nvidia-cutlass-dsl >= 4.4.x (held at 4.4.2; 4.5.0.dev0 gates new
-#   value on CTK 13.2 which we don't have at CUDA 13.0.3).
+#   empty-tile gO None fixes (PRs #2505, #2504). Beta12 (2026-05-06) is the
+#   rolling fix tail on top of beta11.
+#   Requires nvidia-cutlass-dsl >= 4.4.x. Bumped to 4.5.0 stable in v8.1 staging
+#   (2026-05-06): the 4.5.0 release-line headline gain — "optimal code generation
+#   with CUDA toolkit versions 13.2" — does NOT apply at our CUDA 13.0.3, but
+#   the 4.5.0 stable wheel ships the smaller bug fixes accumulated since 4.4.2
+#   and keeps the pin current. Revisit (with measurable benefit) after JetPack
+#   7.2 brings CUDA 13.2.
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv pip install "fastsafetensors==0.3" "instanttensor==0.1.8" && \
+    uv pip install "fastsafetensors==0.3.1" "instanttensor==0.1.8" && \
     uv pip install "triattention @ git+https://github.com/WeianMao/triattention.git@325297218a" && \
-    uv pip install "flash-attn-4==4.0.0b11" "nvidia-cutlass-dsl==4.4.2"
+    uv pip install "flash-attn-4==4.0.0b12" "nvidia-cutlass-dsl==4.5.0"
 
 # v8: vLLM audio extras — librosa + soundfile cover Nemotron 3 Nano Omni's
 # audio modality (Parakeet encoder feed). audioread is librosa's fallback
