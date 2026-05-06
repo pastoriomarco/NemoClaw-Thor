@@ -232,16 +232,45 @@ prepare_thor_launch_profile() {
                 # choices[0].message.content, so the OpenClaw lane was
                 # returning empty messages until this flag was dropped.
                 # Re-enable when/if a profile flips back to thinking on.
-                # 2026-05-06: MTP speculative decoding attempted with
-                # `--speculative-config '{"method":"nemotron_h_mtp",...}'`
-                # but the current pinned vLLM (0.20.0-gb8160878f-thor-sm110-
-                # cu132-v8) reports "Unsupported speculative method: 'mtp'"
-                # at boot — the Nemotron-3 MTP support landed in vLLM
-                # 0.17.1 → 0.20.x but the pinned build doesn't carry it.
-                # Re-enable on next vLLM rebuild that includes MTP support
-                # for nemotron_h. Until then the line below is intentionally
-                # left disabled.
-                # "--speculative-config" '{"method":"nemotron_h_mtp","num_speculative_tokens":2}'
+                # MTP speculative decoding is **NOT AVAILABLE for this
+                # checkpoint** (verified 2026-05-06 on v8.1 / vLLM
+                # v0.20.1).
+                #
+                # Root cause: Nemotron-3-Nano-Omni-30B-A3B-Reasoning-
+                # NVFP4 does not ship with MTP head weights. NVIDIA
+                # only bundles MTP into the Nemotron-3 *Super* (120B)
+                # checkpoints — the Nano and Nano-Omni variants do
+                # not. The HuggingFace model card has zero mentions
+                # of "MTP", "speculative", or "multi-token", and the
+                # Nemotron-3-Nano vLLM cookbook explicitly sets
+                # speculative_config=None.
+                #
+                # Why we kept getting `NotImplementedError`: vLLM
+                # v0.20.1's auto-detection path
+                # (vllm/config/speculative.py:620) sets
+                # `self.method = "mtp"` only after seeing the draft
+                # model's hf_config.model_type in MTPModelTypes. With
+                # no MTP weights present, no draft_model_config can
+                # be built, no auto-detection fires, and the literal
+                # "mtp" or "nemotron_h_mtp" passed via --speculative-
+                # config falls through the elif chain to
+                # `raise NotImplementedError`.
+                #
+                # NVIDIA's reference MTP config (for Nemotron-3 Super
+                # on DGX Spark / GB10) for posterity:
+                #
+                #   --speculative-config '{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}'
+                #
+                # Adapt that line if/when this profile switches to a
+                # checkpoint that bundles the MTP head (Super 120B,
+                # or a future Nano variant with MTP). The lane-parity
+                # fix bundle (vendor sampling + MCP wrapper validator
+                # + tree unique-name guidance + middleware
+                # HTTPException propagation) is independent of MTP
+                # and runs fine on the dense path; v8.1 probe 10/10
+                # PASS without speculative decoding (LANE-COMPARISON
+                # §10).
+                # "--speculative-config" '{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}'
                 # v7 needed `--kernel-config '{"enable_flashinfer_autotune": false}'`
                 # here to dodge a cuDNN sublibrary-version mismatch (apt 9.21.1
                 # + pip 9.20.0). v8 drops the apt cuDNN and relies on pip's

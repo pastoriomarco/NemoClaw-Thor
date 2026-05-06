@@ -542,3 +542,116 @@ curl -s http://127.0.0.1:9000/api/assistant/modes/composer-assistant \
 # 4. Run the 5-task profiler
 python3 /tmp/turn_count_probe_live.py | tee /tmp/probe.log
 ```
+
+---
+
+## 10. v8.1 follow-up (2026-05-06, vLLM v0.20.1 + transformers 5.8 + cutlass 4.5 + flashinfer 0.6.10)
+
+After rebuilding the vLLM image to v8.1
+(`nemoclaw-thor/vllm:v0.20.1-g132765e35-thor-sm110-cu132-v8.1`), a
+re-probe surfaced four additional issues — three Composer-side bugs
+that had been latent since this morning's lane-parity work, plus one
+probe-side state-leak between lanes — and forced a reversal of the
+schema-`examples` choice. After fixing all four, lane parity holds on
+v8.1.
+
+### v8.1 final probe (10/10 PASS, fair lane comparison)
+
+| Task | Direct | OpenClaw | OC/Direct |
+|---|---|---|---|
+| scene_inspect | 3.3 s / 2 / 157 | 10.4 s / 2 / 383 | 3.2× (first-real-call gateway warmup) |
+| program_read | 8.4 s / 2 / 452 | 13.9 s / 2 / 612 | 1.7× |
+| **scene_add** | 5.6 s / 2 / 253 | **3.8 s / 1 / 45** | **0.7× — OpenClaw faster** |
+| tree_wrap | 4.1 s / 2 / 149 | 6.5 s / 2 / 111 | 1.6× |
+| root_query | 1.6 s / 2 / 30 | 4.2 s / 2 / 20 | 2.6× |
+
+`scene_add openclaw` converges in a single turn with 45 gen-tokens —
+*better* than the direct lane on the same task. `tree_wrap openclaw`
+clears in 2 turns vs the 12-turn baseline (§9). Per-task gen-token
+counts are 2–4× this morning's values; that's nucleus-sampling
+variance under the v0.20.1 + cutlass 4.5 + transformers 5.8 stack,
+not a regression — every task still passes inside its budget.
+
+### v8.1 first-launch timing reference
+
+Cold boot from a fresh image (no cached FlashInfer / torch.compile
+artifacts) measured **4146 s ≈ 69 min** from `docker run` to
+`/v1/models` answering. Breakdown:
+
+| Phase | Duration |
+|---|---|
+| Container init + Python imports + first vLLM logs | ~30 s |
+| Weight loading (3 safetensors shards, 20.87 GiB → 21.5 GiB GPU) | 32 s |
+| Model setup, mamba page sizing, encoder cache profile | ~30 s |
+| `torch.compile` (Dynamo + Inductor for compile range 1–8192) | 21 s |
+| **FlashInfer 0.6.10 sm_110a CUTLASS JIT (238 .cu sources, 9× cicc parallel)** | **~67 min** |
+| CUDA-graph capture (sizes 1, 2, 4, 8, 16, 24, 32) | ~30–60 s |
+| API-server startup | ~10 s |
+
+The launcher's default `wait_json` timeout is 900 s — too short for
+the first launch on a new image. Subsequent launches reuse
+`~/thor-flashinfer-cache/0.6.10/110a/` and complete in ~2–3 min.
+
+### Bugs found and fixed in this v8.1 cycle
+
+1. **Composer middleware swallowed `HTTPException` → flat HTTP 500
+   "Internal Server Error".** The `log_requests` middleware in
+   `manyforge_composer/backend/app.py` is registered via
+   `@app.middleware("http")` — Starlette's `BaseHTTPMiddleware` —
+   which interrupts FastAPI's exception-handling chain. An
+   `HTTPException(400, detail="Duplicate node instance name…")`
+   raised by a route handler escaped through this middleware to
+   `ServerErrorMiddleware`, which rendered it as a flat
+   `Internal Server Error` with no detail. The model on the
+   OpenClaw side received only the generic 500 and looped (no
+   actionable error info). Patched the middleware to catch
+   `HTTPException` and `StarletteHTTPException` and delegate to
+   FastAPI's `http_exception_handler` so the 400 with the real
+   detail propagates to the client.
+2. **`AssistantBridgeToolRequest` model missing `principal` field.**
+   The live tool-call streaming work at
+   `routes_assistant.py:435` (`request.principal or ""`) accessed a
+   field that the pydantic model in `models.py:1274` did not declare.
+   Pydantic v2 raised `AttributeError` on every bridge call →
+   exception → middleware → 500. Added
+   `principal: Optional[str] = None` to the model. The OpenClaw MCP
+   wrapper had been sending `"principal": PRINCIPAL` in the envelope
+   all along — pydantic was silently dropping it.
+3. **Schema `examples` arrays caused upsert loops on Nemotron-3-
+   Nano-Omni in this regime.** The model copied
+   `objectId="obstacle_01"` from the schema example verbatim on
+   every `scene.draft.add_object` call. The bridge upserts on
+   duplicate ID, every call returned `ok`, and the model had no
+   signal to stop — 116 calls in one turn before the gateway
+   timed out. **Removed** the `examples` arrays from
+   `_SCENE_DRAFT_SINGLE_OBJECT_SCHEMA` and
+   `_TREE_DRAFT_WRAP_NODE_SCHEMA`. Replaced with inline guidance
+   in the `description` (e.g. "wrapper.name MUST be unique across
+   the program tree…") which has high leverage and no
+   "literal-copy" failure mode. The MCP wrapper null-arg validator
+   remains the load-bearing safeguard for missing required args
+   (its error response carries the missing-fields list and the
+   required-fields list — sufficient for the model to recover).
+4. **Probe state-leak between lanes.** The original `reset_program()`
+   in `/tmp/turn_count_probe_live.py` called `/api/program/load` with
+   only `{"path": ...}`. Without `forceDiscardOverrides: true` *and*
+   `deploymentPath`, draft mutations from the previous lane's run
+   leaked through — `tree_wrap direct` would add `wrapper.name=
+   "repeat_loop"` to the draft, and `tree_wrap openclaw` would then
+   hit `Duplicate node instance name: 'repeat_loop'` on its first
+   call. Updated the probe to send the full reset envelope, which is
+   the same thing Composer's UI Revert flow ultimately calls.
+   **Verified empirically:** add wrapper.name=`X` → reset → add
+   wrapper.name=`X` again succeeds, proving the reset clears the
+   draft tree.
+
+### MTP on v8.1
+
+Still **NOT supported** for Nemotron-3-Nano-Omni in vLLM v0.20.1.
+First attempt with the literal `method: "nemotron_h_mtp"` raised
+`NotImplementedError` from `vllm/config/speculative.py:620`. The
+correct literal is just `method: "mtp"` — vLLM auto-detects the
+variant from the draft model's `hf_config.model_type` (which for
+this model *is* `nemotron_h_mtp`, but that's the model_type, not the
+SpeculativeMethod literal). The corrected line lives in
+`serving/launch.sh` for future test on the next vLLM rebuild.
