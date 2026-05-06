@@ -48,6 +48,18 @@ class AdapterConfig:
     use_gateway: bool = False
     gateway_port: int = 18789
     gateway_max_tokens: int = 4096
+    # Sampling parameters for the gateway chat-completion request.
+    # **Defaults are None** so the bridge sends a clean envelope.
+    # vLLM is the single source of truth for sampling defaults via
+    # `--override-generation-config` and `--default-chat-template-kwargs`
+    # (see nemoclaw-thor/serving/launch.sh, the matching profile block).
+    # If you need a per-call override (typically only for debugging),
+    # patch AdapterConfig directly — the helpers and YAML/env-var
+    # resolution were removed 2026-05-06 once vLLM-side defaults landed.
+    gateway_temperature: float | None = None
+    gateway_top_k: int | None = None
+    gateway_top_p: float | None = None
+    gateway_enable_thinking: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -287,12 +299,26 @@ def build_gateway_chat_completions_command(
     user_message = payload.get("message")
     if not isinstance(user_message, str):
         user_message = json.dumps(user_message, sort_keys=True)
-    request_body = {
+    request_body: dict[str, Any] = {
         "model": f"openclaw/{config.agent}",
         "messages": [{"role": "user", "content": user_message}],
         "max_tokens": config.gateway_max_tokens,
         "stream": False,
     }
+    # Sampling-parameter parity with the direct-vLLM bridge. The gateway
+    # accepts standard OpenAI fields and forwards them; without these
+    # the model rambles 2-15x longer per turn at OpenClaw's defaults.
+    if config.gateway_temperature is not None:
+        request_body["temperature"] = config.gateway_temperature
+    if config.gateway_top_k is not None:
+        request_body["top_k"] = config.gateway_top_k
+    if config.gateway_top_p is not None:
+        request_body["top_p"] = config.gateway_top_p
+    chat_template_kwargs: dict[str, Any] = {}
+    if config.gateway_enable_thinking is not None:
+        chat_template_kwargs["enable_thinking"] = config.gateway_enable_thinking
+    if chat_template_kwargs:
+        request_body["chat_template_kwargs"] = chat_template_kwargs
     body_json = json.dumps(request_body)
     curl_timeout = max(5, int(timeout_s) - 1)
     session_key = derive_gateway_session_key(payload)

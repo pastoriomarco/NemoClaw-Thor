@@ -29,12 +29,111 @@ from .adapter import (
 
 HOST = os.environ.get("OPENCLAW_ASSISTANT_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("OPENCLAW_ASSISTANT_BRIDGE_PORT", "8200"))
+
+
+# Sampling defaults (temperature, top_k, top_p, chat_template_kwargs)
+# are owned by vLLM at the server level — see
+# nemoclaw-thor/serving/launch.sh `--override-generation-config` and
+# `--default-chat-template-kwargs`. The bridge no longer injects per-
+# request sampling fields. If you need to override on a single request,
+# AdapterConfig still has gateway_temperature / gateway_top_k /
+# gateway_top_p / gateway_enable_thinking fields (default None — not
+# added to the body) that callers can patch directly.
+
+# Composer base used to register the principal-binding so that live
+# tool-call streaming can correlate MCP bridge calls back to the
+# active chat. See the matching endpoints in
+# manyforge_composer.backend.routes_assistant.bind_principal.
+_COMPOSER_BASE = os.environ.get("OPENCLAW_ASSISTANT_COMPOSER_BASE", "http://127.0.0.1:9000").rstrip("/")
 _ACTIVE_PROCESSES: dict[str, asyncio.subprocess.Process] = {}
 _ACTIVE_REQUESTS: dict[str, dict[str, Any]] = {}
 _CANCELLED: set[str] = set()
 
 
+def _principal_for(cfg: "AdapterConfig") -> str:
+    """The principal the in-sandbox MCP bridge subprocess uses on
+    /api/assistant/bridge/tools envelopes. Mirrors the value set by
+    the provisioner in setup-manyforge-assistant.sh
+    (`openclaw-${SANDBOX}`)."""
+    return f"openclaw-{cfg.sandbox}"
+
+
+async def _bind_principal_async(principal: str, request_id: str) -> None:
+    """Register the active chat for `principal` so the bridge endpoint
+    can correlate tool calls coming from the MCP subprocess.
+    Best-effort; failures are non-fatal."""
+    if not principal or not request_id:
+        return
+    try:
+        body = json.dumps({"requestId": request_id}).encode()
+        proc = await asyncio.create_subprocess_exec(
+            "curl", "-sS", "-X", "PUT",
+            "-H", "Content-Type: application/json",
+            "--max-time", "3",
+            f"{_COMPOSER_BASE}/api/assistant/bridge/principal-binding/{principal}",
+            "-d", body.decode("utf-8"),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+    except Exception:
+        pass
+
+
+async def _unbind_principal_async(principal: str) -> None:
+    if not principal:
+        return
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "curl", "-sS", "-X", "DELETE",
+            "--max-time", "3",
+            f"{_COMPOSER_BASE}/api/assistant/bridge/principal-binding/{principal}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+    except Exception:
+        pass
+
+
+def _env_float(name: str, default: float | None) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int | None) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_optional_bool(name: str, default: bool | None) -> bool | None:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    if raw.strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    if raw.strip().lower() in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _config_from_env() -> AdapterConfig:
+    # Sampling defaults (temperature/top_k/top_p/enable_thinking) are
+    # not resolved here — vLLM owns them server-side via
+    # --override-generation-config / --default-chat-template-kwargs in
+    # nemoclaw-thor/serving/launch.sh. AdapterConfig defaults all those
+    # fields to None so the adapter omits them from the request body
+    # and lets vLLM apply its own defaults.
     return AdapterConfig(
         sandbox=os.environ.get("OPENCLAW_ASSISTANT_SANDBOX", "my-assistant"),
         namespace=os.environ.get("OPENCLAW_ASSISTANT_NAMESPACE", "openshell"),
@@ -183,6 +282,15 @@ async def assistant(request: Request) -> JSONResponse:
         promptChars=len(prompt),
         transport="gateway_http" if cfg.use_gateway else "cli_shell_out",
     )
+    # Register the principal-binding for live tool-call streaming.
+    # The MCP bridge subprocess substitutes its own bridge-process
+    # conversation id in tool-call envelopes; this binding lets the
+    # bridge endpoint resolve `principal -> active chat request` and
+    # surface tool calls on the right assistant request in the UI.
+    # Single-tenant per sandbox, so each new chat overwrites the
+    # binding and explicit unbind is just hygiene.
+    principal = _principal_for(cfg)
+    await _bind_principal_async(principal, request_id)
     try:
         if cfg.use_gateway:
             command = build_gateway_chat_completions_command(

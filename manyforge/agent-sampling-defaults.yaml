@@ -1,0 +1,74 @@
+# Per-model sampling defaults — REFERENCE / DOCUMENTATION ONLY (2026-05-06).
+#
+# This file is no longer read by any code path. The previous design
+# (bridge service loaded YAML at startup and injected sampling fields
+# per-request) was retired once we proved that:
+#   1. OpenClaw never forwards sampling fields to vLLM on the wire
+#      (verified by tcpdump 2026-05-06 — only model/stream/messages/
+#      tools/max_completion_tokens are forwarded), so the bridge
+#      injection only affected the direct lane.
+#   2. vLLM 0.20+ has native flags that cover both lanes uniformly:
+#      `--override-generation-config` for sampling, and
+#      `--default-chat-template-kwargs` for the thinking lever.
+#
+# The current source of truth is the per-profile block in
+# `nemoclaw-thor/serving/launch.sh`. To change Nemotron-3-Nano-Omni's
+# defaults, edit the THOR_VLLM_ARGS for that profile and restart vLLM.
+#
+# This file is kept for two reasons:
+#   - Empirical sampling notes (the comment blocks below) still document
+#     why we picked specific values per model.
+#   - When you onboard a new model profile to launch.sh, copy the
+#     relevant block from here as the starting point for that profile's
+#     `--override-generation-config` JSON.
+#
+# Empirical baselines below come from per-model tool-eval-bench /
+# ManyForge probe data. See manyforge/docs/WORKSPACE-PROMPT-
+# OPTIMIZATION.md and nemoclaw-thor/serving/docs/PERFORMANCE-V7.md.
+
+models:
+  nemotron3-nano-omni-30b-a3b-nvfp4:
+    # Verified 2026-05-06 (probe-2): greedy + low temp + thinking off
+    # cuts gen-token volume 40-80% vs OpenClaw's defaults on the same
+    # task set. enable_thinking is the biggest single lever for this
+    # model — without it the chat template emits long internal
+    # reasoning even on simple state queries.
+    # max_tokens 16384 matches OpenClaw's model registry for this id;
+    # avoids mid-generation truncation on legitimately long answers.
+    temperature: 0.2
+    top_k: 1
+    max_tokens: 16384
+    chat_template_kwargs:
+      enable_thinking: false
+
+  qwen3.6-35b-a3b-nvfp4-mtp-fp8kv:
+    # Per Qwen3.6 reliability stress (2026-04-26): TQ+MTP wins on
+    # JSON-only calls with enable_thinking:false; raise temperature
+    # when reasoning is expected.
+    temperature: 0.2
+    top_k: 1
+    max_tokens: 16384
+    chat_template_kwargs:
+      enable_thinking: false
+
+  qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge:
+    temperature: 0.2
+    top_k: 1
+    max_tokens: 16384
+    chat_template_kwargs:
+      enable_thinking: false
+
+  cosmos-reason2-8b:
+    # Cosmos prefers low-temp on robotics tasks (per Cosmos hardened
+    # comparison run 2026-04-25). top_k filtering not needed.
+    # 64K context, generation budget tighter than Nemotron.
+    temperature: 0.0
+    max_tokens: 8192
+
+# Fallback for any model not listed above. These are conservative
+# defaults that produce reasonable, terse output on most well-behaved
+# instruct-tuned models.
+default:
+  temperature: 0.2
+  top_k: 1
+  max_tokens: 8192

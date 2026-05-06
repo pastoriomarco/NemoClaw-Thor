@@ -56,10 +56,19 @@ Verify: `docker logs --since 5m manyforge-e2e-composer | grep "POST /api/assista
 
 ### Gate 2 — Composer dispatches to the bridge service
 
-Composer is started with
-`--assistant-provider openclaw --assistant-endpoint http://127.0.0.1:8200/v1/manyforge/assistant --assistant-timeout-s 180`.
-The 180s is the hard wall: if the agent loop runs longer, the UI sees
-"NemoClaw assistant timed out after 180.000s".
+Composer is started with `--assistant-provider <id> --assistant-endpoint
+<bridge-url> --assistant-timeout-s 300`. The 300 s is the hard wall: if
+the agent loop runs longer, the UI sees "NemoClaw assistant timed out
+after 300.000s". (Older docs reference 180s; raised to 300s on
+2026-05-06 because legitimate OpenClaw runs occasionally take 100-200s.)
+
+Default provider is `openclaw` (sandboxed gateway lane on `:8200`,
+2026-05-06 — lane parity verified). Set `ASSISTANT_PROVIDER=nemoclaw`
+on the launcher for the direct-vLLM backup on `:8100`. See
+[`LANE-COMPARISON-direct-vs-openclaw.md`](./LANE-COMPARISON-direct-vs-openclaw.md)
+§9 for the data behind the default switch and the trio of fixes
+(vendor sampling at vLLM, MCP wrapper null-arg validation, schema
+worked examples).
 
 ### Gate 3 — Bridge service is up and reachable
 

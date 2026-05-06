@@ -191,17 +191,100 @@ prepare_thor_launch_profile() {
             )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
-                "--enforce-eager"
+                # 2026-05-06: dropped --enforce-eager. CUDA graphs reduce
+                # kernel-launch overhead by 10-20% on generation; the model
+                # was previously enforce-eager because of debugging needs
+                # not present in steady-state.
                 "--trust-remote-code"
                 "--max-num-batched-tokens" "8192"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
-                "--reasoning-parser" "nemotron_v3"
+                # 2026-05-06: server-wide sampling defaults, replacing the
+                # YAML-driven per-request injection in
+                # openclaw_assistant_bridge. Native vLLM 0.20 flags; both
+                # lanes (direct via :8100 bridge and OpenClaw via :8200 →
+                # gateway → vLLM) inherit these when the client request
+                # body omits the field. Client-supplied values still win.
+                # Source: NVIDIA's vendor tool-calling recipe for this
+                # model (see comment block at the top of this profile —
+                # "Tool calling (winning regime): T=0.6, top_p=0.95").
+                # Initially tried T=0.2 + top_k=1 (the model's own
+                # generation_config.json defaults). With thinking off
+                # (enabled below) those greedy settings produced
+                # degenerate tool-call loops on multi-step tasks: the
+                # model stuck on the same two-tool sequence with null
+                # arguments, 80+ calls in one turn, no convergence.
+                # top_p=0.95 nucleus-sampling restores the diversity the
+                # model needs to escape local minima without re-enabling
+                # thinking. max_tokens omitted: --generation-config
+                # treats max_new_tokens as a server-wide CAP not a
+                # default, and clients (OpenClaw maxTokens=16384,
+                # direct bridge) own that knob per-request.
+                "--override-generation-config" '{"temperature":0.6,"top_p":0.95}'
+                "--default-chat-template-kwargs" '{"enable_thinking":false}'
+                # --reasoning-parser nemotron_v3 was here. Removed
+                # 2026-05-06 because in thinking-off mode (set by
+                # --default-chat-template-kwargs above) the model emits
+                # no <think>...</think> envelope, but the parser still
+                # operates in "extract thinking" mode by default and
+                # buckets the entire response into `reasoning` instead
+                # of `content`. The bridges only consume
+                # choices[0].message.content, so the OpenClaw lane was
+                # returning empty messages until this flag was dropped.
+                # Re-enable when/if a profile flips back to thinking on.
+                # 2026-05-06: MTP speculative decoding attempted with
+                # `--speculative-config '{"method":"nemotron_h_mtp",...}'`
+                # but the current pinned vLLM (0.20.0-gb8160878f-thor-sm110-
+                # cu132-v8) reports "Unsupported speculative method: 'mtp'"
+                # at boot — the Nemotron-3 MTP support landed in vLLM
+                # 0.17.1 → 0.20.x but the pinned build doesn't carry it.
+                # Re-enable on next vLLM rebuild that includes MTP support
+                # for nemotron_h. Until then the line below is intentionally
+                # left disabled.
+                # "--speculative-config" '{"method":"nemotron_h_mtp","num_speculative_tokens":2}'
                 # v7 needed `--kernel-config '{"enable_flashinfer_autotune": false}'`
                 # here to dodge a cuDNN sublibrary-version mismatch (apt 9.21.1
                 # + pip 9.20.0). v8 drops the apt cuDNN and relies on pip's
                 # bundled nvidia-cudnn-cu13==9.20.0.48, so the autotuner can
                 # run again. Re-enable verified at v8 boot 2026-04-29.
+            )
+            if [[ "${THOR_ENABLE_PREFIX_CACHING:-1}" != "0" ]]; then
+                THOR_VLLM_ARGS+=("--enable-prefix-caching")
+            fi
+            ;;
+        nemotron3-nano-omni-30b-a3b-nvfp4-reasoning)
+            # Reasoning-mode variant. Same weights/KV sizing as the base
+            # nemotron3-nano-omni profile (see the long comment block on
+            # the case above for the model card / hardware context). The
+            # only differences are at the chat-template + parser layer:
+            #   - --default-chat-template-kwargs '{"enable_thinking":true}'
+            #     (base flips this off for tool-calling regime).
+            #   - --reasoning-parser nemotron_v3 re-enabled. With thinking
+            #     ON the model emits <think>...</think> envelopes and
+            #     this parser splits them into a `reasoning_content`
+            #     field on the response. Bridges that route through this
+            #     profile must read both `content` and `reasoning_content`
+            #     (the openclaw_assistant_bridge as of 2026-05-06 reads
+            #     only `content` and would drop the reasoning).
+            #   - generation-config overrides intentionally omitted: the
+            #     model's own generation_config.json already ships
+            #     T=0.2/top_k=1/top_p=0.95/max_tokens=16384, which falls
+            #     within NVIDIA's "structured reasoning T=0.6" recipe
+            #     tolerance. Higher-T (open-ended exploration, T=1.0) can
+            #     be set per-request rather than baked in here.
+            THOR_LAUNCH_MODEL_SOURCE="nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.50}"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--trust-remote-code"
+                "--max-num-batched-tokens" "8192"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
+                "--reasoning-parser" "nemotron_v3"
+                "--default-chat-template-kwargs" '{"enable_thinking":true}'
             )
             if [[ "${THOR_ENABLE_PREFIX_CACHING:-1}" != "0" ]]; then
                 THOR_VLLM_ARGS+=("--enable-prefix-caching")

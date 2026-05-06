@@ -167,7 +167,8 @@ Supported model profiles:
     cosmos-reason2-8b         Qwen3-VL-8B base, 64K ctx, 3-conc (TEB 81)
 
   Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text):
-    nemotron3-nano-omni-30b-a3b-nvfp4  30B-A3B hybrid MoE, 32K ctx, 1-conc (released 2026-04-28)
+    nemotron3-nano-omni-30b-a3b-nvfp4            tool-calling regime (think OFF, no reasoning parser)
+    nemotron3-nano-omni-30b-a3b-nvfp4-reasoning  reasoning regime (think ON + nemotron_v3 parser)
 
   Gemma 4 (Google, vision+text+tools):
     gemma4-e4b-it             BF16 MoE, 8B/4B-active
@@ -360,6 +361,27 @@ resolve_model_profile() {
             #     See MANYFORGE-PROFILE-CALIBRATION.md for the math.
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="nemotron3-nano-omni-30b-a3b-nvfp4"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="16"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        nemotron3-nano-omni-30b-a3b-nvfp4-reasoning)
+            # Reasoning-mode variant of the base nemotron3-nano-omni
+            # profile. Same weights, KV/seq sizing — only the chat
+            # template + parser layer changes (see launch.sh comment for
+            # details). Use when the workload benefits from internal CoT
+            # (open-ended planning, multi-step reasoning, debug). The
+            # base profile is preferred for tool-calling agents — bridges
+            # currently consume only choices[0].message.content, so the
+            # nemotron_v3 reasoning parser would route output into
+            # `reasoning_content` and require a bridge change to read it.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="nemotron3-nano-omni-30b-a3b-nvfp4-reasoning"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="16"

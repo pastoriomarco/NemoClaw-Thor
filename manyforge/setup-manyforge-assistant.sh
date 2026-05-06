@@ -189,7 +189,26 @@ JSON
 ok "MCP server 'manyforge' registered (mode: ${ASSISTANT_MODE}; principal: ${MCP_PRINCIPAL})"
 "${KEX_USER[@]}" "openclaw mcp show manyforge" 2>&1 | sed 's/^/    /'
 
-step "Step 5/5: install dedicated OpenClaw agent profile 'manyforge-composer'"
+step "Step 5/6: install dedicated OpenClaw agent profile 'manyforge-composer'"
+
+# Note (2026-05-06, post lane-parity probe):
+# Per-model sampling params (temperature, top_k, top_p,
+# chat_template_kwargs.enable_thinking) are NOT settable via OpenClaw
+# config — there are no schema fields for them anywhere in
+# /usr/local/lib/node_modules/openclaw/dist/runtime-schema-cADw9D2m.js,
+# and OpenClaw never forwards them on the wire (verified by tcpdump).
+# The current source of truth for sampling defaults is vLLM's own
+# server-side flags, baked into the matching profile in
+# nemoclaw-thor/serving/launch.sh:
+#   --override-generation-config '{"temperature":0.6,"top_p":0.95}'
+#   --default-chat-template-kwargs '{"enable_thinking":false}'
+# Step 6/6 below sets `models.providers.inference.models[].reasoning`
+# to true on the active model — this flag is consumed *internally* by
+# OpenClaw's loop runner and gives noticeably better tool-error
+# recovery on multi-step planning tasks (verified by lane-parity
+# probe 2026-05-06: tree_wrap dropped from 97-turn timeout to
+# 12 turns / 20.6 s). It does not change anything on the wire.
+
 PROFILE_SCRIPT_B64="$(cat <<'PY' | base64 -w0
 import json
 import os
@@ -222,11 +241,21 @@ profile = {
     # alsoAllow keeps the minimal core surface but unblocks bundle-mcp.
     "tools": {"profile": "minimal", "alsoAllow": ["bundle-mcp"]},
     "skillsLimits": {"maxSkillsPromptChars": 24000},
+    # Tool-result size budget: catalog.read returns ~66 KB on the
+    # current ur10e_robotiq deployment (34 entries with full param
+    # metadata). The previous 20 KB cap truncated the JSON tail,
+    # the model then looped on an invalid result, and the run timed
+    # out at 240s (verified 2026-05-06 against R5 in the comparison
+    # matrix). 100 KB gives 1.5x headroom over the worst observed
+    # tool result and matches what direct-vLLM lane handles cleanly.
+    # postCompactionMaxChars also raised so the compacted prompt can
+    # still carry the full result on multi-turn conversations.
     "contextLimits": {
-        "toolResultMaxChars": 20000,
-        "postCompactionMaxChars": 30000,
+        "toolResultMaxChars": 100000,
+        "postCompactionMaxChars": 80000,
     },
 }
+
 entries[:] = [
     entry
     for entry in entries
@@ -246,29 +275,89 @@ PY
 ok "agent profile 'manyforge-composer' installed"
 "${KEX_USER[@]}" "openclaw agents list --json 2>/dev/null | head -c 1200 || openclaw agents list" 2>&1 | sed 's/^/    /'
 
-step "Step 5b/5: install workspace guidance files (AGENTS.md, TOOLS.md)"
-# These are injected into every agent run via OpenClaw's standard
-# workspace-file slots. Without them, the agent's prompt contains only
-# OpenClaw's built-in session_status tool — see the file headers for
-# the failure mode this prevents.
+step "Step 5b/6: install workspace guidance file (AGENTS.md)"
+# AGENTS.md is injected into every agent run via OpenClaw's standard
+# workspace-file slot. It carries: vocabulary lock (no session keys),
+# the output protocol, the categorical tool surface (which mirrors
+# tools/list, never replaces it), and the guardrails (mangling rule,
+# don't invent ids, etc.).
+#
+# v7 (2026-05-06): TOOLS.md was folded into AGENTS.md guardrails and
+# the file is no longer installed. If the sandbox has a stale TOOLS.md
+# from a prior provisioner run, we delete it explicitly so the agent
+# stops reading two-source-of-truth content.
 if [[ ! -d "${WORKSPACE_SRC}" ]]; then
   fail "workspace source not found at ${WORKSPACE_SRC}"
 fi
 WORKSPACE_DIR_REMOTE="/sandbox/.openclaw/workspace"
 "${KEX_USER[@]}" "mkdir -p ${WORKSPACE_DIR_REMOTE}" >/dev/null
-for ws_file in AGENTS.md TOOLS.md; do
-  if [[ ! -f "${WORKSPACE_SRC}/${ws_file}" ]]; then
-    continue
-  fi
-  # Base64 the file content so we can ship it through the kubectl-exec
-  # shell layer without quoting headaches.
-  WS_B64="$(base64 -w0 < "${WORKSPACE_SRC}/${ws_file}")"
-  "${KEX_USER[@]}" "printf %s '${WS_B64}' | base64 -d > ${WORKSPACE_DIR_REMOTE}/${ws_file}" >/dev/null
-  ok "installed ${ws_file} into ${WORKSPACE_DIR_REMOTE}"
-done
-# Confirm the agent will see them at next warmup. injectedWorkspaceFiles
-# in systemPromptReport should now show missing: false for these names.
+WS_B64="$(base64 -w0 < "${WORKSPACE_SRC}/AGENTS.md")"
+"${KEX_USER[@]}" "printf %s '${WS_B64}' | base64 -d > ${WORKSPACE_DIR_REMOTE}/AGENTS.md" >/dev/null
+"${KEX_USER[@]}" "rm -f ${WORKSPACE_DIR_REMOTE}/TOOLS.md" >/dev/null
+ok "installed AGENTS.md into ${WORKSPACE_DIR_REMOTE} (and removed any stale TOOLS.md)"
 "${KEX_USER[@]}" "ls -la ${WORKSPACE_DIR_REMOTE}/" 2>&1 | sed 's/^/    /'
+
+step "Step 6/6: enable OpenClaw internal reasoning loop on the active model"
+# Sets `models.providers.inference.models[].reasoning = true` on the
+# entry matching the active served-model name (auto-detected from
+# vLLM's /v1/models). The flag stays inside OpenClaw — never reaches
+# vLLM — and improves the loop's tool-error recovery on multi-step
+# planning tasks. See the comment block above Step 5/6 for context.
+REASONING_SCRIPT_B64="$(cat <<'PY' | base64 -w0
+import json
+import os
+import sys
+import urllib.request
+
+target_id = os.environ.get("MANYFORGE_MODEL_NAME") or ""
+if not target_id:
+    try:
+        with urllib.request.urlopen(
+            "http://host.openshell.internal:8000/v1/models", timeout=5
+        ) as resp:
+            data = json.load(resp)
+            entries = data.get("data") or []
+            if entries:
+                target_id = entries[0].get("id") or ""
+    except Exception:
+        pass
+
+if not target_id:
+    print("WARN: could not determine active model name; skipping reasoning flip", file=sys.stderr)
+    sys.exit(0)
+
+path = os.path.expanduser("~/.openclaw/openclaw.json")
+with open(path, "r", encoding="utf-8") as handle:
+    cfg = json.load(handle)
+
+provider = cfg.get("models", {}).get("providers", {}).get("inference", {})
+models = provider.get("models", [])
+hit = False
+for entry in models:
+    if isinstance(entry, dict) and entry.get("id") == target_id:
+        before = entry.get("reasoning")
+        entry["reasoning"] = True
+        print(f"reasoning: {before} -> True ({target_id})")
+        hit = True
+        break
+
+if not hit:
+    print(
+        f"WARN: model {target_id!r} not found in inference.models; available: "
+        f"{[m.get('id') for m in models if isinstance(m, dict)]}",
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(cfg, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+)"
+"${KEX_USER[@]}" "printf %s '${REASONING_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
+ok "OpenClaw model.reasoning=true ensured on active inference model"
 
 step "Composer reachability check (mode-scoped manifest)"
 MODE_URL="${COMPOSER_BASE}/api/assistant/modes/${ASSISTANT_MODE}"
@@ -294,5 +383,8 @@ Next steps:
   - Verify the agent sees the manyforge MCP tools:
       kubectl exec -n openshell ${SANDBOX} -c agent -- su sandbox -c \\
         "openclaw agent --agent manyforge-composer --message 'List the manyforge MCP tools you can call. Reply with a JSON array of tool names.' --json --timeout 60"
-  - Switch composer's assistant provider to 'openclaw' (Phase 2).
+  - Composer is now wired to use the openclaw lane by default
+    (demo-assistant-known-good.sh ASSISTANT_PROVIDER=openclaw). Run the
+    launcher's 'start' or 'restart-bridge' to bring the openclaw bridge
+    on :8200 up against this provisioned sandbox.
 EOF

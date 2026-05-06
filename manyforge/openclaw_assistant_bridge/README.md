@@ -1,17 +1,32 @@
 # openclaw_assistant_bridge
 
-> **Lane status**: as of 2026-05-05 this is the **default assistant-provider
-> lane** for the ManyForge demo launcher
-> ([`manyforge/scripts/demo-assistant-known-good.sh`](https://github.com/tndlux/manyforge)
-> in the manyforge repo). Composer's `openclaw` provider sends requests
-> here; this adapter forwards them to `/v1/chat/completions` on the
-> persistent OpenClaw gateway running in the NemoClaw sandbox. The
-> in-tree `manyforge_assistant_bridge` (`nemoclaw` provider id, port
-> :8100) remains available as the direct-vLLM fallback.
+> **Lane status (2026-05-06):** this is the **default assistant-provider
+> lane** in the ManyForge demo launcher
+> (`scripts/demo-assistant-known-good.sh`, `ASSISTANT_PROVIDER=openclaw`).
+> Lane parity with the direct-vLLM lane was verified on this date — all
+> 5 probe tasks pass on both lanes within 1.3× of each other, OpenClaw
+> faster on `scene_inspect` and `scene_add`. The in-tree
+> `manyforge_assistant_bridge` (`nemoclaw` provider id, port :8100) is
+> retained as a backup for fast local iteration when the sandbox layer
+> is not needed.
 >
-> Lane comparison and when to choose which:
-> [`manyforge/docs/operations/ASSISTANT_E2E_COOKBOOK.md`](https://github.com/tndlux/manyforge/blob/main/docs/operations/ASSISTANT_E2E_COOKBOOK.md)
-> "Recipe: Known-Good Assistant Demo Launcher".
+> The trio of fixes that closed the lane gap:
+>
+> 1. vLLM-side vendor sampling (`--override-generation-config
+>    '{"temperature":0.6,"top_p":0.95}'` +
+>    `--default-chat-template-kwargs '{"enable_thinking":false}'`) —
+>    baked into the matching profile in `serving/launch.sh`.
+> 2. The custom MCP wrapper (`scripts/manyforge-mcp-bridge.py` in the
+>    manyforge repo) now rejects null/missing-required-arg tool calls
+>    with a structured error.
+> 3. Tool input schemas
+>    (`manyforge_composer/backend/assistant_tool_schemas.py`) ship
+>    JSON-Schema-standard `examples` arrays on
+>    `scene.draft.add_object` and `tree.draft.wrap_node`.
+>
+> Full diagnosis + reproducer:
+> [`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md`](../docs/LANE-COMPARISON-direct-vs-openclaw.md)
+> §9.
 
 Phase 2 adapter for routing the ManyForge Composer assistant provider
 through the OpenClaw agent running in the NemoClaw `my-assistant` sandbox.
@@ -80,20 +95,34 @@ MANYFORGE_ASSISTANT_ENDPOINT_URL=http://127.0.0.1:8200/v1/manyforge/assistant
 
 ## Current status
 
-This is an experimental Phase 2 endpoint. On 2026-05-05, Composer chat routing
-through this adapter was live-smoked against the sandbox OpenClaw agent:
+**Production lane (default, 2026-05-06).** Lane parity with direct vLLM is
+verified — see `manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §9
+for the per-task numbers and the trio of fixes that closed the gap.
 
-- `catalog.read` completed through mode-scoped MCP and
-  `/api/assistant/bridge/tools/catalog.read`.
-- `tree.draft.wrap_node` completed through the same bounded path and mutated
-  the Composer draft root to `repeat -> pick_and_place`.
+Routing is end-to-end live across all 5 probe tasks (scene_inspect,
+program_read, scene_add, tree_wrap, root_query) — both lanes pass with
+OpenClaw faster on two of them. The `manyforge-composer` agent profile,
+the bounded-autonomy MCP wrapper at
+`/api/assistant/bridge/tools/{toolId}`, and the gateway-HTTP transport
+are all on the validated path.
 
-The direct vLLM bridge remains the known-good demo default until the A/B
-harness qualifies reliability and latency for the OpenClaw route.
+### Sampling defaults — owned by vLLM, not the bridge
 
-Follow-up measurements on 2026-05-05 showed that shelling into the sandbox is
-sub-second, but the OpenClaw agent turn remains minute-scale even with thinking
-off and a narrowed ManyForge MCP tool window. The next optimization surface is
-a persistent OpenClaw runner or provider-side speed work, not more ManyForge
-callback tuning. Use `manyforge/smoke-openclaw-assistant-reliability.py` to
-collect comparable timing records while iterating.
+As of 2026-05-06 this bridge **no longer reads or injects** sampling
+fields. vLLM owns them server-side via `--override-generation-config`
+and `--default-chat-template-kwargs` (see the matching profile in
+`nemoclaw-thor/serving/launch.sh`). `AdapterConfig`'s
+`gateway_temperature` / `gateway_top_k` / `gateway_top_p` /
+`gateway_enable_thinking` fields default to `None` and are kept for
+backward compatibility — when `None`, no body field is added and
+vLLM's defaults apply.
+
+The previous YAML-driven path
+(`manyforge/agent-sampling-defaults.yaml` → `service.py::_load_sampling_defaults_for_model`)
+was retired. The YAML file is kept as reference documentation for
+per-model empirical sampling notes.
+
+Use `manyforge/smoke-openclaw-assistant-reliability.py` for ongoing
+reliability snapshots and the live profiler in
+`manyforge/docs/WORKSPACE-PROMPT-OPTIMIZATION.md §6` for per-task
+latency / token / cache-hit measurements.
