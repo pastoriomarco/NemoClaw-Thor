@@ -377,6 +377,69 @@ cd src/NemoClaw-Thor/docker
 
 Wheels are cached in `./wheels/`. `--skip-flashinfer` or `--skip-vllm` reuse them.
 
+## Build history (per-image-generation wall times)
+
+Recorded so future bumps can predict cost and explain regressions. All numbers
+are wall-clock at the documented `BUILD_JOBS` setting on Thor (14× ARM Cortex-A78AE,
+122 GiB unified memory, 449 GiB free on `/var/lib/docker`).
+
+### v8.1 — built 2026-05-06 18:44 (image `v0.20.1-g132765e35-thor-sm110-cu132-v8.1`)
+
+`BUILD_JOBS=14`. Pin set: vLLM v0.20.1 + FlashInfer v0.6.10 + flash-attn-4 4.0.0b12 +
+nvidia-cutlass-dsl 4.5.0 + transformers 5.8.0 + nvidia-cudnn-cu13 9.21.1.3 +
+fastsafetensors 0.3.1 + apache-tvm-ffi 0.1.11 (CUDA 13.0.3, torch nightly held at
+2026-04-26+cu130). See `Dockerfile.vllm` header for full per-pin rationale.
+
+| Phase | Duration | Notes |
+|---|---|---|
+| **Phase 1 — FlashInfer** | **~3h 5min** (13:47 → 16:52) | dominant cost |
+| └ cubin downloads (11,962 files) | ~14 min (14:02 → 14:16) | NVIDIA artifactory at ~16 files/sec; first-time cache populate |
+| └ cubin wheel pack | (interleaved) | flashinfer_cubin-0.6.10 = 325M (vs 282M for v0.6.9; +43M ≈ +3,000 cubins for new NVFP4 KV path) |
+| └ JIT cache compile (FLASHINFER_CUDA_ARCH_LIST=11.0a) | ~2h 36min | the long pole; SM110a-targeted JIT compile of all FA paths including the new NVFP4 KV cache attention kernels (PR #3097, all-arch SM80+) |
+| **Phase 2 — vLLM CUDA compile** | **~1h 6min** (16:52 → 17:58) | step #22 elapsed = 3950.6s, 358 ninja jobs |
+| └ FA2 SM80 hdim256/causal templates (heavy CUTLASS) | front-loaded slow stretch | ~1.2 jobs/min during this phase |
+| └ FA3 SM90 hdim192/64 instantiations | tail-end fast stretch | ~9.2 jobs/min after the heavy templates clear |
+| **Phase 3a — Runner (failed attempt)** | ~3 min (17:58 → 18:01) | died at step #14 |
+| └ Failure mode | uv pip install URL conflict | `serving/docker/wheels/` had v0.6.9 + v0.6.10 wheels side by side; uv refused two file:// URLs claiming the same package name |
+| (idle: diagnosis + cleanup + green light) | ~37 min (18:01 → 18:38) | non-build wall time |
+| **Phase 3b — Runner (resume, `--skip-flashinfer --skip-vllm`)** | **6m 34s** (18:38:22 → 18:44:56) | BuildKit cache hit through step #13; re-executed step #14 onward against the cleaned wheels dir |
+| **Pure build wall time** | **~4h 21min** | sum of Phases 1+2+3a+3b |
+| **End-to-end including diagnosis idle** | ~4h 58min | from launch to image landed |
+
+**Lessons:**
+
+1. **FlashInfer phase scales with cubin manifest growth.** v0.6.10 added the
+   NVFP4 KV cache attention path (PR #3097, all-arch SM80+); the SM110a-targeted
+   JIT compile of the new kernels is what stretched Phase 1 from ~30–40 min on
+   v8 to ~3h on v8.1. Future v0.6.x bumps may continue this trend; budget more
+   than the v7→v8 transition needed.
+2. **Wheel-dir cohabitation breaks the runner stage.** Stale wheels from prior
+   builds remain in `serving/docker/wheels/` and the Dockerfile's
+   `ls /workspace/wheels/*.whl | grep -v flashinfer_cubin` glob passes them all
+   to `uv pip install`, which refuses duplicate package URLs. **Always prune
+   stale wheels before a build with bumped FlashInfer/vLLM refs.** Future
+   build-vllm.sh hardening: prune older versions of any package wheel before
+   running the runner stage. Tracked as a v8.x cleanup item.
+3. **Resume after runner-stage failure is cheap.** Buildkit caches all stages
+   before the failing RUN. With `--skip-flashinfer --skip-vllm` the resume took
+   ~7 min, not another 4h. The wheel directory is the durable artifact;
+   recompilation is unnecessary if the wheels are still valid.
+4. **The `sm_110a` placeholder in v0.6.10's cubin manifest is empty** (only
+   `checksums.txt`, no actual cubins). NVIDIA appears to be preparing to ship
+   SM110a CuTeDSL FMHA cubins in a near-future release — when populated, we
+   could stop excluding `flashinfer_cubin` from the runner stage and skip the
+   JIT compile for that path (potential ~30–60 min savings on Phase 1).
+
+### v8 — built 2026-04-29 10:14 (image `v0.20.0-gb8160878f-thor-sm110-cu132-v8`)
+
+`BUILD_JOBS=14`. Pin set: vLLM v0.20.0 + FlashInfer v0.6.9 + flash-attn-4 4.0.0b10
++ nvidia-cutlass-dsl 4.4.2 + transformers 5.7.0 + nvidia-cudnn-cu13 9.20.0.48.
+
+Approximate wall time **~60–80 min**. Per-phase breakdown not preserved at the
+time; the v7→v8 hop was largely image-hygiene (apt cuDNN drop + audio deps)
+without bumped FlashInfer or vLLM refs, so cubin-cache and ccache hits absorbed
+most of the work.
+
 ## File layout
 
 ```

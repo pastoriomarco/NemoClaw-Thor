@@ -108,6 +108,25 @@ def build_agent_prompt(
         )
     ]
     nodes = payload.get("nodes") if isinstance(payload.get("nodes"), list) else []
+    # nodeCatalog (added 2026-05-06 in manyforge.assistant.provider_request.v0)
+    # is the rich sibling of `nodes`: each entry has {id, kind,
+    # childrenMin, childrenMax, description, parameters[], ...}.
+    # Including it in the preamble is the load-bearing route for the
+    # LLM to know e.g. that `repeat` is a decorator with
+    # childrenMax=1 — which we found the model needs upfront to avoid
+    # retrying invalid decorator inserts. Falls back to [] for older
+    # clients that haven't been updated.
+    node_catalog_raw = payload.get("nodeCatalog")
+    node_catalog = node_catalog_raw if isinstance(node_catalog_raw, list) else []
+    # programSnapshot + sceneSnapshot (J, 2026-05-06): current state
+    # at request-time. The LLM uses these instead of round-tripping
+    # through program.read / scene.inspect on every request — saves
+    # ~30s/turn under thinking-on. Both None-able when no program /
+    # scene is loaded; the openclaw bridge accepts that gracefully.
+    program_snapshot_raw = payload.get("programSnapshot")
+    program_snapshot = program_snapshot_raw if isinstance(program_snapshot_raw, dict) else None
+    scene_snapshot_raw = payload.get("sceneSnapshot")
+    scene_snapshot = scene_snapshot_raw if isinstance(scene_snapshot_raw, dict) else None
     skills = payload.get("skills") if isinstance(payload.get("skills"), list) else []
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
@@ -119,6 +138,15 @@ def build_agent_prompt(
         "runtime": runtime,
         "skills": skills,
         "allowedNodes": nodes,
+        # Structural hints per node — see comment above. Empty when
+        # the assistant-provider envelope predates the field.
+        "nodeCatalog": node_catalog,
+        # Current-state snapshots (J). None when not provided. The
+        # LLM should treat these as the live state at request-time
+        # and only call program.read / scene.inspect to refresh
+        # after applying mutations within this same request.
+        "programSnapshot": program_snapshot,
+        "sceneSnapshot": scene_snapshot,
         "allowedTools": tools,
         "visibleMcpTools": (
             list(mcp_allowed_tools) if mcp_allowed_tools is not None else "full mode surface"
@@ -134,6 +162,14 @@ def build_agent_prompt(
             "Do not fabricate program, tree, or scene state.",
             "If the visible ManyForge MCP tools are insufficient, say what is missing instead of inventing a tool.",
             "When finished, briefly report the tool result for the Composer chat transcript.",
+            # The preamble below carries the live state of the program "
+            # tree (`programSnapshot`) and scene (`sceneSnapshot`) at "
+            # request-time — read those directly when you need to find "
+            # node names, object ids, positions, etc. You only need to "
+            # call `manyforge__program-read` or `manyforge__scene-inspect` "
+            # to *refresh* state AFTER you have applied a mutation in "
+            # this same request.
+            "The `programSnapshot` and `sceneSnapshot` keys in `ManyForge request context` below carry the LIVE current state — read them directly for node names, object ids, dimensions, and poses. Only call `manyforge__program-read` or `manyforge__scene-inspect` to refresh state AFTER you have applied a mutation in this same request.",
             "",
             "ManyForge request context:",
             json.dumps(preamble, indent=2, sort_keys=True),
@@ -260,6 +296,7 @@ def build_gateway_chat_completions_command(
     config: AdapterConfig,
     payload: dict[str, Any],
     timeout_s: float,
+    message: str | None = None,
 ) -> list[str]:
     """Return a host-side curl command that calls the OpenClaw gateway.
 
@@ -296,7 +333,18 @@ def build_gateway_chat_completions_command(
     the openclaw-agent shell-out path; warm calls drop to 5-10s.
     """
 
-    user_message = payload.get("message")
+    # If a fully-built prompt is passed via `message`, use it (this is
+    # what `build_agent_prompt(payload, ...)` returns — preamble +
+    # request context + user request, all in one string). Falls back
+    # to the raw payload message for back-compat with any caller that
+    # hasn't been updated. Without the explicit `message` parameter
+    # this builder used to *silently discard* the enriched prompt and
+    # only forward the user's raw message — so nodeCatalog,
+    # programSnapshot, sceneSnapshot, and instructional text were never
+    # reaching the model. Verified 2026-05-06 against a 25KB built
+    # prompt that landed as a 196-char user message in the OpenClaw
+    # session log; fixed here.
+    user_message = message if isinstance(message, str) else payload.get("message")
     if not isinstance(user_message, str):
         user_message = json.dumps(user_message, sort_keys=True)
     request_body: dict[str, Any] = {

@@ -48,13 +48,13 @@ Per-pin status:
 |---|---|---|---|
 | vLLM | `v0.20.0` | **`v0.20.1`** | bump — PTX FP32→FP4 codegen, CUDA-graph batched-token capture fix, KV-block override fix |
 | FlashInfer | `v0.6.9` | **`v0.6.10`** | bump — NVFP4 KV cache (SM80+), autotuner correctness + bucketing perf, vLLM OOB fix |
-| flash-attn-4 | `4.0.0b10` | **`4.0.0b11`** | bump — first-class hd256 in CUTE DSL, 3–9% hd256 perf, SM100 MLA stream + empty-tile fixes |
+| flash-attn-4 | `4.0.0b10` | **`4.0.0b12`** | bump — b11 added first-class hd256 in CUTE DSL, 3–9% hd256 perf, SM100 MLA stream + empty-tile fixes; b12 is the rolling post-b11 fix tail |
 | nvidia-cudnn-cu13 | `9.20.0.48` | **`9.21.1.3`** | bump (both stages) — safe now that v8 fixed the apt-vs-pip mismatch |
 | apache-tvm-ffi | `0.1.10` | **`0.1.11`** | single patch release |
-| transformers | `5.7.0` | `5.7.0` | already-latest |
+| transformers | `5.7.0` | **`5.8.0`** | bump — rolling minor; smoke-test 5.7.0-known-good areas (Qwen3.5 GDN, Gemma4 rotary, KV-dedup ≥16K, NVFP4+torchao) after build |
 | nvidia-nvshmem-cu13 | `3.6.5` | `3.6.5` | already-latest |
-| nvidia-cutlass-dsl | `4.4.2` | `4.4.2` | held — `4.5.0.dev0` gates new value on CTK 13.2 |
-| fastsafetensors | `0.3` | `0.3` | already-latest |
+| nvidia-cutlass-dsl | `4.4.2` | **`4.5.0`** | bump to stable — 4.5.0 release-line headline ("optimal codegen for CUDA 13.2") does NOT apply at CUDA 13.0.3, but accumulated 4.4.2 → 4.5.0 bug fixes do; revisit codegen win after JetPack 7.2 |
+| fastsafetensors | `0.3` | **`0.3.1`** | single patch release |
 | instanttensor | `0.1.8` | `0.1.8` | already-latest |
 | triattention | `@325297218a` | `@325297218a` | held — HEAD is one README-only commit ahead |
 | torch | `2.13.0.dev20260426+cu130` | `2.13.0.dev20260426+cu130` | held — CUDA-coupled |

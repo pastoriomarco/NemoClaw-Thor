@@ -1,9 +1,9 @@
-build_date: 2026-04-29T08:11:01Z
-script_commit: db2533d492075a565eadc968936320b73e752bbf
-vllm_ref: v0.20.0
-vllm_commit: b8160878f07fe6aff02deb12bc842df3fa4a9237
-flashinfer_ref: v0.6.9
-flashinfer_commit: a1aa676196f798435248d9ea205c67674476f473
+build_date: 2026-05-06T16:38:22Z
+script_commit: f2e1064d3e80ce8a91b3427b0043349e1259af1d
+vllm_ref: v0.20.1
+vllm_commit: 132765e3560659ff63ebd236203672e991b70e08
+flashinfer_ref: v0.6.10
+flashinfer_commit: 943d0ff0dfdbb5019b9733bd78ac730c5bff6f92
 gpu_arch: 11.0a
 cuda_base: nvidia/cuda:13.0.3-devel-ubuntu24.04
 platform: jetson-thor-sm110

@@ -249,14 +249,25 @@ async def assistant(request: Request) -> JSONResponse:
     # Gateway path skips the prompt-augmentation work the CLI path needs.
     # The persistent gateway has the manyforge MCP server registered with
     # mode-scoped enforcement at provisioner time, so the model already sees
-    # the right tool surface; we only need to forward the user message.
+    # the right tool surface for tools/list. But we still need to inject the
+    # request preamble (nodeCatalog with kind/childrenMin/Max/parameters,
+    # programSnapshot, sceneSnapshot, instructional text) so the model knows
+    # the structural rules and live state without burning turns on
+    # program.read / scene.inspect.
+    #
+    # Earlier (pre 2026-05-06) the gateway path passed JUST the user's
+    # message and the model had to discover everything via tool calls.
+    # That worked for trivial prompts but bottlenecked on multi-step
+    # mutations: the model could spend 60-120s reading state before doing
+    # anything. Build the same enriched prompt as the CLI shell-out path
+    # so both paths give the model identical context. The extra preamble
+    # is small (~5-15 KB) and gets trimmed if context is tight.
     if cfg.use_gateway:
-        allowed_mcp_tools: list[str] | None = None
-        prompt = (
-            payload.get("message")
-            if isinstance(payload.get("message"), str)
-            else json.dumps(payload.get("message"), sort_keys=True)
+        inferred_mcp_tools = (
+            mcp_allowed_tools_from_payload(payload) if cfg.auto_tool_window else []
         )
+        allowed_mcp_tools = inferred_mcp_tools or None
+        prompt = build_agent_prompt(payload, mcp_allowed_tools=allowed_mcp_tools)
     else:
         inferred_mcp_tools = (
             mcp_allowed_tools_from_payload(payload) if cfg.auto_tool_window else []
@@ -297,6 +308,13 @@ async def assistant(request: Request) -> JSONResponse:
                 config=cfg,
                 payload=payload,
                 timeout_s=timeout_s,
+                # Pass the enriched prompt (preamble + request context +
+                # user request) explicitly. Without this, the gateway-
+                # path builder silently dropped the preamble and only
+                # forwarded the raw user message — so all the structural
+                # hints, snapshots, and instruction text were invisible
+                # to the model. See adapter.py for the full back-story.
+                message=prompt,
             )
         else:
             command = build_openclaw_command(

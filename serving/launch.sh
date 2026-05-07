@@ -313,6 +313,13 @@ prepare_thor_launch_profile() {
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
                 "--reasoning-parser" "nemotron_v3"
+                # Same vendor sampling as the dense base profile. The
+                # model's generation_config.json defaults (T=0.2,
+                # top_k=1) are greedy enough to trigger token loops
+                # even inside <think> blocks; T=0.6/top_p=0.95 (NVIDIA's
+                # tool-calling recipe) gives the model the diversity to
+                # escape local minima during thinking too.
+                "--override-generation-config" '{"temperature":0.6,"top_p":0.95}'
                 "--default-chat-template-kwargs" '{"enable_thinking":true}'
             )
             if [[ "${THOR_ENABLE_PREFIX_CACHING:-1}" != "0" ]]; then
