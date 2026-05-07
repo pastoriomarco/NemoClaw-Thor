@@ -99,7 +99,7 @@ the control-plane bring-up live in
 cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
 
 # Terminal 1: start vLLM with the default profile
-./serving/start-model.sh               # loads qwen3.6-35b-a3b-prismaquant-dflash
+./serving/start-model.sh               # loads cosmos-reason2-8b (production default)
 
 # Terminal 2: configure and verify
 ./setup/configure-local-provider.sh    # picks up the same default
@@ -108,34 +108,50 @@ nemoclaw my-assistant connect
 ```
 
 Pass a profile name to either script to pick a non-default (e.g.
-`./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp` for max context).
+`./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge` for the
+35B Qwen profile — slower OpenClaw lane on this model, see comparison doc).
 
-### ManyForge-integrated mode
+### ManyForge Composer-assistant (production default)
 
-If the OpenClaw main agent must reach ManyForge tools through the verified
-workspace-plugin path, switch the provider to the muxed route first:
+The Composer-assistant lane (`openclaw` provider, in-sandbox gateway,
+manyforge MCP bridge) is the supported user-facing path. Bring it up
+end-to-end after vLLM is serving:
 
 ```bash
-./setup/configure-local-provider.sh --with-manyforge-mux qwen3.6-35b-a3b-prismaquant-dflash
-./setup/status.sh
+# 1. Provision the sandbox (idempotent — policy + skill + MCP register +
+#    agent profile + workspace AGENTS.md). Uses the model that's currently
+#    being served by vLLM.
+./manyforge/setup-manyforge-assistant.sh my-assistant
+
+# 2. Start the OpenClaw assistant bridge on :8200
+./manyforge/start-openclaw-assistant-bridge.sh &
+
+# 3. Start Composer in OpenClaw mode (defaults to ASSISTANT_PROVIDER=openclaw)
+cd ~/workspaces/dev_ws/src/manyforge
+./scripts/demo-assistant-known-good.sh start
 ```
 
-This keeps the OpenClaw-side provider name the same (`vllm-local`) but points
-the OpenShell provider target at `http://host.openshell.internal:8888/v1`,
-while the sandbox/OpenClaw client continues to use `https://inference.local/v1`.
-In this mode the ManyForge mux forwards normal inference to vLLM and
-`x_manyforge` traffic to ManyForge.
+**Production default = OpenClaw + cosmos-reason2-8b.** The decision and
+benchmark data are in
+[manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md §8](manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md);
+the operational runbook is
+[manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md](manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md);
+the lane parity debug tooling lives at
+[manyforge/scripts/debug/](manyforge/scripts/debug/).
 
-To restore the default direct-vLLM path:
+To swap to the direct lane (fast-path for simple prompts; sandboxed
+bypass — bridge runs its own loop with a tool_choice pin):
 
 ```bash
-./setup/configure-local-provider.sh --without-manyforge-mux
+ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart-bridge
 ```
 
 ### After reboot
 
 Same sequence: `serving/start-model.sh`, then `setup/configure-local-provider.sh`,
-then `setup/status.sh`.
+then `setup/status.sh`. To restore the Composer-assistant lane on top of
+that, re-run the three steps in the previous block (the provisioner and
+bridge are idempotent; Composer's container is recreated by the launcher).
 
 ### Switch model
 

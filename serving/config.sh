@@ -183,10 +183,17 @@ normalize_model_profile() {
 
 resolve_model_profile() {
     local requested
-    # Default profile: NVFP4 + DFlash-15 (FASTEST — 45.7 tok/s single, 192.5 @ 8-concurrent,
-    # 256K context). Users without an HF token for the gated drafter can override via
-    # THOR_MODEL_PROFILE or arg, e.g. `./serving/start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
-    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-qwen3.6-35b-a3b-nvfp4-mtp-fp8kv}}")
+    # Default profile: cosmos-reason2-8b (NVIDIA Cosmos Reason 2 8B — Qwen3-VL-8B base,
+    # FP8 KV, hermes tool parser, 64K context). Production default for the ManyForge
+    # Composer assistant lane (chosen 2026-05-07 after a 3-prompt × 3-round parity
+    # smoke vs Qwen3.6 and Nemotron — Cosmos-8B is the only profile where the
+    # OpenClaw lane achieves 9/9 on the matrix; the larger Qwen3.6 wins on raw
+    # throughput but its OpenClaw lane regresses to 1/9 because qwen3_xml's
+    # tool-call extraction is brittle without a tool_choice pin and the OpenClaw
+    # gateway never forwards one — see manyforge/docs/LANE-COMPARISON-direct-
+    # vs-openclaw.md §8 for the full benchmark). Override via THOR_MODEL_PROFILE
+    # or arg: `./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge`.
+    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-cosmos-reason2-8b}}")
 
     case "${requested}" in
         # minimax-m2.7-139b-a10b-nvfp4 profile removed 2026-04-23.

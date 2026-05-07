@@ -80,6 +80,33 @@ network_policies:
           - allow:
               method: POST
               path: /v1/embeddings
+      # Debug-only: vLLM logging proxy at :8002 used by the unified
+      # debug harness to capture exactly what the OpenClaw gateway
+      # sends to vLLM (lane parity diff between OpenClaw and direct).
+      # Mirrors the :8000 ruleset so the gateway can redirect its
+      # `models.providers.inference.baseUrl` to this port without
+      # losing any allowed verb. Safe to leave even when no debug
+      # is active — the proxy simply isn't running and connections
+      # would fail. Remove from production presets after debugging.
+      - host: host.openshell.internal
+        port: 8002
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+        rules:
+          - allow:
+              method: GET
+              path: /v1/models
+          - allow:
+              method: POST
+              path: /v1/chat/completions
+          - allow:
+              method: POST
+              path: /v1/completions
+          - allow:
+              method: POST
+              path: /v1/embeddings
     binaries:
       - path: /usr/local/bin/openclaw
       - path: /usr/local/bin/node

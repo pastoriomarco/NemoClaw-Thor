@@ -8,6 +8,31 @@ Scope: the in-sandbox **OpenClaw gateway** path with the **manyforge
 MCP bridge**. The fallback "direct vLLM" lane is documented in
 [MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](./MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md).
 
+## Production default (2026-05-07)
+
+| | |
+|---|---|
+| **Lane** | `openclaw` (`scripts/demo-assistant-known-good.sh:48`) |
+| **Model** | `cosmos-reason2-8b` — `nvidia/Cosmos-Reason2-8B`, FP8 KV, hermes parser, 64K ctx (`serving/config.sh:189` default fallback) |
+| **vLLM sampling** | `temperature=0.2, top_p=0.95` server-side, `enable_thinking=false` from the model's chat template |
+| **Why this combo** | OpenClaw lane achieves 9/9 on the 3-prompt × 3-round parity smoke (Qwen3.6 OpenClaw was 1/9; Nemotron 0/9). See [LANE-COMPARISON-direct-vs-openclaw.md §8](./LANE-COMPARISON-direct-vs-openclaw.md) for the full benchmark and reproduction recipe. |
+
+To bring the default stack up after a reboot:
+
+```bash
+cd $HOME/workspaces/nemoclaw/src/NemoClaw-Thor && ./serving/start-model.sh
+$HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
+$HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/start-openclaw-assistant-bridge.sh &
+cd $HOME/workspaces/dev_ws/src/manyforge && ./scripts/demo-assistant-known-good.sh start
+```
+
+To switch back to the direct lane (fast-path for simple prompts only —
+P3-style compound prompts race the 60s budget on this lane):
+
+```bash
+ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart-bridge
+```
+
 ---
 
 ## 1. The full chain

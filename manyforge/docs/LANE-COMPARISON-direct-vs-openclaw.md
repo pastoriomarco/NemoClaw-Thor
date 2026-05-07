@@ -655,3 +655,356 @@ variant from the draft model's `hf_config.model_type` (which for
 this model *is* `nemotron_h_mtp`, but that's the model_type, not the
 SpeculativeMethod literal). The corrected line lives in
 `serving/launch.sh` for future test on the next vLLM rebuild.
+
+---
+
+## 7. Full-fidelity lane-parity debug method
+
+When the two lanes diverge on the same prompt + same model, the
+divergence has to live in *what arrives at vLLM*. A logging HTTP
+reverse proxy in front of vLLM captures the full request and response
+bodies as JSONL — every field, no truncation. A diff harness runs the
+same prompt on both lanes back-to-back and emits a field-by-field
+comparison.
+
+The tooling is in `scripts/debug/`:
+
+- `vllm-logging-proxy.py` — single-file HTTP reverse proxy. Logs
+  every `POST /v1/chat/completions` (and adjacent verbs) as one JSONL
+  line per call: `{ts, request:{method,path,headers,body}, response:
+  {status,headers,body,duration_ms}}`. Multi-100KB JSON bodies that
+  span TCP packets are parsed correctly — tcpdump-then-regex isn't
+  reliable for these (verified empirically 2026-05-07).
+- `lane-parity-diff.py` — runs the same prompt on both lanes, captures
+  each lane's vLLM-bound chat-completion via the proxies, computes a
+  side-by-side diff (top-level fields, sampling params, tools[],
+  messages[], extras, response). Writes per-turn request/response
+  JSON to `/tmp/lane_parity_<ts>_*` for byte-level inspection.
+
+### Why a logging proxy and not tcpdump
+
+tcpdump can capture packets but the 50–100 KB JSON bodies that go
+through this stack span many TCP segments interleaved with timestamp
+metadata. Regex-extracting the body across packet boundaries
+silently drops fields. The logging proxy parses each request as it
+arrives at the application layer, so the captured JSON is exactly
+the JSON vLLM sees.
+
+### Topology
+
+```
+┌─────────────┐     ┌──────────────────────────┐     ┌──────────┐
+│ direct      │     │ vllm-logging-proxy :8001 │     │          │
+│ bridge      ├─────►  /tmp/vllm_direct_proxy  ├─────► vLLM     │
+│ :8100       │     │  .jsonl                  │     │ :8000    │
+└─────────────┘     └──────────────────────────┘     │          │
+                                                     │          │
+┌─────────────┐     ┌─────────┐    ┌──────────────┐  │          │
+│ OpenClaw    │     │ OC      │    │ vllm-logging │  │          │
+│ bridge      ├─────► gateway ├────► proxy :8002  ├──►          │
+│ :8200       │     │ :18789  │    │ /tmp/vllm_   │  │          │
+└─────────────┘     └─────────┘    │ openclaw_    │  │          │
+                                   │ proxy.jsonl  │  │          │
+                                   └──────────────┘  └──────────┘
+```
+
+The OpenClaw side proxy must `--bind 0.0.0.0` so the in-sandbox
+gateway can reach it via `host.openshell.internal:8002`. The
+`manyforge-composer` egress preset includes a port-8002 endpoint
+mirroring the port-8000 ruleset — the SSRF guard otherwise rejects
+the gateway's call to a non-allowlisted port.
+
+### Setup (one-time per session)
+
+```bash
+DEBUG=$NEMOCLAW_THOR_ROOT/manyforge/scripts/debug
+
+# Start both proxies (HTTP, no auth, log to /tmp).
+python3 "$DEBUG/vllm-logging-proxy.py" \
+    --listen-port 8001 \
+    --upstream http://127.0.0.1:8000 \
+    --log-path /tmp/vllm_direct_proxy.jsonl &
+
+python3 "$DEBUG/vllm-logging-proxy.py" \
+    --listen-port 8002 --bind 0.0.0.0 \
+    --upstream http://127.0.0.1:8000 \
+    --log-path /tmp/vllm_openclaw_proxy.jsonl &
+
+# Point each lane at its proxy:
+#   - direct bridge: BRIDGE_UPSTREAM_BASE_URL=http://127.0.0.1:8001/v1
+#   - OpenClaw gateway: models.providers.inference.baseUrl=
+#                       http://host.openshell.internal:8002/v1
+```
+
+### Running a parity diff
+
+```bash
+python3 scripts/debug/lane-parity-diff.py "add a repeat node as root"
+```
+
+The harness:
+
+1. Restarts the Composer container in `nemoclaw` (direct) mode.
+2. Resets the program (`forceDiscardOverrides=true` + `deploymentPath`).
+3. Sends the prompt; captures every chat-completion that hit vLLM.
+4. Switches to `openclaw` mode; resets; sends again; captures.
+5. Emits a side-by-side diff to stdout AND writes:
+   - `lane_parity_<ts>_summary.json` — combined capture
+   - `lane_parity_<ts>_diff.txt` — readable diff
+   - `lane_parity_<ts>_{direct,openclaw}_request_<turn>.json`
+   - `lane_parity_<ts>_{direct,openclaw}_response_<turn>.json`
+
+Differences are marked with `❗`. The **Messages** section finds the
+first byte that differs between user/system content. The **Tools**
+section names tools present on only one lane and shows per-tool
+schema differences (param keys, required, description chars). The
+**Response** section shows per-turn `finish_reason`, tool-call
+counts, and assistant content lengths.
+
+### What the harness has historically found
+
+The first run of this method (2026-05-07) surfaced five concrete
+divergences responsible for the OpenClaw lane's intermittent
+failures on action-shaped prompts. Documented in section 8 below.
+
+---
+
+## 8. 2026-05-07 model selection benchmark (3 prompts × 3 rounds × 2 lanes)
+
+This section documents the benchmark that drove the
+**production default switch from Qwen3.6 to Cosmos-Reason2-8B** for
+the Composer assistant. It is intended to be reproducible end-to-end
+from a clean stack.
+
+### 8.1 The 3-prompt smoke
+
+```
+P1 (simple, single tool):
+    "add a repeat node as root"
+
+P2 (simple, single tool with explicit literals):
+    "add a box of size 1.0, 0.02, 0.25 in position 0.0, -0.15, 0.125"
+
+P3 (compound, derivative references):
+    "add an upsert node at the end of pick_and_place sequence that
+     places 'graspable' object in the same position and orientation
+     as the scene start, with the same original size"
+```
+
+P3 is the load-bearing case — it requires the model to combine a
+tree-position reference (`at the end of pick_and_place`) with two
+scene-derived values (`same position … as scene start`, `same
+original size`) before it can compose correct args.
+
+### 8.2 Results matrix (3 rounds × 3 prompts × 2 lanes)
+
+| Model (vLLM profile) | Direct lane (sandboxed bypass) | OpenClaw lane (gateway → MCP) |
+|---|---|---|
+| `nemotron3-nano-omni-30b-a3b-nvfp4` | 9/9 with pin | **0/9** (model wandered, no tool call ever) |
+| `qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge` (thinking-off, temp=0.2) | **9/9** with pin | 1/9 (model hallucinated success in prose) |
+| `cosmos-reason2-8b` (temp=0.2 server-side) | 6/9 (P3 0/3 — schema fail), then **7/9 after the bridge inline-context fix** | **9/9** ✅ |
+
+Median elapsed (Cosmos-8B, the surviving production default):
+
+| Prompt | Direct (post-fix) | OpenClaw |
+|---|---|---|
+| P1 | ~13 s | ~22 s |
+| P2 | ~16 s | ~25 s |
+| P3 | ~50 s (1/3 races the budget) | ~33 s (3/3) |
+
+### 8.3 Why Cosmos-Reason2-8B wins on the OpenClaw lane
+
+OpenClaw's gateway never forwards `tool_choice`, `temperature`, `top_k`,
+`top_p`, or `chat_template_kwargs` to vLLM (verified 2026-05-07 by the
+proxy harness — only `model`, `messages`, `tools`, `stream`, and
+`max_completion_tokens` get forwarded). That means the model's own
+chat-template behavior and its post-training tool-use bias are
+load-bearing for whether OpenClaw decodes a real tool call vs prose:
+
+1. **`hermes` tool-call parser** (Cosmos / Qwen3-VL base) accepts
+   `<tool_call>{json}</tool_call>` — much more permissive than
+   `qwen3_xml` (Qwen3.6) which expects strict XML attributes.
+2. **Cosmos's chat template ships with `enable_thinking:false`** —
+   no `<think>` envelope eats the budget. Qwen3.6 needs an explicit
+   `--default-chat-template-kwargs '{"enable_thinking":false}'` to
+   match this regime.
+3. **Tool use is a primary post-training task on Cosmos** (post-trained
+   from Qwen3-VL-8B for physical-AI reasoning, where tool-use is the
+   recipe). Generalists like Qwen3.6/Nemotron default to "explain a
+   plan in prose" when given tools without a pin.
+
+### 8.4 The direct-lane fix landed in this benchmark
+
+`manyforge_assistant_bridge/bridge.py` (2026-05-07): when the user
+prompt references derivative values (`same position`, `at the end of`,
+`original size`, etc. — see `_needs_state_prep`), the bridge now
+**inlines the relevant programSnapshot / sceneSnapshot blocks into
+the user message** before pinning the action tool. This replaces the
+earlier (failed) experiment that pinned `program_read` /
+`scene_inspect` as separate turns. On Cosmos-8B, pinning a zero-arg
+tool causes the model to emit whitespace-only args until `max_tokens`
+runs out, never closing the JSON — vLLM rejects with HTTP 400 and the
+loop never recovers. Inlining the snapshots avoids the degenerate
+decode path and gives the model the values it needs to fill the
+action-tool args correctly first try.
+
+The default `BRIDGE_UPSTREAM_MAX_TOKENS` was bumped from 512 → 2048
+in the same change to give Cosmos-8B's tool-call args room to close
+on the larger inline-context turn.
+
+P3 success rate on direct went from 0/3 → 1/3 with the fix; the
+remaining failures are wall-time races at `BRIDGE_REQUEST_TIMEOUT_S=60s`
+on prompts whose prefill + decode legitimately takes 50–60 s.
+Bumping that env to 90 s (or trimming the inline-context to just the
+referenced subtree) closes the race; not done in the default config
+because OpenClaw is now the production default and direct only needs
+to handle simple prompts.
+
+### 8.5 End-to-end reproduction (clean stack)
+
+This runs from a stack where `nemoclaw <sandbox>` exists, `manyforge`
+sources are at `~/workspaces/dev_ws/src/manyforge`, and
+`NemoClaw-Thor` is at `~/workspaces/nemoclaw/src/NemoClaw-Thor`. Adapt
+paths as needed.
+
+**Step 1 — boot vLLM with the production profile.**
+
+```bash
+cd $HOME/workspaces/nemoclaw/src/NemoClaw-Thor
+./serving/start-model.sh                  # default = cosmos-reason2-8b
+# or explicit:
+# ./serving/start-model.sh cosmos-reason2-8b
+```
+
+Verify:
+
+```bash
+curl -s http://127.0.0.1:8000/v1/models | jq .data[].id
+# → "cosmos-reason2-8b"
+grep "Default vLLM sampling" /tmp/cosmos8b_boot.log
+# → temperature: 0.2, top_p: 0.95
+```
+
+**Step 2 — provision the sandbox** (idempotent; sets policy + skill +
+MCP server + agent profile + workspace AGENTS.md + reasoning flag).
+
+```bash
+$HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
+```
+
+**Step 3 — point OpenClaw at the served Cosmos id.**
+
+The provisioner script reads `/v1/models` from vLLM at install time
+and writes the model id into the sandbox `~/.openclaw/openclaw.json`
+(`models.providers.inference.models[]` plus
+`agents.defaults.model.primary` keyed `inference/<id>`). If you
+switch profiles after install, re-run the provisioner.
+
+**Step 4 — start the OpenClaw bridge (the production lane).**
+
+```bash
+cd $HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge
+./start-openclaw-assistant-bridge.sh   # listens on :8200
+```
+
+The bridge auto-discovers the served model via OpenClaw's gateway; no
+manual model id is needed in the bridge env.
+
+**Step 5 — start Composer in OpenClaw mode** (the demo launcher
+defaults to `ASSISTANT_PROVIDER=openclaw`):
+
+```bash
+cd $HOME/workspaces/dev_ws/src/manyforge
+./scripts/demo-assistant-known-good.sh start
+```
+
+Composer listens on http://127.0.0.1:9000, points at
+`http://127.0.0.1:8200/v1/manyforge/assistant`, which dispatches into
+the sandbox's OpenClaw gateway, which calls the manyforge MCP server
+inside the sandbox.
+
+**Step 6 — verify with the 3-prompt smoke** (one round; the harness
+does the lane-switch + reset for you):
+
+```bash
+NEMOCLAW=$HOME/workspaces/nemoclaw/src/NemoClaw-Thor
+python3 $NEMOCLAW/manyforge/scripts/debug/lane-parity-diff.py "add a repeat node as root"
+python3 $NEMOCLAW/manyforge/scripts/debug/lane-parity-diff.py \
+    "add a box of size 1.0, 0.02, 0.25 in position 0.0, -0.15, 0.125"
+python3 $NEMOCLAW/manyforge/scripts/debug/lane-parity-diff.py \
+    "add an upsert node at the end of pick_and_place sequence that places 'graspable' object in the same position and orientation as the scene start, with the same original size"
+```
+
+**Step 7 — multi-round regression check** (3 rounds × 3 prompts × 2
+lanes; ~25 min on Cosmos-8B; produces the §8.2 matrix):
+
+```bash
+python3 /tmp/lane_3x3_smoke.py
+# (script in /tmp; promote to manyforge/scripts/debug/ if used regularly)
+```
+
+The harness's auto pass-detector relies on
+`/api/program/state` which is a 404 in current Composer — the truth
+comes from two ground-truth sources:
+
+- direct lane: `manyforge_assistant_bridge/audit.log` (fields
+  `requestId`, `tool`, `success`, `error`)
+- OpenClaw lane: Composer container access log filtered to the
+  in-sandbox bridge IP — `docker logs manyforge-e2e-composer 2>&1 |
+  grep "172.18.0.2" | grep "/api/assistant/bridge/tools/"`
+
+### 8.6 Configurations active in the production default
+
+| Knob | Value | Where |
+|---|---|---|
+| Served model | `cosmos-reason2-8b` (`nvidia/Cosmos-Reason2-8B`, FP8 KV) | `serving/config.sh:189` (default arg fallback) |
+| `max_model_len` | 65 536 (1.4× OpenClaw bootstrap headroom) | `serving/config.sh:327` |
+| `gpu_memory_utilization` | 0.25 (~30 GB on Thor; fits Orin's 40 GB LLM budget) | `serving/launch.sh` (cosmos-reason2-8b profile) |
+| Tool-call parser | `hermes` | `serving/launch.sh:133` |
+| Server-side sampling | `temperature: 0.2, top_p: 0.95` | `serving/launch.sh` (`--override-generation-config`) |
+| Chat-template thinking | off (default in Cosmos's chat template) | model card |
+| Default lane | `openclaw` | `scripts/demo-assistant-known-good.sh:48` |
+| OpenClaw timeout | 60 s | `setup-manyforge-assistant.sh` (`agents.defaults.timeoutSeconds`) |
+| Bridge upstream timeout | 60 s | `BRIDGE_REQUEST_TIMEOUT_S` env in `start-openclaw-assistant-bridge.sh` |
+| Bridge max_tokens | 2048 | `manyforge_assistant_bridge/bridge.py:70` (default) |
+| OpenClaw → vLLM forwarded fields | `model`, `messages`, `tools`, `stream`, `max_completion_tokens` only | hard-coded in OpenClaw (verified 2026-05-07) |
+
+### 8.7 Decision rationale (production default = OpenClaw + Cosmos-8B)
+
+- **Reliability across the prompt taxonomy.** Cosmos-8B is the only
+  model where the OpenClaw lane achieves 9/9 across simple AND
+  compound prompts. Qwen3.6 needs the direct lane's tool_choice pin to
+  hit 9/9 on simple, and even direct-lane Qwen3.6 isn't tested under
+  compound stress.
+- **Compound-prompt coverage.** OpenClaw's agent loop handles
+  multi-tool sequences (read state → compose → execute) natively.
+  Direct lane's heuristic + pin design only handles single-action
+  prompts cleanly; the inline-context fix extended that to one slice
+  of compound prompts but at the cost of single-turn wall-clock budget.
+- **Footprint.** Cosmos-8B fits Orin's 40 GB LLM budget alone
+  (~30 GB at gpu_mem_util=0.25). Qwen3.6-35B doesn't (~45 GB). Same
+  stack runs unchanged on Thor and Orin without re-tuning.
+- **Hallucination cost.** Qwen3.6's OpenClaw failure mode is
+  *hallucinated execution* — model writes "Done. Wrapped the root..."
+  while the draft is unchanged. That looks like a normal Composer
+  response in the UI; users would only catch the failure on a
+  draft-state diff. Cosmos-8B's failure mode (none observed in the
+  9/9 set) would be more honest.
+
+### 8.8 Direct lane status (kept as backup)
+
+The direct lane (`manyforge_assistant_bridge` on :8100) remains
+production-supported as a fast-path / sandbox-bypass for local
+development. It now handles compound prompts via the inline-context
+fix (§8.4) but with a non-trivial timing race on the larger turn.
+Switch via:
+
+```bash
+ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart-bridge
+```
+
+Direct works only when the served model's tool descriptions carry
+enough detail for the model to fill in args without intermediate
+reads — true on Cosmos-8B for P1+P2 but a coin-flip on the
+inline-context P3-style prompts. For arbitrary user prompts in
+production, prefer OpenClaw.

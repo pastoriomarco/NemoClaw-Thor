@@ -8,6 +8,29 @@
 
 ---
 
+## Cross-repo authority map (start here)
+
+The ManyForge stack spans three sibling repos. Each owns a different
+question. Land in the right one before making a change:
+
+| Question | Authoritative repo | AGENTS.md |
+|---|---|---|
+| **What is the contract / spec / ADR?** ("what should this do?") | `dev_ws/src/manyforge_specs/` | `manyforge_specs/AGENTS.md` |
+| **What's in the implementation code / tests?** ("how is it written today?") | `dev_ws/src/manyforge/` | `manyforge/AGENTS.md` (one-page redirect to `manyforge_specs`) |
+| **How does it run on Thor — serving, sandbox, integration?** ("how do we deploy and operate?") | this repo (`NemoClaw-Thor/`) | this file, plus the integration subtree's own [`manyforge/AGENTS.md`](manyforge/AGENTS.md) |
+
+If your change spans repos (most do): start at
+`manyforge_specs/AGENTS.md`, walk down to `dev_ws/src/manyforge/`, then
+back here for the runtime artifacts. Don't write spec-level content
+in this repo; it belongs upstream in `manyforge_specs`.
+
+The Composer-assistant production default (lane + model) and the
+runbook for bringing it up live in this repo at
+[`manyforge/README.md`](manyforge/README.md) and
+[`manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md`](manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md).
+
+---
+
 ## Purpose
 
 This repository provides a tested, reproducible setup for running
@@ -250,16 +273,31 @@ shortlist, and bench-menu rationale.
 ## ManyForge assistant pipeline integration
 
 ManyForge is the downstream consumer of this repo's serving stack.
-The integration has three pieces, all of which are user-driven — not
-automated by this repo's scripts:
+The integration has three pieces:
 
-1. **Model serving** — owned by this repo. Status: working.
+1. **Model serving** — owned by this repo (`serving/`). Production
+   default profile: `cosmos-reason2-8b`.
 2. **Sandbox + agent runtime** — onboard and configure via the
-   workflows above. Status: working with the verified version pins.
+   workflows above; provision the Composer-assistant skill +
+   policy + MCP server via `manyforge/setup-manyforge-assistant.sh`.
 3. **Bridge service** that translates ManyForge's
    `manyforge.assistant.provider_request.v0` envelope into a model
-   dispatch (and back) — owned by this repo when built. Status:
-   not yet implemented.
+   dispatch (and back). **Two implementations exist:**
+   - `openclaw_assistant_bridge` (port 8200) — production default
+     lane. Ships in `dev_ws/src/manyforge/`. Routes through the
+     in-sandbox OpenClaw gateway and the manyforge MCP bridge.
+   - `manyforge_assistant_bridge` (port 8100) — fast-path / sandbox
+     bypass. Ships in `dev_ws/src/manyforge/`. Runs its own agent
+     loop with a `tool_choice` pin and an inline-snapshot context
+     for compound prompts.
+
+To bring up the production default after a reboot, run the four
+commands in `README.md § ManyForge Composer-assistant`. The
+runbook for debugging each gate of the request chain is
+`manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md`. The benchmark
+that drove the production-default choice (Cosmos-Reason2-8B over
+Qwen3.6 and Nemotron) and end-to-end reproduction steps are in
+`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §8.
 
 ### Where to read ManyForge's expectations
 

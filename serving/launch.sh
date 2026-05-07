@@ -131,6 +131,15 @@ prepare_thor_launch_profile() {
                 "--max-num-batched-tokens" "8192"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "hermes"
+                # Lane-parity tuning 2026-05-07: deterministic-leaning sampling
+                # so the OpenClaw lane (which never forwards per-request sampling
+                # fields) gets a tight decode pattern by default. Cosmos's chat
+                # template is already thinking-off by default — no
+                # `--default-chat-template-kwargs` needed (verified by reading
+                # the Qwen3-VL base chat template, which omits the <think> open).
+                # The direct lane sends temperature=0.0 per-request and overrides
+                # this; this only narrows the OpenClaw-lane decode behavior.
+                "--override-generation-config" '{"temperature":0.2,"top_p":0.95}'
             )
             ;;
         nemotron3-nano-omni-30b-a3b-nvfp4)
@@ -495,6 +504,17 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "qwen3_xml"
                 "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":2}'
+                # Lane-parity work 2026-05-07: Qwen3.6's own generation_config.json
+                # ships temperature=1.0 + top_k=20 + top_p=0.95 and the chat template
+                # opens a <think> block by default. The OpenClaw lane never forwards
+                # per-request sampling fields, so without these server-side overrides
+                # the model burns its whole budget on reasoning prose and never emits
+                # a tool call. The direct lane already pins tool_choice + sends
+                # temperature=0.0 per-request, so it overrides regardless of these
+                # defaults; this only narrows OpenClaw's stochasticity and turns the
+                # thinking envelope off so qwen3_xml can extract tool calls.
+                "--override-generation-config" '{"temperature":0.2,"top_p":0.95}'
+                "--default-chat-template-kwargs" '{"enable_thinking":false}'
             )
             ;;
         qwen3.5-9b-claude-distilled-nvfp4)
