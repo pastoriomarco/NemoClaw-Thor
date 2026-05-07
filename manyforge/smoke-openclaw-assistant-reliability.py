@@ -116,8 +116,12 @@ def main() -> int:
                 "catalogHash": mode_manifest.get("catalogHash"),
                 "message": case.message,
                 "tools": tools,
-                "nodes": mode_manifest.get("nodes") or [],
-                "skills": mode_manifest.get("skills") or [],
+                # Bare-id `nodes` / `skills` were dropped from the
+                # envelope contract; consumers derive ids from
+                # nodeCatalog/skillCatalog. The manifest still has
+                # those rich payloads for back-compat smoke tests.
+                "nodeCatalog": mode_manifest.get("nodeCatalog") or [],
+                "skillCatalog": mode_manifest.get("skillCatalog") or [],
                 "runtime": {"programLoaded": True, "cycleState": "idle"},
                 "context": {"source": "smoke-openclaw-assistant-reliability"},
                 "timeoutSeconds": case.timeout_s,

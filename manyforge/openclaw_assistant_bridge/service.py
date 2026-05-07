@@ -263,12 +263,25 @@ async def assistant(request: Request) -> JSONResponse:
     # so both paths give the model identical context. The extra preamble
     # is small (~5-15 KB) and gets trimmed if context is tight.
     if cfg.use_gateway:
-        inferred_mcp_tools = (
-            mcp_allowed_tools_from_payload(payload) if cfg.auto_tool_window else []
-        )
-        allowed_mcp_tools = inferred_mcp_tools or None
+        # Gateway path: do NOT narrow `allowedTools` per-request. The
+        # in-sandbox MCP wrapper is launched once at gateway startup
+        # and exposes whatever set was active then to vLLM via
+        # `tools/list` — the bridge has no in-band channel to update
+        # that allowlist per request. Narrowing the prompt's
+        # `allowedTools` JSON while leaving the wrapper's `tools/list`
+        # wide creates a disagreement the model resolves intermittently
+        # ("I can't use program_read because it isn't available", even
+        # though program_read IS in the schema list). Sending the full
+        # mode surface in both places keeps them in lockstep — the
+        # mode catalog is the real authorization boundary, and the
+        # narrow window was only ever a soft prompt-economy hint.
+        allowed_mcp_tools = None
         prompt = build_agent_prompt(payload, mcp_allowed_tools=allowed_mcp_tools)
     else:
+        # CLI shell-out path: the per-request allowlist is written to
+        # /tmp/manyforge-openclaw-allowed-tools.txt before openclaw
+        # launches and the wrapper reads it on startup, so prompt and
+        # `tools/list` agree. Narrowing here is safe.
         inferred_mcp_tools = (
             mcp_allowed_tools_from_payload(payload) if cfg.auto_tool_window else []
         )

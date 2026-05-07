@@ -107,20 +107,35 @@ def build_agent_prompt(
             or str(tool.get("id") or tool.get("name") or "") in visible_tool_ids
         )
     ]
-    nodes = payload.get("nodes") if isinstance(payload.get("nodes"), list) else []
-    # nodeCatalog (added 2026-05-06 in manyforge.assistant.provider_request.v0)
-    # is the rich sibling of `nodes`: each entry has {id, kind,
-    # childrenMin, childrenMax, description, parameters[], ...}.
-    # Including it in the preamble is the load-bearing route for the
-    # LLM to know e.g. that `repeat` is a decorator with
-    # childrenMax=1 — which we found the model needs upfront to avoid
-    # retrying invalid decorator inserts. Falls back to [] for older
-    # clients that haven't been updated.
+    # nodeCatalog (added 2026-05-06) is the rich payload of catalog
+    # entries visible in the active mode: each entry has {id, kind,
+    # childrenMin, childrenMax, description, parameters[], ...}. Same
+    # structure catalog_read returns. Including it in the preamble
+    # eliminates the discovery round-trip the model would otherwise
+    # need on the first edit. Falls back to [] for older envelopes.
     node_catalog_raw = payload.get("nodeCatalog")
     node_catalog = node_catalog_raw if isinstance(node_catalog_raw, list) else []
+    # skillCatalog: same payload shape skills_read returns,
+    # mode-filtered. Lets the model see full skill expansions without
+    # burning a tool call.
+    skill_catalog_raw = payload.get("skillCatalog")
+    skill_catalog = skill_catalog_raw if isinstance(skill_catalog_raw, list) else []
+    # Allowed node ids — derived from nodeCatalog rather than carried
+    # separately. The legacy bare `nodes` field was dropped from the
+    # envelope; this preserves the preamble's `allowedNodes` field
+    # without resurrecting the duplication.
+    allowed_node_ids = [
+        entry.get("id") for entry in node_catalog
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry.get("id")
+    ]
+    # Allowed skill ids — derived analogously.
+    allowed_skill_ids = [
+        entry.get("id") for entry in skill_catalog
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry.get("id")
+    ]
     # programSnapshot + sceneSnapshot (added 2026-05-06): current
     # state at request-time. The LLM uses these instead of round-
-    # tripping through program.read / scene.inspect on every request
+    # tripping through program_read / scene_inspect on every request
     # — saves ~30s/turn under thinking-on. Both None-able when no
     # program / scene is loaded; the openclaw bridge accepts that
     # gracefully.
@@ -128,7 +143,6 @@ def build_agent_prompt(
     program_snapshot = program_snapshot_raw if isinstance(program_snapshot_raw, dict) else None
     scene_snapshot_raw = payload.get("sceneSnapshot")
     scene_snapshot = scene_snapshot_raw if isinstance(scene_snapshot_raw, dict) else None
-    skills = payload.get("skills") if isinstance(payload.get("skills"), list) else []
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
 
@@ -137,14 +151,15 @@ def build_agent_prompt(
         "assistantMode": assistant_mode,
         "conversationId": payload.get("conversationId"),
         "runtime": runtime,
-        "skills": skills,
-        "allowedNodes": nodes,
+        "allowedSkills": allowed_skill_ids,
+        "allowedNodes": allowed_node_ids,
         # Structural hints per node — see comment above. Empty when
         # the assistant-provider envelope predates the field.
         "nodeCatalog": node_catalog,
+        "skillCatalog": skill_catalog,
         # Current-state snapshots (J). None when not provided. The
         # LLM should treat these as the live state at request-time
-        # and only call program.read / scene.inspect to refresh
+        # and only call program_read / scene_inspect to refresh
         # after applying mutations within this same request.
         "programSnapshot": program_snapshot,
         "sceneSnapshot": scene_snapshot,
@@ -155,6 +170,127 @@ def build_agent_prompt(
         "contextKeys": sorted(context.keys()),
     }
 
+    # Per-request RULES block. The full long-form rules contract lives
+    # in the OpenClaw skill file (`agent-skills/manyforge-composer/
+    # SKILL.md`), which is loaded once per conversation. This block
+    # distills the most-violated rules and re-injects them into every
+    # turn so the model's attention is refreshed even on long
+    # conversations where the skill content drifts out of working
+    # memory. Each rule maps to a real failure mode observed in
+    # production traces; do not weaken or remove without re-checking
+    # whether the corresponding loop pattern returns.
+    rules_block = "\n".join(
+        [
+            "RULES (do not violate):",
+            "1. Catalog ids are immutable. Use only the literal id from "
+            "the nodeCatalog or skillCatalog below. Never invent ids by "
+            "composing a kind id with an object name (e.g. NEVER "
+            "`attach_graspable` — the kind is `attach_object_to_link` "
+            "and `graspable` goes in `params.object_id`). If the id you "
+            "want is not present below, it does not exist.",
+            "2. The `id` field of a node is the catalog identifier "
+            "(immutable). The `name` field is a caller-chosen instance "
+            "label and may include any descriptive text. Object "
+            "identifiers belong in `params.object_id`, never in `id`.",
+            "3. `scene_draft_*` tools edit STATIC scene resources "
+            "(compile-time, present for every cycle). `tree_draft_*` "
+            "tools edit RUNTIME behavior (executes during a cycle at a "
+            "specific point). They are distinct namespaces. Crucial "
+            "carve-out: the nodeCatalog also exposes RUNTIME node "
+            "kinds that act on collision objects during execution — "
+            "`add_collision_object`, `upsert_collision_object`, "
+            "`remove_collision_object`, `update_collision_object_pose`, "
+            "`attach_object_to_link`, `detach_object_from_link`. These "
+            "are NODES inserted with `tree_draft_insert_node` (kind = "
+            "one of the above), NOT scene_draft tools. Decision: if the "
+            "user says \"a node that places/removes/updates X at the "
+            "end of <sequence>\" or \"during the cycle\" or \"at "
+            "runtime\" or anywhere phrasing implies behavior tree "
+            "ordering, use `tree_draft_insert_node` with the matching "
+            "runtime kind. Use `scene_draft_*` only when the user is "
+            "authoring the static scene (\"add an obstacle to the "
+            "scene\", \"place a box at <pose>\", \"resize the "
+            "ground\") with no reference to the tree, sequence, "
+            "cycle, or runtime ordering.",
+            "4. `programSnapshot` and `sceneSnapshot` in the context "
+            "below carry the LIVE state at request-time. Read them "
+            "directly for node names, object ids, dimensions, and "
+            "poses. Only call `program_read` or `scene_inspect` to "
+            "refresh state AFTER you have applied a mutation in this "
+            "same request.",
+            "5. The `nodeCatalog` and `skillCatalog` in the context "
+            "below carry the SAME payload `catalog_read` and "
+            "`skills_read` would return — full descriptions, "
+            "parameters, capabilities. Read them directly; do not "
+            "round-trip through the read tools for first-pass "
+            "discovery.",
+            "6. On a 4xx tool-call response, read the structured fields "
+            "(`allowedNodeKinds`, `validParentNames`, "
+            "`validTargetNames`, `validNodeNames`, "
+            "`wrapperIdSuggestions`, `rejectedNodeKinds`). Pick a value "
+            "from those fields. Do NOT retry with identical args.",
+            "7. If the same call has just failed twice with the same "
+            "error class, stop and emit a final assistant message "
+            "asking the user for direction. Do not try a third time.",
+            "8. To make a node the new ROOT of the tree (\"add X as "
+            "root\", \"as the tree root\", \"wrap the root with X\", "
+            "\"X around the root\"), use `tree_draft_wrap_node` with "
+            "the CURRENT root's name as `target_name`. Never use "
+            "`tree_draft_insert_node` for root-replacement intents — "
+            "insert places a node as a child of an existing parent, so "
+            "calling it repeatedly nests deeper instead of reaching the "
+            "root, producing a spiral. If you cannot identify the "
+            "current root from `programSnapshot`, stop and ask.",
+            "9. Every tool result carries a `result.delta` block with "
+            "the live state diff: `result.delta.rootName` and "
+            "`result.delta.rootKind` are the LIVE tree root after "
+            "this call; `result.delta.sinceCallStart` lists what "
+            "*this* call just changed (added/removed/moved nodes, "
+            "added/removed/changed scene objects, with per-key "
+            "before/after for params/pose/dimensions); "
+            "`result.delta.sinceConversationStart` lists cumulative "
+            "changes since this conversation began. Read it before "
+            "calling another tool. Goal-completion check: if the user "
+            "asked for \"a repeat as root\" and "
+            "`result.delta.rootKind == 'repeat'`, the goal is "
+            "satisfied — emit the final assistant message and stop. "
+            "Never wrap a node whose kind already matches the request; "
+            "that just nests deeper. The delta replaces guessing "
+            "\"did my mutation land?\" — never call `program_read` "
+            "to confirm what the delta already shows.",
+            "11. **Action-shaped requests REQUIRE a tool call.** If the "
+            "user's prompt contains an action verb (add, remove, "
+            "delete, insert, update, wrap, swap, move, create, make, "
+            "place, attach, detach, set) referring to a node, object, "
+            "scene resource, or program element, you MUST emit a tool "
+            "call before returning a final assistant message. Prose-"
+            "only responses are reserved for: (a) clarifying ONE "
+            "question when the request is genuinely ambiguous (and "
+            "you must explain *what* is ambiguous); (b) a brief "
+            "summary AFTER tool calls have already completed; (c) "
+            "saying which tool you're about to call when there is no "
+            "ambiguity. Saying \"the tool isn't available\" without "
+            "having tried it is forbidden — every tool listed in "
+            "`allowedTools` and every tool whose schema appears in "
+            "your callable interface is available. If you don't know "
+            "which tool, ask one specific question; do not refuse.",
+            "10. Namespace decision rules, in order of precedence: "
+            "(a) If the request says \"node\", \"tree\", \"root\", "
+            "\"sequence\", \"fallback\", \"parallel\", \"repeat\", "
+            "\"retry\", \"inverter\", or names a position in the tree "
+            "(\"at the end of <sequence>\", \"after <node>\", \"as a "
+            "child of <parent>\"), it is ALWAYS `tree_draft_*`. The "
+            "presence of the word \"object\" in the same sentence does "
+            "not change this — see rule 3 for the runtime collision-"
+            "object node kinds. (b) Else if the request talks about "
+            "the static scene without referencing tree position "
+            "(\"add a box in the scene\", \"resize the ground\", "
+            "\"move the obstacle to <pose>\") it is `scene_draft_*`. "
+            "(c) If you are still unsure, prefer `tree_draft_*` when "
+            "the request is part of a behavior-tree-editing "
+            "conversation, and ask before guessing.",
+        ]
+    )
     return "\n".join(
         [
             "You are the ManyForge composer assistant running inside OpenClaw.",
@@ -163,14 +299,8 @@ def build_agent_prompt(
             "Do not fabricate program, tree, or scene state.",
             "If the visible ManyForge MCP tools are insufficient, say what is missing instead of inventing a tool.",
             "When finished, briefly report the tool result for the Composer chat transcript.",
-            # The preamble below carries the live state of the program "
-            # tree (`programSnapshot`) and scene (`sceneSnapshot`) at "
-            # request-time — read those directly when you need to find "
-            # node names, object ids, positions, etc. You only need to "
-            # call `manyforge__program-read` or `manyforge__scene-inspect` "
-            # to *refresh* state AFTER you have applied a mutation in "
-            # this same request.
-            "The `programSnapshot` and `sceneSnapshot` keys in `ManyForge request context` below carry the LIVE current state — read them directly for node names, object ids, dimensions, and poses. Only call `manyforge__program-read` or `manyforge__scene-inspect` to refresh state AFTER you have applied a mutation in this same request.",
+            "",
+            rules_block,
             "",
             "ManyForge request context:",
             json.dumps(preamble, indent=2, sort_keys=True),
@@ -239,6 +369,38 @@ def build_openclaw_command(
         "-c",
         shell_command,
     ]
+
+
+def is_action_shaped_prompt(message: Any) -> bool:
+    """Return True if the user prompt looks like an action request.
+
+    Heuristic: the prompt contains an action verb (a mutation
+    intent — "add", "wrap", "update", etc.) AND a domain noun
+    (a tree/scene/program object). When True, the bridge passes
+    ``tool_choice: "required"`` to vLLM, structurally forcing the
+    model to emit a tool call rather than refusing in prose.
+    Returning False for ambiguous prompts ("what does this do?",
+    "explain X") preserves auto-mode for legitimate read-only
+    inquiries.
+    """
+    if not isinstance(message, str):
+        return False
+    text = message.lower()
+    action_verbs = (
+        "add", "remove", "delete", "insert", "update", "wrap",
+        "swap", "move", "create", "make", "place", "attach",
+        "detach", "set", "replace", "rename", "reorder", "drop",
+        "modify", "resize", "change",
+    )
+    domain_nouns = (
+        "node", "tree", "root", "sequence", "fallback", "parallel",
+        "repeat", "retry", "inverter", "object", "obstacle", "box",
+        "sphere", "cylinder", "ground", "collider", "graspable",
+        "scene", "program", "parameter", "param", "blackboard",
+    )
+    has_verb = any(v in text for v in action_verbs)
+    has_noun = any(n in text for n in domain_nouns)
+    return has_verb and has_noun
 
 
 def derive_gateway_session_key(payload: dict[str, Any]) -> str:
@@ -354,6 +516,19 @@ def build_gateway_chat_completions_command(
         "max_tokens": config.gateway_max_tokens,
         "stream": False,
     }
+    # Force the model to emit at least one tool call when the original
+    # user prompt is action-shaped. The OpenAI-standard
+    # ``tool_choice: "required"`` constrains the decoder so prose-only
+    # refusals ("I can't use the tool") become structurally
+    # impossible. Detection runs against the raw user prompt
+    # (`payload["message"]`), not the full preamble — the preamble
+    # always contains action verbs from rules/descriptions, so using
+    # it would force tool calls on every request including pure
+    # explain/clarify ones. Auto mode is preserved for non-action
+    # prompts.
+    raw_user_prompt = payload.get("message")
+    if is_action_shaped_prompt(raw_user_prompt):
+        request_body["tool_choice"] = "required"
     # Sampling-parameter parity with the direct-vLLM bridge. The gateway
     # accepts standard OpenAI fields and forwards them; without these
     # the model rambles 2-15x longer per turn at OpenClaw's defaults.
@@ -627,7 +802,14 @@ def mcp_allowed_tools_from_payload(payload: dict[str, Any]) -> list[str]:
         "full program",
     )
     if any(term in text for term in broad_terms):
-        selected = _tools_matching(all_tools, ("catalog.", "program.", "tree.", "scene."))
+        # Underscored prefixes match the post-rename tool-id format
+        # (`tree_draft_*`, `scene_draft_*`, etc.). The legacy dotted
+        # prefixes here used to be `("catalog.", "program.", "tree.",
+        # "scene.")`; updating them was missed during the rename
+        # and silently broke the auto-tool-windowing path — every
+        # narrow request resolved to an empty allowed-tools list and
+        # the model saw no tools.
+        selected = _tools_matching(all_tools, ("catalog_", "program_", "tree_", "scene_"))
         return selected if len(selected) < len(all_tools) else []
 
     runtime_terms = (
@@ -686,33 +868,33 @@ def mcp_allowed_tools_from_payload(payload: dict[str, Any]) -> list[str]:
     # enforces the mode catalog and bounded-autonomy envelope on every call.
     if is_tree_intent:
         if _looks_like_root_wrap(text, control_flow_terms):
-            selected.append("tree.draft.wrap_node")
+            selected.append("tree_draft_wrap_node")
         elif any(term in text for term in ("replace", "subtree")):
-            selected.append("tree.draft.replace_subtree")
+            selected.append("tree_draft_replace_subtree")
         elif any(term in text for term in ("reorder", "move node", "move the node")):
-            selected.append("tree.draft.move_node")
+            selected.append("tree_draft_move_node")
         elif any(term in text for term in ("parameter", "parameters", "param", "params")):
-            selected.append("tree.draft.update_node_params")
+            selected.append("tree_draft_update_node_params")
         elif (
             "node" in text
             and any(term in text for term in remove_terms)
             and not is_runtime_intent
         ):
-            selected.append("tree.draft.delete_node")
+            selected.append("tree_draft_delete_node")
         elif is_runtime_intent or any(term in text for term in add_terms):
-            selected.append("tree.draft.insert_node")
+            selected.append("tree_draft_insert_node")
         else:
-            selected.extend(_tools_matching(all_tools, ("tree.", "program.")))
+            selected.extend(_tools_matching(all_tools, ("tree_", "program_")))
 
     if not selected and is_scene_intent:
         if any(term in text for term in remove_terms):
-            selected.append("scene.draft.remove_objects")
+            selected.append("scene_draft_remove_objects")
         elif any(term in text for term in update_terms):
-            selected.append("scene.draft.update_object")
+            selected.append("scene_draft_update_object")
         elif any(term in text for term in add_terms):
-            selected.append("scene.draft.add_object")
+            selected.append("scene_draft_add_object")
         else:
-            selected.extend(_tools_matching(all_tools, ("scene.",)))
+            selected.extend(_tools_matching(all_tools, ("scene_",)))
 
     if not selected:
         return []
@@ -911,13 +1093,13 @@ def _looks_like_root_wrap(text: str, control_flow_terms: tuple[str, ...]) -> boo
 
 def _helper_tool_ids(tool_ids: list[str]) -> list[str]:
     helpers = (
-        "catalog.read",
-        "program.read",
-        "scene.inspect",
-        "deployment.capabilities.read",
-        "skills.read",
-        "status.read",
-        "program.validate",
+        "catalog_read",
+        "program_read",
+        "scene_inspect",
+        "deployment_capabilities_read",
+        "skills_read",
+        "status_read",
+        "program_validate",
     )
     known = set(tool_ids)
     return [tool_id for tool_id in helpers if tool_id in known]
