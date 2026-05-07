@@ -118,11 +118,12 @@ def build_agent_prompt(
     # clients that haven't been updated.
     node_catalog_raw = payload.get("nodeCatalog")
     node_catalog = node_catalog_raw if isinstance(node_catalog_raw, list) else []
-    # programSnapshot + sceneSnapshot (J, 2026-05-06): current state
-    # at request-time. The LLM uses these instead of round-tripping
-    # through program.read / scene.inspect on every request — saves
-    # ~30s/turn under thinking-on. Both None-able when no program /
-    # scene is loaded; the openclaw bridge accepts that gracefully.
+    # programSnapshot + sceneSnapshot (added 2026-05-06): current
+    # state at request-time. The LLM uses these instead of round-
+    # tripping through program.read / scene.inspect on every request
+    # — saves ~30s/turn under thinking-on. Both None-able when no
+    # program / scene is loaded; the openclaw bridge accepts that
+    # gracefully.
     program_snapshot_raw = payload.get("programSnapshot")
     program_snapshot = program_snapshot_raw if isinstance(program_snapshot_raw, dict) else None
     scene_snapshot_raw = payload.get("sceneSnapshot")
@@ -488,8 +489,7 @@ def normalize_chat_completions_response(
             msg = first.get("message")
             if isinstance(msg, dict):
                 content = msg.get("content")
-                if isinstance(content, str) and content.strip():
-                    message = content.strip()
+                message = _flatten_chat_content(content).strip()
     if not message:
         message = "OpenClaw gateway returned an empty assistant message."
         warnings.append("gateway response had no choices[0].message.content")
@@ -926,6 +926,50 @@ def _helper_tool_ids(tool_ids: list[str]) -> list[str]:
 def _dedupe_known(known_order: list[str], candidates: list[str]) -> list[str]:
     wanted = {candidate for candidate in candidates if candidate in known_order}
     return [tool_id for tool_id in known_order if tool_id in wanted]
+
+
+def _flatten_chat_content(content: Any) -> str:
+    """Flatten an OpenAI chat-completions ``message.content`` into plain text.
+
+    Modern chat models (and chat templates that emit Anthropic-style content
+    blocks) can return ``content`` as either:
+
+    * a flat string ``"hello"``,
+    * a list of typed blocks ``[{"type": "text", "text": "hello"}, ...]``, or
+    * (less commonly) a single block ``{"type": "text", "text": "hello"}``.
+
+    Without this helper the gateway path used to accept only the flat-string
+    form and fall through to an "empty assistant message" warning when the
+    model emitted blocks. Worse, downstream consumers that did ``str(content)``
+    surfaced the Python ``repr`` of the list in the assistant chat — visible
+    to the user as ``[{'type': 'text', 'text': '...'}]`` literal text. This
+    helper joins the ``text`` field of every text-typed block (skipping
+    other block kinds such as ``image_url`` that the chat surface cannot
+    render textually) so the caller always sees a clean string.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str):
+            return text
+        return ""
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            text = block.get("text")
+            # Accept text-typed blocks and untyped blocks that nonetheless
+            # carry a `text` field — some adapters drop the `type` field.
+            if isinstance(text, str) and (block_type in (None, "text") or block_type is None):
+                parts.append(text)
+        return "".join(parts)
+    return ""
 
 
 def _extract_message(data: Any) -> str:
