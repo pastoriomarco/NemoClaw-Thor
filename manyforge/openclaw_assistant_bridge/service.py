@@ -144,7 +144,7 @@ def _config_from_env() -> AdapterConfig:
         ),
         sandbox_user=os.environ.get("OPENCLAW_ASSISTANT_SANDBOX_USER", "sandbox"),
         agent=os.environ.get("OPENCLAW_ASSISTANT_AGENT", "main"),
-        timeout_s=float(os.environ.get("OPENCLAW_ASSISTANT_TIMEOUT_S", "180")),
+        timeout_s=float(os.environ.get("OPENCLAW_ASSISTANT_TIMEOUT_S", "120")),
         openclaw_bin=os.environ.get("OPENCLAW_ASSISTANT_BIN", "openclaw"),
         local=os.environ.get("OPENCLAW_ASSISTANT_LOCAL", "false").lower()
         in {"1", "true", "yes"},

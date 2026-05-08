@@ -85,7 +85,7 @@ MANYFORGE_ASSISTANT_ENDPOINT_URL=http://127.0.0.1:8200/v1/manyforge/assistant
 | `OPENCLAW_ASSISTANT_CONTAINER` | `agent` | Sandbox container name |
 | `OPENCLAW_ASSISTANT_CLUSTER_CONTAINER` | `openshell-cluster-nemoclaw` | Docker container that hosts k3s/kubectl |
 | `OPENCLAW_ASSISTANT_AGENT` | launcher default: `manyforge-composer`; service default: `main` | OpenClaw agent id |
-| `OPENCLAW_ASSISTANT_TIMEOUT_S` | `180` | Default per-request agent timeout |
+| `OPENCLAW_ASSISTANT_TIMEOUT_S` | `120` | Default per-request OpenClaw `--timeout`. Cascade is layered with outward buffers (each outer layer ≥ inner + 5s) to avoid timeout-collision races and give in-flight debug visibility: OpenClaw 120s → bridge waits OpenClaw + 5s internal pad = 125s → Composer `--assistant-timeout-s 130` → smoke harness `TIMEOUT_S 140`. The +10s harness buffer also leaves time to capture logs while a slow-but-still-running request settles before any outer layer cuts the connection. |
 | `OPENCLAW_ASSISTANT_LOCAL` | launcher default: `true`; service default: `false` | Add `--local` to `openclaw agent` when set. The launcher defaults this on because the validated Thor path uses the sandbox-local OpenClaw runner. |
 | `OPENCLAW_ASSISTANT_THINKING` | `off` | Passed as `openclaw agent --thinking ...`. The Phase 2 route defaults to `off` because local Omni otherwise spends the Composer provider timeout even on trivial prompts. |
 | `OPENCLAW_ASSISTANT_AUTO_TOOL_WINDOW` | `true` | When enabled, the adapter writes a short-lived sandbox tool-window file so the ManyForge MCP wrapper exposes a request-sized tool window for obvious tree/scene edits. Broad or ambiguous prompts fail open to the full mode surface. |

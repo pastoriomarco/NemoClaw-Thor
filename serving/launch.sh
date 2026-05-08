@@ -121,7 +121,16 @@ prepare_thor_launch_profile() {
             # with the Qwen3.6 manyforge profile (0.32 + 0.25 = 0.57).
             # Gated repo — HF_TOKEN required (start-duo.sh auto-reads it).
             THOR_LAUNCH_MODEL_SOURCE="nvidia/Cosmos-Reason2-8B"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.25}"
+            # 2026-05-08: bumped 0.25 -> 0.35 to make 256K KV pool viable on
+            # Thor (paired with config.sh THOR_TARGET_MAX_MODEL_LEN=262144).
+            # The OpenClaw lane needs the larger context to support multi-turn
+            # Composer-assistant sessions without hitting the gateway's
+            # preemptive overflow guard (~90% of context window). Watch the
+            # vLLM boot log for "GPU KV cache size: NNN tokens" to see what
+            # the slot count actually allocates after this change — adjust
+            # THOR_TARGET_MAX_NUM_SEQS in config.sh if there's room or
+            # too-tight headroom.
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.35}"
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--attention-backend" "flashinfer"

@@ -326,12 +326,25 @@ resolve_model_profile() {
             ;;
         cosmos-reason2-8b)
             # NVIDIA Cosmos Reason 2 (8B), Qwen3-VL-8B base, VLM physical-AI reasoner.
-            # Model supports up to 262144 tokens natively (text_config.max_position_embeddings).
-            # Sized for 64K context to accommodate OpenClaw's ~16K system prompt + 16K output
-            # (32K ceiling was too tight: prompt+output overflows). FP8 KV keeps footprint low.
+            # Native context: 262144 tokens (text_config.max_position_embeddings) —
+            # default RoPE, no scaling tricks needed.
+            #
+            # 2026-05-08 bump: max_model_len 65536 -> 262144, gpu_mem_util 0.25 -> 0.35
+            # to support long Composer-assistant sessions on the OpenClaw lane. The
+            # OpenClaw gateway emits "Context overflow: prompt too large" preemptively
+            # at ~90% of the model's context window (msg-chars > maxContextChars =
+            # contextWindowTokens × 4 × 0.9). At 64K that was ~236 KB and the per-turn
+            # ManyForge envelope + history hit it after ~3 turns. At 256K it's ~944 KB,
+            # giving ~12 turns of headroom before the guard fires. THOR_TARGET_MAX_NUM_SEQS
+            # left auto-determined (vLLM divides the KV pool by max_model_len at boot):
+            # log the actual value vLLM picks at first start, tune from there. Empirical
+            # (from prior 64K runs at gpu_mem_util=0.25): KV pool was ~6.4 GiB ≈ 93K KV
+            # slots. At 256K + 0.35 budget the slot count will shrink (more activation
+            # overhead per long-context attention) — single concurrent long session is
+            # the expected workload regardless.
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="cosmos-reason2-8b"
-            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="3"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"

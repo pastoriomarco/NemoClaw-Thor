@@ -1008,3 +1008,243 @@ enough detail for the model to fill in args without intermediate
 reads — true on Cosmos-8B for P1+P2 but a coin-flip on the
 inline-context P3-style prompts. For arbitrary user prompts in
 production, prefer OpenClaw.
+
+---
+
+## 9. 2026-05-08 follow-up: 256K context + envelope reduction
+
+Two issues surfaced after the §8 lane-parity work landed:
+
+1. **OpenClaw's preemptive context-overflow guard** fires at
+   `~ contextWindow_tokens × 4 × 0.9` chars. At Cosmos-8B's old 64K
+   served context the guard threshold was ~236 KB; cumulative
+   conversation history hit it after ~3 turns in the Composer UI
+   (the `/api/assistant/chat` endpoint reuses one
+   `conversationId` across turns within a session, so OpenClaw
+   appends every prior user message + assistant reply to the
+   request it sends to vLLM).
+2. The per-turn ManyForge envelope built by
+   `openclaw_assistant_bridge/adapter.py:build_agent_prompt` was
+   ~60 KB — `nodeCatalog` with full per-node parameter schemas,
+   `programSnapshot` and `sceneSnapshot` as raw indented JSON
+   dumps, full `allowedTools` descriptions duplicating what was
+   already in the OpenAI `tools[]` array, plus a 12-rule RULES
+   block that mostly duplicated the workspace AGENTS.md content.
+
+### 9.1 Cosmos profile bump to 256K context
+
+`serving/config.sh` and `serving/launch.sh` for the
+`cosmos-reason2-8b` profile:
+
+| Knob | 2026-05-07 | 2026-05-08 | Delta |
+|---|---|---|---|
+| `max_model_len` | 65 536 | **262 144** | 4× — full native window |
+| `gpu_memory_utilization` | 0.25 | **0.35** | room for the larger KV pool |
+| `kv_cache_dtype` | `fp8` | (unchanged) | |
+| `max_num_seqs` | 3 | (unchanged — auto-fits at boot) | |
+
+**vLLM-reported KV pool at first boot with the new settings:**
+`GPU KV cache size: 267,120 tokens` (visible in the boot log at
+`kv_cache_utils.py:1708`). With `max_num_seqs=3` that's ~89 K KV
+tokens per sequence — enough headroom for one 64K conversation +
+two shorter ones, but not three concurrent maxed-out 256K
+sessions. Single-user Composer use (one conversation) effectively
+gets the full 267 K pool.
+
+OpenClaw's preemptive guard threshold rises from ~236 KB →
+**~944 KB**, giving roughly 12× the safe-turn count assuming
+fixed per-turn envelope size.
+
+### 9.2 ManyForge envelope reduction
+
+`openclaw_assistant_bridge/adapter.py:build_agent_prompt` rewritten
+to project state into compact structured forms instead of dumping
+raw JSON. Same algorithm as
+`manyforge_assistant_bridge.bridge._build_program_summary` /
+`_build_scene_summary` (added in this session for the direct lane);
+ported here so both lanes get the benefit.
+
+Concretely:
+
+- **`programSnapshot`** (~15 KB raw → ~2 KB projected): always-
+  complete `nodes_index` of every node name in the tree, full
+  detail for the first 64 nodes (DFS) + every node whose name
+  appears in the user prompt + their ancestors (so
+  prompt-referenced nodes are reachable from the projected tree),
+  stub form for the rest with names preserved.
+- **`sceneSnapshot`** (~6 KB raw → ~1 KB projected): always-
+  complete `object_ids` index, full detail for the first 64
+  objects + any prompt-referenced objects, with always-null
+  sibling shape fields dropped (`sphere_radius_m`, `cylinder_*`
+  etc. when `shape.type=box`).
+- **`nodeCatalog`** (~25 KB raw → ~2 KB projected): id + kind +
+  1-line description (160-char cap). The full per-node
+  `parameters[]` JSON-Schema is already advertised in the OpenAI
+  `tools[]` array on the same chat-completion request, so
+  duplicating it in the user message was pure waste.
+- **`skillCatalog`** (~2 KB raw → ~0.4 KB projected): same shape.
+- **`allowedTools`** (~7 KB raw → ~0.5 KB id-only): id list only.
+  Full descriptions live in `tools[]`.
+- **`visibleMcpTools`** dropped — redundant with `allowedTools`.
+- **RULES block** trimmed from 12 long-form rules (~3 KB) to 6
+  high-leverage rules (~1 KB). The dropped 6 rules (catalog ids
+  immutable, name vs id, mangling, on-failed-call read structured
+  fields, etc.) are already in
+  `agent-skills/manyforge-composer/workspace-AGENTS.md` (which
+  OpenClaw injects into the system prompt every turn). The 6
+  retained rules cover: action-shaped requests require a tool
+  call, `wrap_node` for root-replacement, snapshots = live state,
+  `result.delta` interpretation, two-failure stop condition,
+  namespace decision precedence — these have no equivalent in
+  workspace AGENTS.md so dropping them entirely would risk
+  regression.
+
+**Per-turn user message: ~60 KB → ~10 KB** (estimated; subject to
+real-prompt content). The OpenAI `tools[]` array is unchanged
+(~65 KB); the system prompt is unchanged (~16 KB). Total per-turn
+wire cost ~141 KB → ~91 KB.
+
+### 9.3 Workspace stub files
+
+`setup-manyforge-assistant.sh` Step 5b/6 now writes empty stub
+files at `/sandbox/.openclaw/workspace/{SOUL,IDENTITY,USER}.md`.
+OpenClaw's runtime checks for these convention files and either
+includes their content or emits a `[MISSING] Expected at: …`
+placeholder line in the system prompt (~80 chars per missing
+file). We don't author any of those four files, so the
+placeholders were pure noise. The empty stubs replace the
+placeholder with a near-zero-cost include. Saves ~300 chars of
+system prompt per turn.
+
+### 9.4 Cumulative effect
+
+| Layer | Before | After | Notes |
+|---|---|---|---|
+| OpenClaw system prompt | ~16 KB | ~15.7 KB | empty stubs save ~300 chars |
+| ManyForge user envelope | ~60 KB | ~10 KB | structured projections + dropped duplicate blocks |
+| OpenAI `tools[]` array | ~65 KB | ~65 KB | unchanged |
+| **Per-turn wire cost** | **~141 KB** | **~91 KB** | **−35%** |
+
+OpenClaw guard threshold = ~944 KB (256K context). Estimated safe
+turn count: 944 / 91 ≈ **10 turns** of cumulative history before
+the preemptive overflow fires, vs ~3 turns at the prior 64K +
+60KB-envelope configuration. (In practice OpenClaw's tool-result
+truncation and the natural prompt+response variance widen this
+considerably; the headline is that the safe-turn count went from
+"a few" to "many".)
+
+## 10. 2026-05-08 ablation: which envelope drops are safe?
+
+The §9 reductions were applied as a single batch. A targeted
+ablation followed to identify which of those drops were pure
+duplication and which were load-bearing for behavior. Two smoke
+runs on the OpenClaw lane (3 prompts × 3 rounds = 9 cells each):
+
+### 10.1 Test prompts
+
+| Id | Prompt | Type |
+|---|---|---|
+| P1 | "add a repeat node as root" | tree wrap-root |
+| P2 | "add a box of size 1.0, 0.02, 0.25 in position 0.0, -0.15, 0.125" | scene add |
+| P3 | "add an upsert node at the end of pick_and_place sequence that places graspable in the same position" | tree insert (runtime collision-object kind) |
+
+### 10.2 Smoke #1 — drop `allowedTools` / `allowedNodes` / `allowedSkills` together
+
+All three id-only allowlist fields removed from the per-turn
+envelope, on the hypothesis that:
+
+- `allowedTools` ids duplicate the canonical `tools[]` array.
+- `allowedNodes` ids ⊂ `nodeCatalog[*].id`.
+- `allowedSkills` ids ⊂ `skillCatalog[*].id`.
+
+Each field's nominal source was already present in either the
+chat-completion `tools[]` array or the same envelope.
+
+| Round | P1 (wrap-root) | P2 (scene add) | P3 (tree insert) |
+|---|---|---|---|
+| R1 | ❌ 504 timeout (60s) | ✅ tool fired | ✅ tool fired (after `catalog_read` recovery) |
+| R2 | ❌ model "validation failed", gave up | ✅ tool fired | ✅ tool fired |
+| R3 | ❌ only `program_read` fired, gave up | ✅ tool fired | ✅ tool fired |
+
+**Effective: 6/9. P1 collapsed 3/3 → 0/3.** Failure mode:
+on a `tree_draft_wrap_node` validation error the model treated
+the tool as "not callable" and emitted prose without retrying.
+Sample R3 P1 answer: *"Despite two failed attempts, I need to
+determine the correct approach. The error indicates issu[es]"* —
+gave up before recovery.
+
+### 10.3 Smoke #2 — restore `allowedTools` only + restore full 12-rule block
+
+Surgical restore: `allowedNodes` and `allowedSkills` stayed
+dropped (no observed regression — they are derivable from
+the catalog dicts the model already reads). The condensed
+6-rule block was reverted to the original 12-rule block; the
+4 rules I had marked "covered by workspace AGENTS.md" were
+re-added in place rather than migrated to `AGENTS.md` to keep
+single-file blast radius and avoid touching the canonical
+workspace document used by both lanes.
+
+| Round | P1 (wrap-root) | P2 (scene add) | P3 (tree insert) |
+|---|---|---|---|
+| R1 | ✅ 22.1s — *"repeat_root added, wrapping pick-and-place"* | ✅ 25.6s | ✅ 43.3s |
+| R2 | ✅ 15.5s — *"repeat node as new root, sequence runs three times"* | ✅ 18.5s | ✅ 39.3s |
+| R3 | ✅ 15.8s — *"repeat node as root, num_cycles=-1"* | ✅ 20.0s | ✅ 48.1s |
+
+**Effective: 9/9** with affirmative answer texts and concrete
+mutation descriptions (specific names, dimensions, positions).
+
+### 10.4 What the ablation proved
+
+| Element | Status | Verdict |
+|---|---|---|
+| `allowedSkills` (id list) | dropped | Pure duplication — derivable from `skillCatalog[*].id`. No regression. |
+| `allowedNodes` (id list) | dropped | Pure duplication — derivable from `nodeCatalog[*].id`. No regression. |
+| `visibleMcpTools` | dropped | Pure duplication of `tools[]` names. No regression (not re-tested in this round, prior trials showed safe). |
+| `allowedTools` (id list) | **restored** | NOT pure duplication despite looking like one. Empirically required: model gives up faster on validation errors without it. Hypothesis: proximity of an id list at the bottom of the user message (next to RULES + user_request) is a stronger "you-can-call-these-right-now" cue than the schema-laden `tools[]` array further away. |
+| `nodeCatalog` per-node `parameters[]` | kept dropped | NOT pure duplication, but recoverable: P3 hits a 400 on first try, model calls `catalog_read`, retries successfully. Costs ~5–15s of extra latency. Acceptable trade for ~28 KB envelope savings. |
+| `skillCatalog` schemas | kept dropped | Same pattern. |
+| `programSnapshot` / `sceneSnapshot` raw → projections | kept | Lossy compression with `program_read` / `scene_inspect` fallback; no regression observed. |
+| RULES block: 12 rules | **restored** | Not strictly required (some of the 4 condensed-out rules ARE in workspace AGENTS.md), but the proximity to RULES + user_request mirrors the `allowedTools` finding. ~1 KB cost is negligible at 256K context; the restoration is a safety margin against a potential repeat of the P1 "give up" failure mode. |
+
+### 10.5 Operational rule of thumb
+
+Per-turn envelope reductions that compress *information* (raw
+JSON dumps → structured projections, full schemas → id+description
+projections) are safe — the missing detail is reachable through
+existing read/catalog tools.
+
+Per-turn envelope reductions that drop *redundant cues at the
+attention-relevant location* (id lists adjacent to RULES + the
+user's request, behavior-rule restatements adjacent to the user's
+request) are NOT safe even when the same content lives elsewhere
+in the prompt. The model's attention to its callable surface and
+its rules is sensitive to placement, not just presence.
+
+### 10.6 Pre-existing test failures fixed
+
+While restoring, the 4 long-failing `mcp_allowed_tools_*` tests
+were repaired. Root cause: test fixtures used the pre-rename
+dotted tool-id format (`tree.draft.wrap_node`) but the production
+code path uses the post-rename underscored format
+(`tree_draft_wrap_node`). The fixtures and assertions were
+updated in lockstep. Adapter test suite is now **33/33 passing**.
+
+### 10.7 Final envelope shape (post-2026-05-08)
+
+| Element | State |
+|---|---|
+| `requestId`, `assistantMode`, `conversationId`, `runtime` | unchanged |
+| `allowedTools` (id list) | restored |
+| `allowedNodes` | dropped |
+| `allowedSkills` | dropped |
+| `visibleMcpTools` | dropped |
+| `nodeCatalog` (id+kind+description) | projected |
+| `skillCatalog` (id+description) | projected |
+| `programSnapshot` (structured) | projected |
+| `sceneSnapshot` (structured) | projected |
+| RULES block (12 rules) | full |
+
+Per-turn envelope: ~12–14 KB (vs ~10 KB in §9.4 estimate, vs
+~60 KB pre-reduction). Trade-off accepted: +2–4 KB for the
+load-bearing restorations restored P1 reliability from 0/3 to
+3/3.

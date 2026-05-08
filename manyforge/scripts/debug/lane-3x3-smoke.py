@@ -32,7 +32,7 @@ PROMPTS = [
            "start, with the same original size"),
 ]
 ROUNDS = 3
-TIMEOUT_S = 90.0  # bridge-budget is 60s; harness window slightly larger to catch races
+TIMEOUT_S = 140.0  # cascade: OpenClaw 120 → bridge effective 125 → Composer 130 → harness 140 (10s settle/debug buffer)
 
 
 def _switch_composer(provider: str) -> None:
@@ -51,7 +51,7 @@ def _switch_composer(provider: str) -> None:
         "-w", "/workspace",
         "-e", f"MANYFORGE_ASSISTANT_PROVIDER={provider}",
         "-e", f"MANYFORGE_ASSISTANT_ENDPOINT_URL={endpoint}",
-        "-e", "MANYFORGE_ASSISTANT_TIMEOUT_S=60",
+        "-e", "MANYFORGE_ASSISTANT_TIMEOUT_S=130",
         "manyforge-dev:latest",
         "bash", "-lc",
         f"python -m manyforge_composer "
@@ -59,7 +59,7 @@ def _switch_composer(provider: str) -> None:
         f"--host 0.0.0.0 --port 9000 --hmi-port 8081 --mcp-http "
         f"--assistant-provider {provider} "
         f"--assistant-endpoint {endpoint} "
-        f"--assistant-timeout-s 60",
+        f"--assistant-timeout-s 130",
     ], capture_output=True, timeout=30, check=True)
     for _ in range(15):
         try:

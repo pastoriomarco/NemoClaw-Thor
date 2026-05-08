@@ -369,7 +369,20 @@ fi
 WS_B64="$(base64 -w0 < "${WORKSPACE_TMP}")"
 "${KEX_USER[@]}" "printf %s '${WS_B64}' | base64 -d > ${WORKSPACE_DIR_REMOTE}/AGENTS.md" >/dev/null
 "${KEX_USER[@]}" "rm -f ${WORKSPACE_DIR_REMOTE}/TOOLS.md" >/dev/null
-ok "installed AGENTS.md into ${WORKSPACE_DIR_REMOTE} (and removed any stale TOOLS.md)"
+# Empty workspace stub files (2026-05-08): suppress OpenClaw's
+# "[MISSING] Expected at: ..." placeholder lines for SOUL.md /
+# IDENTITY.md / USER.md. OpenClaw's runtime checks for these
+# convention files in the workspace and either includes their
+# content in the system prompt or emits a MISSING placeholder
+# (~80 chars per missing file). We don't author any of those four
+# files, so the placeholders are pure prompt noise. An empty stub
+# (single "<!-- intentionally empty -->" line) is enough to
+# replace the MISSING placeholder with a near-zero-cost include.
+# Saves ~300 chars of system prompt per turn × every turn.
+for stub in SOUL.md IDENTITY.md USER.md; do
+  "${KEX_USER[@]}" "test -e ${WORKSPACE_DIR_REMOTE}/${stub} || echo '<!-- intentionally empty: stub by setup-manyforge-assistant.sh -->' > ${WORKSPACE_DIR_REMOTE}/${stub}" >/dev/null
+done
+ok "installed AGENTS.md into ${WORKSPACE_DIR_REMOTE} (+ empty SOUL/IDENTITY/USER stubs; removed any stale TOOLS.md)"
 "${KEX_USER[@]}" "ls -la ${WORKSPACE_DIR_REMOTE}/" 2>&1 | sed 's/^/    /'
 
 step "Step 6/6: enable OpenClaw internal reasoning loop on the active model"
@@ -457,7 +470,7 @@ Setup complete.
 Next steps:
   - Verify the agent sees the manyforge MCP tools:
       kubectl exec -n openshell ${SANDBOX} -c agent -- su sandbox -c \\
-        "openclaw agent --agent manyforge-composer --message 'List the manyforge MCP tools you can call. Reply with a JSON array of tool names.' --json --timeout 60"
+        "openclaw agent --agent manyforge-composer --message 'List the manyforge MCP tools you can call. Reply with a JSON array of tool names.' --json --timeout 120"
   - Composer is now wired to use the openclaw lane by default
     (demo-assistant-known-good.sh ASSISTANT_PROVIDER=openclaw). Run the
     launcher's 'start' or 'restart-bridge' to bring the openclaw bridge
