@@ -1,3 +1,31 @@
+"""Adapter unit tests.
+
+The bridge has two transports, selected by the `OPENCLAW_ASSISTANT_USE_GATEWAY`
+env var (`AdapterConfig.use_gateway`):
+
+  HOT PATH — gateway HTTP (production default):
+    build_agent_prompt(payload, mcp_allowed_tools=None)
+      → build_gateway_chat_completions_command()
+      → curl POST to OpenClaw's chat-completions endpoint
+      → parse_chat_completions_response()
+      → normalize_chat_completions_response()
+    Plus the structured projections that build_agent_prompt calls into:
+      _build_program_summary, _build_scene_summary,
+      _project_node_catalog, _project_skill_catalog.
+
+  COLD PATH — CLI shell-out (fallback transport):
+    build_agent_prompt(payload, mcp_allowed_tools=<inferred window>)
+      → build_openclaw_command() (docker exec … kubectl exec … openclaw agent)
+      → parse_openclaw_json() (extract structured JSON from stdout)
+      → normalize_agent_response()
+    The tool-window inference (`mcp_allowed_tools_from_payload`) only fires
+    on this path.
+
+Tests are grouped below. The hot-path block is the one that has to stay
+correct for production OpenClaw + Cosmos-Reason2-8B traffic; the cold-path
+block guards the alternate transport so it remains usable.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +39,7 @@ from openclaw_assistant_bridge.adapter import (
     mcp_allowed_tools_from_payload,
     normalize_agent_response,
     normalize_chat_completions_response,
+    parse_chat_completions_response,
     parse_openclaw_json,
 )
 
@@ -93,6 +122,11 @@ def _rich_payload(message: str) -> dict:
     }
 
 
+# ============================================================================
+# HOT PATH — gateway transport (production)
+# ============================================================================
+
+
 def test_build_prompt_includes_mode_tools_and_user_message() -> None:
     prompt = build_agent_prompt(_payload())
     assert "manyforge-composer" in prompt
@@ -123,6 +157,232 @@ def test_build_prompt_filters_allowed_tool_ids_to_visible_window() -> None:
     # observed in smoke; ids are derivable from the catalogs).
     assert "allowedNodes" not in prompt
     assert "allowedSkills" not in prompt
+
+
+def _rich_payload_with_snapshots(message: str = "add a box of size 1 0.02 0.5") -> dict:
+    """Payload that includes programSnapshot + sceneSnapshot, like production.
+
+    Composer always sends both snapshots on assistant requests once a
+    program is loaded. The structured projections in `build_agent_prompt`
+    operate on this shape; tests that omit snapshots miss those code paths.
+    """
+    payload = _rich_payload(message)
+    payload["programSnapshot"] = {
+        "programTreeHash": "abc123",
+        "program": {
+            "name": "pick_and_place_demo",
+            "description": "A demo program",
+            "tree": {
+                "name": "pick_and_place",
+                "kind": "sequence",
+                "params": {},
+                "children": [
+                    {"name": "approach", "kind": "move_to_pose", "params": {}, "children": []},
+                    {"name": "graspable_pickup", "kind": "pick_object", "params": {}, "children": []},
+                ],
+            },
+            "parameters": [{"name": "speed", "type": "float"}],
+            "blackboard_keys": ["target_pose"],
+        },
+    }
+    payload["sceneSnapshot"] = {
+        "robot": {"id": "ur10e", "links": ["base_link", "tool0"]},
+        "objects": [
+            {
+                "id": "graspable",
+                "shape": {"type": "box", "box_dims": [0.05, 0.05, 0.05]},
+                "pose": {"position": [0.0, 0.0, 0.0]},
+            },
+            {
+                "id": "ground",
+                "shape": {"type": "box", "box_dims": [2.0, 2.0, 0.01]},
+                "pose": {"position": [0.0, 0.0, 0.0]},
+            },
+        ],
+    }
+    payload["nodeCatalog"] = [
+        {"id": "sequence", "kind": "sequence",
+         "description": "Run children in order",
+         "parameters": [{"name": "memory", "type": "bool"}]},
+        {"id": "upsert_collision_object", "kind": "upsert_collision_object",
+         "description": "Add or replace a collision object at runtime",
+         "parameters": [
+             {"name": "object_id", "type": "string"},
+             {"name": "pose", "type": "Pose"},
+         ]},
+    ]
+    payload["skillCatalog"] = [
+        {"id": "manyforge-composer", "description": "Composer authoring skill"},
+    ]
+    return payload
+
+
+def test_build_prompt_keeps_complete_node_index_and_object_ids_index() -> None:
+    """Structured projections must keep ALL names reachable as indexes.
+
+    The detail window is bounded (first-N + prompt-referenced), but the
+    index lists are unconditional — the model must always be able to
+    reference any node-name or object-id by string in a later tool call.
+    """
+    prompt = build_agent_prompt(_rich_payload_with_snapshots())
+    # All program tree node names appear at least somewhere in the index.
+    assert "pick_and_place" in prompt
+    assert "approach" in prompt
+    assert "graspable_pickup" in prompt
+    # All scene object ids appear.
+    assert "graspable" in prompt
+    assert "ground" in prompt
+
+
+def test_build_prompt_promotes_prompt_referenced_objects_to_detail() -> None:
+    """When the user prompt references a specific object, its detail must
+    appear in `sceneSnapshot.objects` even if it would have been outside
+    the first-N detail window."""
+    prompt = build_agent_prompt(
+        _rich_payload_with_snapshots("update graspable pose to (1.0, 0.0, 0.0)")
+    )
+    # Detail for `graspable` must appear (it is referenced by name in the
+    # user message), beyond just the id index.
+    assert "graspable" in prompt
+
+
+def test_build_prompt_node_catalog_uses_projected_shape() -> None:
+    """The nodeCatalog projection drops per-node JSON-Schema parameters[]
+    in favor of id+kind+description (saves ~28 KB envelope). Param schemas
+    live in the OpenAI tools[] array on the same chat-completion request."""
+    prompt = build_agent_prompt(_rich_payload_with_snapshots())
+    # The `kind` and `description` fields are kept.
+    assert "upsert_collision_object" in prompt
+    assert "Add or replace a collision object" in prompt
+    # The full per-node parameters[] schemas are NOT emitted into the
+    # nodeCatalog block. (`object_id` may still appear in RULES rule 1
+    # which mentions params.object_id literally — so check for the
+    # JSON-Schema-shaped key that only appears in raw param schemas.)
+    assert '"type": "Pose"' not in prompt
+
+
+def test_parse_chat_completions_response_handles_pure_json() -> None:
+    """Curl returns a single JSON document on success."""
+    body = json.dumps({
+        "id": "chatcmpl-abc",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+    })
+    parsed, warnings = parse_chat_completions_response(body)
+    assert parsed is not None
+    assert parsed["choices"][0]["message"]["content"] == "ok"
+    assert warnings == []
+
+
+def test_parse_chat_completions_response_extracts_from_noisy_output() -> None:
+    """Curl can prepend warning lines (e.g. SSL deprecation) before JSON.
+    The parser must locate the first balanced JSON object."""
+    body = (
+        "Warning: NSS deprecation\n"
+        "* using HTTP/1.1\n"
+        + json.dumps({"choices": [{"message": {"content": "ok"}}]})
+        + "\n"
+    )
+    parsed, warnings = parse_chat_completions_response(body)
+    assert parsed is not None
+    assert parsed["choices"][0]["message"]["content"] == "ok"
+
+
+def test_parse_chat_completions_response_returns_none_for_empty() -> None:
+    parsed, warnings = parse_chat_completions_response("")
+    assert parsed is None
+    assert any("empty" in w for w in warnings)
+
+
+def test_parse_chat_completions_response_returns_none_for_garbage() -> None:
+    parsed, warnings = parse_chat_completions_response("not json at all")
+    assert parsed is None
+    assert any("could not parse" in w for w in warnings)
+
+
+def test_normalize_chat_completions_response_extracts_assistant_message() -> None:
+    """Happy path: pull `choices[0].message.content` into the envelope's
+    `message` field. toolCalls/proposals are empty because the gateway
+    runs the tool loop internally — Composer's state delta is the
+    authoritative mutation signal."""
+    response = normalize_chat_completions_response(
+        payload=_payload(),
+        response_json={
+            "choices": [{"message": {"role": "assistant",
+                                     "content": "Program root is pick_and_place."}}],
+        },
+        stdout="ignored",
+    )
+    assert response["message"] == "Program root is pick_and_place."
+    assert response["toolCalls"] == []
+    assert response["proposals"] == []
+    assert response["draftMutated"] is False
+    assert response["requiresReview"] is True
+
+
+def test_normalize_chat_completions_response_flattens_content_blocks() -> None:
+    """Some chat templates emit `content` as an array of typed blocks
+    (e.g. `[{"type": "text", "text": "..."}]`) rather than a string.
+    `_flatten_chat_content` must collapse that to plain text."""
+    response = normalize_chat_completions_response(
+        payload=_payload(),
+        response_json={
+            "choices": [{"message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Wrapped the root."},
+            ]}}],
+        },
+        stdout="ignored",
+    )
+    assert response["message"] == "Wrapped the root."
+
+
+def test_normalize_chat_completions_response_handles_error_object() -> None:
+    """vLLM/OpenClaw can return `{"error": {"type": "...", "message": "..."}}`
+    instead of choices on failure (e.g. context_length_exceeded). The
+    normalizer must surface the error as a structured warning + message."""
+    response = normalize_chat_completions_response(
+        payload=_payload(),
+        response_json={"error": {"type": "context_length_exceeded",
+                                 "message": "prompt too large"}},
+        stdout="ignored",
+    )
+    assert "prompt too large" in response["message"]
+    assert response["error"]["code"] == "context_length_exceeded"
+    assert any("gateway error" in w for w in response["warnings"])
+
+
+def test_normalize_chat_completions_response_handles_empty_response() -> None:
+    """When parse returns None (empty/garbage stdout), normalize must
+    still produce a valid envelope with a fallback message + warning."""
+    response = normalize_chat_completions_response(
+        payload=_payload(),
+        response_json=None,
+        stdout="",
+        parse_warnings=["gateway returned empty body"],
+    )
+    assert response["requiresReview"] is True
+    assert "no parseable response" in response["message"]
+    assert any("empty body" in w for w in response["warnings"])
+
+
+def test_normalize_chat_completions_response_filters_observability_leakage() -> None:
+    """If the model echoes an OpenClaw scheduler diagnostic (e.g.
+    'stuck session', 'lane task error'), the message is replaced with a
+    neutral fallback and a structured warning is surfaced."""
+    response = normalize_chat_completions_response(
+        payload=_payload(),
+        response_json={
+            "choices": [{"message": {"role": "assistant",
+                                     "content": "I detected a stuck session in your request."}}],
+        },
+        stdout="ignored",
+    )
+    assert "stuck session" not in response["message"]
+    assert any("openclaw_observability_leakage" in w for w in response["warnings"])
+
+
+# ============================================================================
+# COLD PATH — CLI shell-out transport (alternate, only when use_gateway=false)
+# ============================================================================
 
 
 def test_build_command_targets_sandbox_openclaw_agent() -> None:
@@ -344,9 +604,13 @@ def test_text_fallback_when_openclaw_json_missing() -> None:
     assert "Could not parse JSON" in response["warnings"]
 
 
-# -----------------------------------------------------------------------
-# Gateway-lane: session isolation, revision guards, observability filter
-# -----------------------------------------------------------------------
+# ============================================================================
+# HOT PATH (continued) — session keys, gateway command, observability filter
+# ============================================================================
+# Session-key derivation, gateway HTTP command construction, and the
+# observability leakage filter all run on the gateway transport. They live
+# at the bottom of the file because they post-date the other HOT PATH
+# tests; logically they belong together with them.
 
 
 def test_session_key_includes_conversation_id() -> None:
