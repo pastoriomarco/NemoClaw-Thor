@@ -253,8 +253,8 @@ curl -sS -X POST http://127.0.0.1:9000/api/assistant/chat \
 |---|---|
 | `manyforge/policies/manyforge-composer.preset.yaml` | SSRF L7 policy + binary allow-list |
 | `manyforge/setup-manyforge-assistant.sh` | MCP server config (proxy envs) + agent profile (`alsoAllow: bundle-mcp`) + workspace file install |
-| `manyforge/agent-workspace/AGENTS.md` | Role + vocabulary lock |
-| `manyforge/agent-workspace/TOOLS.md` | Tool routing + mangling rule + anti-patterns |
+| `<manyforge-repo>/agent-skills/manyforge-composer/workspace-AGENTS.md` (in the sibling `manyforge` repo) | Canonical workspace AGENTS.md — role, vocabulary, tool surface, long-form guardrails. The provisioner composes the in-sandbox `workspace/AGENTS.md` from this canonical file plus the optional overlay below. |
+| `manyforge/agent-workspace/openclaw-overlay.md` (this repo, optional) | OpenClaw-specific overlay appended to the canonical workspace AGENTS.md by `setup-manyforge-assistant.sh`. Empty/absent is fine. |
 | `manyforge/openclaw_assistant_bridge/adapter.py` | Session-key derivation + leakage filter |
 | `dev_ws/src/manyforge/examples/*.deployment.yaml` (different repo) | `assistant_modes.<mode>.catalog.tools` — the only source of truth for what the agent actually sees |
 

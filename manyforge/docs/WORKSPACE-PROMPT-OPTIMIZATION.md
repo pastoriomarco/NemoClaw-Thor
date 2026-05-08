@@ -170,11 +170,13 @@ caveat.
 
 ### Final live state: v5 restored
 
-After v6 results landed we restored v5 as the live workspace and the
-source-of-truth files in
-`manyforge/agent-workspace/AGENTS.md` and `TOOLS.md`. v5 satisfies
-the "no examples" preference, has v3-equivalent reliability, and
-keeps the categorical guidance that v6 lost.
+After v6 results landed we restored v5 as the live workspace. The
+canonical source-of-truth file is now in the sibling `manyforge` repo
+at `agent-skills/manyforge-composer/workspace-AGENTS.md` (with the
+optional NemoClaw overlay at `manyforge/agent-workspace/openclaw-overlay.md`
+in this repo); the provisioner composes the in-sandbox file from
+those. v5 satisfies the "no examples" preference, has v3-equivalent
+reliability, and keeps the categorical guidance that v6 lost.
 
 ---
 

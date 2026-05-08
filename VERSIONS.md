@@ -76,14 +76,15 @@ No semver yet — phase-tagged as work lands.
 | Phase | Status | Landed | Notes |
 |---|---|---|---|
 | **Phase 1 — MCP integration** | shipped | 2026-05-04 (`1136a16`) | Custom egress preset for `host.openshell.internal:9000`; idempotent provisioner stages the `manyforge-composer` skill and registers it as an MCP server in the `my-assistant` sandbox |
-| Phase 2 — OpenClaw assistant-provider adapter | experimental live route validated | 2026-05-05 | `manyforge/openclaw_assistant_bridge/` speaks the Composer assistant-provider HTTP contract and invokes `openclaw agent` in `my-assistant`; Composer chat → OpenClaw → mode-scoped MCP → `/api/assistant/bridge/tools/{toolId}` was live-smoked with `catalog.read` and `tree.draft.wrap_node`. Direct vLLM remains the known-good default until the A/B harness qualifies reliability and latency. |
+| Phase 2 — OpenClaw assistant-provider adapter | **production default** | first live: 2026-05-05; default flip: 2026-05-07 | `manyforge/openclaw_assistant_bridge/` speaks the Composer assistant-provider HTTP contract and dispatches into the OpenClaw runtime in `my-assistant`. Composer chat → OpenClaw gateway → mode-scoped MCP → `/api/assistant/bridge/tools/{toolId}` is the production assistant request path on this stack. Default since 2026-05-07 (`demo-assistant-known-good.sh ASSISTANT_PROVIDER=openclaw MODEL_PROFILE=cosmos-reason2-8b`). 9/9 lane-comparison smoke (P1 wrap-root, P2 scene add, P3 tree insert × 3 rounds) once envelope reductions and load-bearing fields settled (2026-05-08); see `manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §10 for the ablation. Direct vLLM (`nemoclaw` provider) remains supported as a faster single-tenant path but is no longer the default. |
 
 Active artifacts:
 
 - Provisioner: [`manyforge/setup-manyforge-assistant.sh`](manyforge/setup-manyforge-assistant.sh)
 - Egress preset: [`manyforge/policies/manyforge-composer.preset.yaml`](manyforge/policies/manyforge-composer.preset.yaml)
-- Experimental OpenClaw adapter: [`manyforge/openclaw_assistant_bridge/`](manyforge/openclaw_assistant_bridge/)
-- Bridge audit log mount point: [`manyforge/bridge/`](manyforge/bridge/) (the bridge service code itself lives in the sibling `manyforge` repo at `manyforge_assistant_bridge/`)
+- **OpenClaw-lane assistant-provider adapter (production default)**: [`manyforge/openclaw_assistant_bridge/`](manyforge/openclaw_assistant_bridge/) on `:8200`
+- Bridge audit log mount point: [`manyforge/bridge/`](manyforge/bridge/)
+- **Direct-lane bridge** (`manyforge_assistant_bridge`, `:8100`) lives in the sibling `manyforge` repo and is NOT in this repo. It is the supported fallback transport, not the default.
 
 Wire contract / spec authority: in the sibling `manyforge_specs` repo, not here. See:
 

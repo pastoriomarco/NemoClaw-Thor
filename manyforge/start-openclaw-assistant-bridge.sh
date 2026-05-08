@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# start-openclaw-assistant-bridge.sh — run the experimental Phase 2 adapter.
+# start-openclaw-assistant-bridge.sh — run the OpenClaw-lane assistant
+# provider adapter on :8200 (production default since 2026-05-07).
 
 set -euo pipefail
 

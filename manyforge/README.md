@@ -13,8 +13,13 @@ Composer-assistant pipeline:
 - **`policies/manyforge-composer.preset.yaml`** — the OpenShell SSRF /
   L7 policy that allows the in-sandbox MCP bridge to reach Composer
   (`:9000`) and vLLM (`:8000`) via `host.openshell.internal`.
-- **`agent-workspace/AGENTS.md`** — the system-prompt-injected workspace
-  guidance file the OpenClaw runner reads on every turn.
+- **`agent-workspace/`** — workspace fragment that the provisioner
+  composes into the in-sandbox workspace AGENTS.md. Canonical content
+  is in the sibling `manyforge` repo at
+  `agent-skills/manyforge-composer/workspace-AGENTS.md`; this repo
+  contributes only the optional `openclaw-overlay.md`. The system
+  prompt the OpenClaw runner sees on every turn is the canonical
+  workspace AGENTS.md plus (if present) the overlay.
 - **`openclaw_assistant_bridge/`** — the bridge service source (Python
   FastAPI). The provisioner and the launcher both reference this path.
 - **`docs/`** — operational docs (see *Where to read* below).
@@ -69,7 +74,11 @@ to update together:
 
 - `policies/manyforge-composer.preset.yaml` — SSRF L7 policy.
 - `setup-manyforge-assistant.sh` — MCP server config + agent profile.
-- `agent-workspace/AGENTS.md` — role + vocabulary lock + tool routing.
+- Canonical workspace AGENTS.md (role + vocabulary + tool routing) —
+  in the sibling `manyforge` repo at
+  `agent-skills/manyforge-composer/workspace-AGENTS.md`.
+- `agent-workspace/openclaw-overlay.md` (this repo, optional) —
+  OpenClaw-specific addendum appended after the canonical content.
 - `openclaw_assistant_bridge/adapter.py` — session-key derivation +
   tool alias filter.
 - `dev_ws/src/manyforge/examples/*.deployment.yaml` (different repo) —

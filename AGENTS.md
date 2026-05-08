@@ -51,9 +51,20 @@ The downstream consumer is the ManyForge composer running an assistant
 agent backed by these models. This repo hosts the **deployment-side
 integration runbook** that wires the OpenClaw runtime in a NemoClaw
 sandbox to ManyForge's MCP surfaces (egress preset, skill bundle, MCP
-server registration); see "ManyForge integration" below. The
-assistant-provider bridge service itself lives in the ManyForge repo —
-this repo configures and consumes it but does not own it.
+server registration); see "ManyForge integration" below.
+
+There are two assistant-provider bridges, both implementing ManyForge's
+provider HTTP contract:
+
+- **Direct vLLM lane** — `manyforge_assistant_bridge` on `:8100`, lives
+  in the ManyForge repo. Talks straight to vLLM, runs the agent loop
+  in-process. This repo does not own it.
+- **OpenClaw lane** — `openclaw_assistant_bridge` on `:8200`, lives in
+  this repo at [`manyforge/openclaw_assistant_bridge/`](manyforge/openclaw_assistant_bridge/).
+  Adapter that dispatches into the NemoClaw `my-assistant` sandbox
+  running OpenClaw, which runs the agent loop and calls vLLM through
+  the OpenClaw gateway. **Production default since 2026-05-07.** This
+  repo does own it.
 
 ---
 
@@ -76,18 +87,29 @@ this repo configures and consumes it but does not own it.
   `serving/docs/`.
 - `manyforge/` — ManyForge integration scope: the deployment-side
   provisioner (`setup-manyforge-assistant.sh`), the egress preset
-  (`policies/manyforge-composer.preset.yaml`), the bridge audit-log
-  mount point (`bridge/`), and integration docs under `manyforge/docs/`.
+  (`policies/manyforge-composer.preset.yaml`), the OpenClaw-lane
+  assistant-provider adapter (`openclaw_assistant_bridge/`, port
+  `:8200`, production default), the bridge audit-log mount point
+  (`bridge/`), and integration docs under `manyforge/docs/`.
 - Top-level docs: `README.md`, this file (`AGENTS.md`), `VERSIONS.md`
   (single source of truth for verified versions across all three
   scopes), and `USER_QUICKSTART_MANUAL.md`.
 
-This repo does **not** own the ManyForge assistant-provider bridge
-service. The bridge implements ManyForge's HTTP contract and lives in
-the ManyForge repo (`manyforge/manyforge_assistant_bridge/`); it
-consumes the vLLM endpoint this repo's launch scripts expose. The
-bridge's architectural design lives alongside the contract in
+This repo does **not** own the **direct-vLLM** assistant-provider
+bridge service (`manyforge_assistant_bridge`). That bridge implements
+ManyForge's HTTP contract and lives in the ManyForge repo
+(`manyforge/manyforge_assistant_bridge/`); it consumes the vLLM
+endpoint this repo's launch scripts expose. The bridge's architectural
+design lives alongside the contract in
 `manyforge_specs/docs/spec/485-assistant-bridge-architecture.md`.
+
+This repo **does** own the **OpenClaw-lane** adapter
+(`openclaw_assistant_bridge` at `:8200`) that implements the same
+provider contract by forwarding into a NemoClaw sandbox running
+OpenClaw — see the `manyforge/` ownership entry above. Both bridges
+speak the same wire envelope; selection is via Composer's
+`ASSISTANT_PROVIDER` env var, and `openclaw` is the production
+default since 2026-05-07.
 
 **Consumes** (don't reimplement; don't fork; configure and wrap):
 

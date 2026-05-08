@@ -30,8 +30,12 @@ content in this directory; it belongs in `manyforge_specs`.
   bridge on `:8200` (the production lane).
 - `policies/manyforge-composer.preset.yaml` — OpenShell egress / SSRF
   policy.
-- `agent-workspace/AGENTS.md` — workspace file injected into every
-  OpenClaw agent run (NOT a development AGENTS.md — runtime artifact).
+- `agent-workspace/` — workspace fragment that the provisioner
+  composes into the in-sandbox workspace AGENTS.md (runtime artifact,
+  NOT a development AGENTS.md). Canonical content lives in the
+  sibling `manyforge` repo at
+  `agent-skills/manyforge-composer/workspace-AGENTS.md`; this repo
+  contributes only the optional `openclaw-overlay.md`.
 - `openclaw_assistant_bridge/` — bridge service source (Python).
 - `docs/` — operational docs (runbook, lane comparison, MCP integration).
 - `scripts/debug/` — proxy + harness for lane parity debugging.
@@ -49,7 +53,9 @@ When the served model or the deployment catalog changes:
 
 - `policies/manyforge-composer.preset.yaml` (this repo)
 - `setup-manyforge-assistant.sh` (this repo)
-- `agent-workspace/AGENTS.md` (this repo)
+- `agent-skills/manyforge-composer/workspace-AGENTS.md` (in the
+  sibling `manyforge` repo — canonical workspace AGENTS.md)
+- `agent-workspace/openclaw-overlay.md` (this repo, optional overlay)
 - `openclaw_assistant_bridge/adapter.py` (this repo)
 - `dev_ws/src/manyforge/examples/*.deployment.yaml` (sibling repo —
   the source of truth for what the agent actually sees)
