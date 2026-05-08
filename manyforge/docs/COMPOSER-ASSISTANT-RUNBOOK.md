@@ -228,7 +228,7 @@ openshell sandbox exec -n my-assistant --no-tty -- python3 -c \
   'import urllib.request as u; print(u.urlopen("http://host.openshell.internal:8000/v1/models",timeout=3).status)'
 
 # 6 — vLLM tool parser correct
-python3 /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge/tests/test_adapter.py  # run unit tests
+python3 ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge/tests/test_adapter.py  # run unit tests
 
 # 9 — SSRF policy syntax
 openshell policy get my-assistant --full | grep -A2 'method: GET' | grep '/api/assistant/modes'

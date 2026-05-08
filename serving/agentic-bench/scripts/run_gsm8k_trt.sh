@@ -3,7 +3,7 @@
 # Standardized math-reasoning benchmark, exact-match scoring.
 set -euo pipefail
 
-BENCH_DIR="${BENCH_DIR:-/home/tndlux/agentic-bench}"
+BENCH_DIR="${BENCH_DIR:-${HOME}/agentic-bench}"
 RESULTS_DIR="${BENCH_DIR}/results"
 LOG_DIR="${BENCH_DIR}/logs"
 ENDPOINT="${ENDPOINT:-http://127.0.0.1:8000/v1/chat/completions}"
@@ -15,8 +15,8 @@ mkdir -p "${RESULTS_DIR}" "${LOG_DIR}"
 LIMIT_ARGS=()
 [ -n "${LIMIT}" ] && LIMIT_ARGS=(--limit "${LIMIT}")
 
-export HF_HOME="${HF_HOME:-/home/tndlux/thor-hf-cache}"
-export HF_HUB_CACHE="${HF_HUB_CACHE:-/home/tndlux/thor-hf-cache/hub}"
+export HF_HOME="${HF_HOME:-${HOME}/thor-hf-cache}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-${HOME}/thor-hf-cache/hub}"
 
 echo "[$(date +%H:%M:%S)] Starting GSM8K-CoT zero-shot against ${ENDPOINT}"
 echo "  Model: ${MODEL_ID}"

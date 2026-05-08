@@ -232,7 +232,7 @@ under "First-time NemoClaw onboard recipe". Read it before running
 ### B — Per-session: serve a model and wire NemoClaw to it
 
 ```bash
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
 
 # 1. Start the model (one of the profiles in serving/config.sh)
 ./serving/start-model.sh <profile-slug>
@@ -301,7 +301,7 @@ Qwen3.6 and Nemotron) and end-to-end reproduction steps are in
 
 ### Where to read ManyForge's expectations
 
-ManyForge's repos live under `/home/tndlux/workspaces/dev_ws/src/`.
+ManyForge's repos live under `${HOME}/workspaces/dev_ws/src/`.
 For assistant-integration questions, look at three places, in this
 order:
 

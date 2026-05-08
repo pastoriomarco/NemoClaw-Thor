@@ -61,7 +61,7 @@ onboard.
 
 ```bash
 # 1. Start the model first
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
 ./serving/start-model.sh <profile-slug>           # e.g. nemotron3-nano-omni-30b-a3b-nvfp4
 
 # Wait for /v1/models to respond
@@ -228,7 +228,7 @@ right wrapper to script around.
 ## Starting the vLLM endpoint
 
 ```bash
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
 ./serving/start-model.sh cosmos-reason2-8b
 ```
 
@@ -527,7 +527,7 @@ can be dropped.
 export HF_TOKEN="$(tr -d '[:space:]' < ~/.cache/huggingface/token)"
 
 # 1. Start the model
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
 THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-cosmos-reason2-8b" \
     ./serving/start-model.sh cosmos-reason2-8b
 

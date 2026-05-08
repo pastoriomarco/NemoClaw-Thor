@@ -36,7 +36,7 @@ Important rule:
 From a fresh host shell:
 
 ```bash
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
 source "$HOME/.nvm/nvm.sh"
 nvm use 22
 export PATH="$HOME/.local/bin:$PATH"

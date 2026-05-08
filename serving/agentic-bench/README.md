@@ -104,7 +104,7 @@ concurrent requests crash the engine context with a Myelin
 The lm-eval-harness writes per-task results + per-sample logs to
 `results/<task-name>/<model-name>/`. The harness pulls model
 configs/tokenizers from `HF_HOME` (defaulted to
-`/home/tndlux/thor-hf-cache` in the scripts so it reuses existing weights
+`${HOME}/thor-hf-cache` in the scripts so it reuses existing weights
 rather than re-downloading).
 
 ## Pinned bench results from April 2026

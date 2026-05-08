@@ -297,7 +297,7 @@ calls) and *"What does the manyforge-composer skill say about Repeat?"*
 ### Reproduce from a clean lane
 
 ```bash
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
 ./manyforge/setup-manyforge-assistant.sh         # default sandbox: my-assistant
 
 # Plus, in the manyforge demo lane:
@@ -371,7 +371,7 @@ service and setting `MANYFORGE_ASSISTANT_PROVIDER=openclaw`.
 ### Composer-side switch (no code change)
 
 ```bash
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
 ./manyforge/start-openclaw-assistant-bridge.sh
 
 # in the Composer launch environment:

@@ -15,6 +15,7 @@ End: render a pass-rate table per lane × prompt, plus median timings.
 """
 from __future__ import annotations
 
+import os
 import json
 import subprocess
 import sys
@@ -45,7 +46,7 @@ def _switch_composer(provider: str) -> None:
         "docker", "run", "-d", "--rm",
         "--name", "manyforge-e2e-composer",
         "--network", "host",
-        "-v", "/home/tndlux/workspaces/dev_ws/src/manyforge:/workspace",
+        "-v", f"{os.path.expanduser('~/workspaces/dev_ws/src/manyforge')}:/workspace",
         "-v", "manyforge_build-cache:/tmp/manyforge-build",
         "-w", "/workspace",
         "-e", f"MANYFORGE_ASSISTANT_PROVIDER={provider}",

@@ -39,7 +39,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 TRT_BASE_URL = os.environ.get("TRT_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 PROXY_PORT = int(os.environ.get("PROXY_PORT", "8001"))
-PROXY_LOG_DIR = os.environ.get("PROXY_LOG_DIR", "/home/tndlux/agentic-bench/logs")
+PROXY_LOG_DIR = os.environ.get("PROXY_LOG_DIR", os.path.expanduser("~/agentic-bench/logs"))
 PROXY_LOG_PATH = os.path.join(PROXY_LOG_DIR, "tool_call_proxy.jsonl")
 
 os.makedirs(PROXY_LOG_DIR, exist_ok=True)

@@ -3,7 +3,7 @@
 # Standardized, citable, used by every frontier model release.
 set -euo pipefail
 
-BENCH_DIR="${BENCH_DIR:-/home/tndlux/agentic-bench}"
+BENCH_DIR="${BENCH_DIR:-${HOME}/agentic-bench}"
 RESULTS_DIR="${BENCH_DIR}/results"
 LOG_DIR="${BENCH_DIR}/logs"
 ENDPOINT="${ENDPOINT:-http://127.0.0.1:8000/v1/chat/completions}"
@@ -22,8 +22,8 @@ echo "  Limit: ${LIMIT:-full (541 prompts)}"
 # Point HF cache at the populated dir where the model already lives. Avoids a
 # fresh re-download into ~/.cache/huggingface (which was written-to by docker-
 # as-root in earlier sessions and is now permission-blocked for this user).
-export HF_HOME="${HF_HOME:-/home/tndlux/thor-hf-cache}"
-export HF_HUB_CACHE="${HF_HUB_CACHE:-/home/tndlux/thor-hf-cache/hub}"
+export HF_HOME="${HF_HOME:-${HOME}/thor-hf-cache}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-${HOME}/thor-hf-cache/hub}"
 
 "${BENCH_DIR}/.venv/bin/lm-eval" run \
     --model local-chat-completions \

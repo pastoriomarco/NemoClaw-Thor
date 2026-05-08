@@ -35,7 +35,7 @@ SANDBOX="${1:-my-assistant}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NEMOCLAW_THOR_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-MANYFORGE_ROOT="${MANYFORGE_ROOT:-/home/tndlux/workspaces/dev_ws/src/manyforge}"
+MANYFORGE_ROOT="${MANYFORGE_ROOT:-${HOME}/workspaces/dev_ws/src/manyforge}"
 
 # Preset is co-located with this script under manyforge/policies/.
 PRESET_PATH="${SCRIPT_DIR}/policies/manyforge-composer.preset.yaml"
@@ -158,11 +158,55 @@ shopt -u nullglob
 ok "staged $(ls "${STAGING_DIR}" | wc -l) file(s) under ${STAGING_DIR}"
 
 step "Step 3/5: install skill 'manyforge-composer'"
-nemoclaw "${SANDBOX}" skill install "${STAGING_DIR}"
-ok "skill installed"
+# Idempotency probe: compare the staged content hash against the
+# in-sandbox copy. When they match, skip the upload entirely — this
+# works around a nemoclaw idempotency regression observed 2026-05-08
+# where `skill install` against a sandbox that already has the skill
+# fails with "Failed to upload N file(s)" without surfacing a useful
+# reason. The skill content is what matters; if hashes match, the
+# in-sandbox copy is correct and we can move on.
+KEX_USER=(docker exec openshell-cluster-nemoclaw kubectl exec -n openshell "${SANDBOX}" -c agent -- su sandbox -c)
+SKILL_REMOTE_DIR="/sandbox/.openclaw/skills/manyforge-composer"
+# Concatenated sha256 of every staged file. Order-stable (sorted by
+# filename) so we don't trip on directory-iteration nondeterminism.
+staged_hash() {
+  ( cd "${STAGING_DIR}" && \
+      find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | \
+      xargs -I{} sha256sum {} ) 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+remote_hash() {
+  "${KEX_USER[@]}" "test -d ${SKILL_REMOTE_DIR} && cd ${SKILL_REMOTE_DIR} && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs -I{} sha256sum {} | sha256sum | cut -d' ' -f1" 2>/dev/null \
+    | tr -d '[:space:]' | tail -c 64
+}
+STAGED_HASH="$(staged_hash)"
+SANDBOX_HASH="$(remote_hash)"
+if [[ -n "${SANDBOX_HASH}" && "${STAGED_HASH}" == "${SANDBOX_HASH}" ]]; then
+  ok "skill 'manyforge-composer' already installed (content sha256 ${STAGED_HASH:0:12}…); skipping upload"
+else
+  if nemoclaw "${SANDBOX}" skill install "${STAGING_DIR}"; then
+    ok "skill installed"
+  else
+    install_rc=$?
+    # If nemoclaw failed but a copy already exists in-sandbox, the
+    # most likely cause is the upstream idempotency bug. Re-check the
+    # remote hash; if it now equals the staged hash, treat as success
+    # (race: maybe nemoclaw partial-uploaded then refused). Otherwise
+    # fall through to fail() so the operator sees the real problem.
+    SANDBOX_HASH_AFTER="$(remote_hash)"
+    if [[ -n "${SANDBOX_HASH_AFTER}" && "${STAGED_HASH}" == "${SANDBOX_HASH_AFTER}" ]]; then
+      ok "skill 'manyforge-composer' already in-sandbox at the expected version (sha256 ${STAGED_HASH:0:12}…); continuing despite nemoclaw exit ${install_rc}"
+    elif [[ -n "${SANDBOX_HASH_AFTER}" ]]; then
+      printf '  ! nemoclaw skill install failed (exit %d) and the in-sandbox copy differs from staged content.\n' "${install_rc}" >&2
+      printf '  ! staged sha256:  %s\n' "${STAGED_HASH}" >&2
+      printf '  ! sandbox sha256: %s\n' "${SANDBOX_HASH_AFTER}" >&2
+      fail "skill install failed and in-sandbox copy is stale; resolve manually"
+    else
+      fail "skill install failed (exit ${install_rc}) and no skill found in sandbox"
+    fi
+  fi
+fi
 
 step "Step 4/5: register 'manyforge' MCP server in sandbox openclaw.json"
-KEX_USER=(docker exec openshell-cluster-nemoclaw kubectl exec -n openshell "${SANDBOX}" -c agent -- su sandbox -c)
 MCP_BRIDGE_PATH="/sandbox/.openclaw/skills/manyforge-composer/manyforge-mcp-bridge.py"
 COMPOSER_BASE="${MANYFORGE_COMPOSER_BASE:-http://host.openshell.internal:9000}"
 ASSISTANT_MODE="${MANYFORGE_ASSISTANT_MODE:-composer-assistant}"
