@@ -377,9 +377,7 @@ recipe). Remaining steps to ship:
    `configure-local-provider.sh`, the openclaw_assistant_bridge
    launcher, and `setup-manyforge-assistant.sh`. A wrapper here can
    chain them all without depending on the `manyforge` repo for
-   onboarding. Cross-link:
-   `manyforge_specs/docs/plans/AI_ASSISTANT_INTEGRATION_PLAN.md` calls
-   this out as a deferred item under "Optional or deferred".
+   onboarding.
 
    Risk to track: NemoClaw's onboarding flow is changing fast (we
    moved from v0.0.18 → v0.0.31 in this project's lifetime). The

@@ -38,19 +38,24 @@ nemoclaw my-assistant connect          # inside sandbox: `openclaw tui`
 ```
 
 `./serving/start-model.sh` with no args picks up the default profile
-`qwen3.6-35b-a3b-prismaquant-dflash` (mixed-precision 4.75 bpp, claimed
-quality within −0.56 pp of BF16 vs uniform NVFP4's −2.21 pp).
+`cosmos-reason2-8b` (NVIDIA Cosmos Reason 2 8B; FP8 KV; `hermes` tool-call
+parser; 64 K context). Selected as the production default 2026-05-07 after a
+3-prompt × 3-round parity benchmark — see
+[`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §8](manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md)
+for the data.
 
-For **lower weight memory** or **max-context / low-latency-critical** paths, the
-uniform NVFP4 variant is a close fallback:
+For **higher single-stream throughput** at the cost of a less-reliable
+OpenClaw lane, the 35B Qwen variant is the documented alternative:
 
 ```bash
-./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-dflash
-./setup/configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-dflash
+./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge
+./setup/configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge
 ```
 
-Numbers (matched methodology): 44.6 tok/s single peak, 140.2 @ 5-concurrent.
-~11–16% behind PrismaQuant at low-to-mid concurrency; tied at saturation.
+The Qwen profile is faster on direct/single-prompt workloads but its
+OpenClaw lane regresses on compound prompts (1/9 vs Cosmos-8B's 9/9 on the
+parity matrix) because the `qwen3_xml` tool-call parser is brittle without
+a `tool_choice` pin and the OpenClaw gateway never forwards one.
 
 For **many concurrent sequences or huge context**, use the TQ-MTP variant:
 
@@ -178,8 +183,8 @@ after a version bump.
 
 | Profile | Tok/s | KV Tokens | Seqs | Spec Method | Notes |
 |---------|-------|-----------|------|-------------|-------|
-| `qwen3.6-35b-a3b-prismaquant-dflash` | **50.7 / 142.4@5** | 938K | 5 | DFlash-15 | **★★ DEFAULT** — mixed-precision 4.75 bpp, best on every axis, −0.56 pp vs BF16 claimed |
-| `qwen3.6-35b-a3b-nvfp4-dflash` | 44.6 / 140.2@5 | 678K | 5 | DFlash-15 | Uniform NVFP4, fallback (lighter weights, max concurrent seqs can stretch to 8) |
+| `qwen3.6-35b-a3b-prismaquant-dflash` | 50.7 / 142.4@5 | 938K | 5 | DFlash-15 | Best raw throughput; mixed-precision 4.75 bpp, claimed −0.56 pp vs BF16 |
+| `qwen3.6-35b-a3b-nvfp4-dflash` | 44.6 / 140.2@5 | 678K | 5 | DFlash-15 | Uniform NVFP4 (lighter weights, max concurrent seqs can stretch to 8) |
 | `qwen3.6-35b-a3b-fp8-dflash` | **47.6** | ~700K | 4 | DFlash-15 | Best FP8 (historical — re-measure) |
 | `qwen3.6-35b-a3b-nvfp4-tq-mtp` | 28.6 | 2.22M | 8 | MTP N=4 | MAX CONTEXT, 153 tok/s @ 8-conc |
 | `qwen3.6-35b-a3b-fp8-mtp-fp8kv` | 25.7 | 1.44M | 8 | MTP N=4 | FP8+FP8 KV |
@@ -194,13 +199,18 @@ after a version bump.
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | Vision+text, BF16 |
 
-**Default profile**: `qwen3.6-35b-a3b-prismaquant-dflash` — what
-`./serving/start-model.sh` (no args) loads. Beats the uniform NVFP4 variant on
-single-stream and all tested concurrency levels (matched methodology, today's
-drafter). ~22 GB weights + the DFlash drafter (gated — HF token required).
+**Default profile**: `cosmos-reason2-8b` — what
+`./serving/start-model.sh` (no args) loads. NVIDIA Cosmos Reason 2 8B
+(Qwen3-VL-8B base, FP8 KV, `hermes` tool-call parser, 64 K context).
+Production default for the ManyForge Composer-assistant lane: 9/9 reliability
+on the OpenClaw lane in the 3-prompt × 3-round parity smoke vs Qwen3.6's
+1/9 (full benchmark in
+[`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §8](manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md)).
+Footprint: ~17 GiB weights + ~6 GiB FP8 KV at 64 K context.
 
-If you need max context or fewer weight GB (e.g. when running other services
-alongside vLLM), fall back to the uniform-NVFP4 variant:
+If you need higher single-stream throughput (and don't depend on the OpenClaw
+lane's reliability — e.g. direct-bridge usage), fall back to the 35B Qwen
+profile:
 
 ```bash
 ./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-dflash

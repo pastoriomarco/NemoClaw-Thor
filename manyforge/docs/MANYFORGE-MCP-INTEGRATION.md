@@ -39,9 +39,10 @@ Status:
 - **Phase 3 — A/B harness comparing direct-vLLM vs OpenClaw-skill paths:**
   designed, not yet implemented.
 
-This is the deployment-side companion to the runtime hardening documented
-in `manyforge_specs/docs/implementation/composer-assistant-tree-mutation-hardening.md`
-(sibling repo to `manyforge`).
+This is the deployment-side companion to the runtime tree-mutation
+hardening that lives in the manyforge repo's bridge service
+(`manyforge_assistant_bridge/`) and Composer backend
+(`manyforge_composer/backend/routes_assistant.py`).
 
 ---
 
@@ -285,7 +286,7 @@ calls) and *"What does the manyforge-composer skill say about Repeat?"*
   `skill install`, `openclaw mcp set` are all documented CLI commands
   with stable surfaces. No NemoClaw upstream patches.
 
-### Known gaps tracked in `manyforge_specs/docs/open-points.md`
+### Known gaps (deployment-side)
 
 - The `/api/mcp` and `/api/assistant/mcp/{mode}` endpoints are
   unauthenticated. Acceptable for single-developer experimentation against
@@ -684,7 +685,7 @@ This is configure-only. No NemoClaw / OpenShell / OpenClaw upstream
 patches required. A future upstream improvement worth proposing would
 be adding `allowed_ips` to the built-in `local-inference` preset by
 default, or making the SSRF engine union allowlists across matching
-presets — see the open-point in `manyforge_specs/docs/open-points.md`.
+presets.
 
 #### Side findings (not blockers, recorded for completeness)
 
@@ -751,12 +752,11 @@ content + success table, plus aggregates.
 
 ## Cross-references
 
-- Runtime hardening (manyforge side):
-  `manyforge_specs/docs/implementation/composer-assistant-tree-mutation-hardening.md`
-- Spec contract that both paths preserve:
-  `manyforge_specs/docs/spec/430-deployment-artifact-schema.md` §3.5F,
-  `480-assistant-modes-and-bounded-autonomy.md` §5.1,
-  `485-assistant-bridge-architecture.md` §3.
+- Runtime tree-mutation hardening (manyforge side):
+  `dev_ws/src/manyforge/manyforge_assistant_bridge/` and
+  `dev_ws/src/manyforge/manyforge_composer/backend/routes_assistant.py`.
+- Wire contract that both paths preserve:
+  [`dev_ws/src/manyforge/docs/reference/ASSISTANT_PROVIDER_CONTRACT.md`](../../../dev_ws/src/manyforge/docs/reference/ASSISTANT_PROVIDER_CONTRACT.md).
 - NemoClaw onboarding workflow this integration plugs into:
   `../../setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`.
 - Profile selection for the assistant model:

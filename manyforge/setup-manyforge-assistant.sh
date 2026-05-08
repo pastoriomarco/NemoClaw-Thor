@@ -46,7 +46,15 @@ SKILL_SRC="${MANYFORGE_ROOT}/agent-skills/manyforge-composer"
 # session_status tool — meaning the model has no awareness of the
 # ManyForge MCP tools and either asks for "session keys" or
 # hallucinates plausible-sounding but wrong answers.
-WORKSPACE_SRC="${SCRIPT_DIR}/agent-workspace"
+#
+# Canonical source: the workspace AGENTS.md lives in `manyforge` (the
+# deployment repo) alongside the skill, so ManyForge owns the agent's
+# semantic guidance (role / vocabulary / tool routing / guardrails).
+# This repo (NemoClaw-Thor) only ships the OpenClaw-mechanical overlay
+# (currently empty — when needed, append OpenClaw-specific bits like
+# the NO_REPLY rule or /sandbox/ paths via WORKSPACE_OVERLAY below).
+WORKSPACE_CANONICAL="${MANYFORGE_ROOT}/agent-skills/manyforge-composer/workspace-AGENTS.md"
+WORKSPACE_OVERLAY="${SCRIPT_DIR}/agent-workspace/openclaw-overlay.md"
 
 step() {
   printf '\n==> %s\n' "$*"
@@ -326,16 +334,39 @@ step "Step 5b/6: install workspace guidance file (AGENTS.md)"
 # tools/list, never replaces it), and the guardrails (mangling rule,
 # don't invent ids, etc.).
 #
-# v7 (2026-05-06): TOOLS.md was folded into AGENTS.md guardrails and
-# the file is no longer installed. If the sandbox has a stale TOOLS.md
-# from a prior provisioner run, we delete it explicitly so the agent
-# stops reading two-source-of-truth content.
-if [[ ! -d "${WORKSPACE_SRC}" ]]; then
-  fail "workspace source not found at ${WORKSPACE_SRC}"
+# Composition pattern (since 2026-05-08): the canonical content lives
+# in `manyforge` (deployment repo, alongside the skill), and this
+# provisioner *composes* the in-sandbox file by concatenating:
+#   (a) the canonical manyforge file (semantic guidance), then
+#   (b) any OpenClaw-mechanical overlay this repo ships (currently
+#       optional — empty by default; append OpenClaw-specific bits
+#       like NO_REPLY rules or /sandbox/ paths to it as needed).
+# This eliminates the prior drift hazard where ManyForge-semantic
+# content lived in two places (manyforge skill AND NemoClaw-Thor
+# workspace) and could diverge.
+#
+# v7 (2026-05-06): TOOLS.md was folded into the AGENTS.md guardrails
+# section and the standalone file is no longer installed. If the
+# sandbox has a stale TOOLS.md from a prior provisioner run, we
+# delete it explicitly so the agent stops reading two-source-of-truth
+# content.
+if [[ ! -f "${WORKSPACE_CANONICAL}" ]]; then
+  fail "workspace canonical source not found at ${WORKSPACE_CANONICAL} \
+(expected in manyforge repo at agent-skills/manyforge-composer/workspace-AGENTS.md)"
 fi
 WORKSPACE_DIR_REMOTE="/sandbox/.openclaw/workspace"
+WORKSPACE_TMP="$(mktemp -t manyforge-workspace-AGENTS-XXXXXX.md)"
+trap 'rm -f "${WORKSPACE_TMP}"' EXIT
+cat "${WORKSPACE_CANONICAL}" > "${WORKSPACE_TMP}"
+if [[ -f "${WORKSPACE_OVERLAY}" ]]; then
+  printf '\n\n' >> "${WORKSPACE_TMP}"
+  cat "${WORKSPACE_OVERLAY}" >> "${WORKSPACE_TMP}"
+  ok "  composed canonical (${WORKSPACE_CANONICAL}) + overlay (${WORKSPACE_OVERLAY})"
+else
+  ok "  using canonical only (no platform overlay at ${WORKSPACE_OVERLAY})"
+fi
 "${KEX_USER[@]}" "mkdir -p ${WORKSPACE_DIR_REMOTE}" >/dev/null
-WS_B64="$(base64 -w0 < "${WORKSPACE_SRC}/AGENTS.md")"
+WS_B64="$(base64 -w0 < "${WORKSPACE_TMP}")"
 "${KEX_USER[@]}" "printf %s '${WS_B64}' | base64 -d > ${WORKSPACE_DIR_REMOTE}/AGENTS.md" >/dev/null
 "${KEX_USER[@]}" "rm -f ${WORKSPACE_DIR_REMOTE}/TOOLS.md" >/dev/null
 ok "installed AGENTS.md into ${WORKSPACE_DIR_REMOTE} (and removed any stale TOOLS.md)"

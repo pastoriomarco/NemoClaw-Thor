@@ -2,10 +2,10 @@
 
 > Reusable methodology for calibrating `max_model_len`, `max_num_seqs`,
 > and `gpu_memory_utilization` on Thor profiles intended to serve the
-> ManyForge assistant pipeline (composer-assistant, error-recovery,
-> query modes per `manyforge_specs/docs/spec/480-...md`). Concept-
-> focused; specific per-profile numbers live in `../../serving/config.sh` and
-> `../../serving/launch.sh`.
+> ManyForge assistant pipeline (composer-assistant, error-recovery, and
+> query modes; see the deployment YAML's `assistant_modes` block for the
+> live mode list). Concept-focused; specific per-profile numbers live in
+> `../../serving/config.sh` and `../../serving/launch.sh`.
 
 ---
 
@@ -34,8 +34,8 @@ default output budget is another **16K tokens**. So a single turn
 needs at least 32K of context just to fit the bootstrap and a full
 response.
 
-For ManyForge's hybrid agentic workflow (per `manyforge_specs` 480),
-agent loops accumulate context across turns:
+For ManyForge's hybrid agentic workflow, agent loops accumulate context
+across turns:
 
 - multi-step error-recovery sessions inspect scene state, propose
   actions, observe results, iterate,
