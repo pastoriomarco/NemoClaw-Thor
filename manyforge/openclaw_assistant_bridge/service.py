@@ -17,6 +17,7 @@ from .adapter import (
     build_agent_prompt,
     build_gateway_chat_completions_command,
     build_openclaw_command,
+    derive_gateway_session_key,
     error_envelope,
     mcp_allowed_tools_from_payload,
     normalize_agent_response,
@@ -29,6 +30,44 @@ from .adapter import (
 
 HOST = os.environ.get("OPENCLAW_ASSISTANT_BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("OPENCLAW_ASSISTANT_BRIDGE_PORT", "8200"))
+
+# 2026-05-10 (iter 32): bridge-fired periodic /compact. When set to a
+# positive integer N, the bridge tracks the per-session-key request
+# count and POSTs `/compact` to the gateway before every Nth request
+# (skipping the very first). The compaction uses the same gateway
+# chat-completions path as a normal user message; OpenClaw resolves
+# `/compact` text as the slash-command via its commands registry.
+# Rationale: OpenClaw's auto-compaction (triggered by context-overflow
+# precheck against agents.defaults.contextTokens) hits an
+# already_compacted_recently cooldown and stops working after the
+# first overflow. Spacing compactions ourselves at predictable
+# intervals avoids the cooldown trap. Off by default (N=0) so other
+# operators of the bridge see no behavioral change.
+_COMPACT_EVERY_N = int(os.environ.get("OPENCLAW_ASSISTANT_COMPACT_EVERY_N", "0") or "0")
+_COMPACT_TIMEOUT_S = float(os.environ.get("OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S", "120") or "120")
+_SESSION_REQUEST_COUNTER: dict[str, int] = {}
+
+
+def _bump_session_request_counter(session_key: str) -> int:
+    """Increment + return the request counter for this session key.
+
+    Counter is per-process; resets when the bridge restarts. That is
+    fine for the compaction trigger because we only care about request
+    spacing within a single bridge lifetime.
+    """
+    n = _SESSION_REQUEST_COUNTER.get(session_key, 0) + 1
+    _SESSION_REQUEST_COUNTER[session_key] = n
+    return n
+
+
+def _should_fire_compact(session_request_count: int) -> bool:
+    """True iff this is the Nth, 2Nth, 3Nth, ... request for the
+    session AND the feature is enabled. Skips request #1 — there is
+    nothing to compact yet at session start.
+    """
+    if _COMPACT_EVERY_N <= 0:
+        return False
+    return session_request_count > 1 and (session_request_count - 1) % _COMPACT_EVERY_N == 0
 
 
 # Sampling defaults (temperature, top_k, top_p, chat_template_kwargs)
@@ -316,7 +355,54 @@ async def assistant(request: Request) -> JSONResponse:
     principal = _principal_for(cfg)
     await _bind_principal_async(principal, request_id)
     try:
+        # 2026-05-10 (iter 32): periodic bridge-fired compaction. When
+        # OPENCLAW_ASSISTANT_COMPACT_EVERY_N is set, fire `/compact` to
+        # the gateway before every Nth request on this session-key.
+        # Sequential — wait for the compact to return before forwarding
+        # the actual user prompt so the model sees the post-compaction
+        # session state.
         if cfg.use_gateway:
+            session_key = derive_gateway_session_key(payload)
+            session_count = _bump_session_request_counter(session_key)
+            if _should_fire_compact(session_count):
+                _log_event(
+                    "openclaw_compact_fire_started",
+                    requestId=request_id,
+                    sessionKey=session_key,
+                    sessionCount=session_count,
+                    every_n=_COMPACT_EVERY_N,
+                    timeoutS=_COMPACT_TIMEOUT_S,
+                )
+                compact_command = build_gateway_chat_completions_command(
+                    config=cfg,
+                    payload=payload,
+                    timeout_s=_COMPACT_TIMEOUT_S,
+                    message="/compact",
+                )
+                try:
+                    await _run_agent(
+                        request_id=f"{request_id}-compact",
+                        command=compact_command,
+                        timeout_s=_COMPACT_TIMEOUT_S,
+                    )
+                    _log_event(
+                        "openclaw_compact_fire_succeeded",
+                        requestId=request_id,
+                        sessionKey=session_key,
+                        sessionCount=session_count,
+                    )
+                except Exception as compact_exc:  # noqa: BLE001
+                    # Compaction failed (timeout, gateway error, etc.) —
+                    # don't fail the user request; proceed with the
+                    # un-compacted session. The user-facing error rate
+                    # is what we care about; compaction is best-effort.
+                    _log_event(
+                        "openclaw_compact_fire_failed",
+                        requestId=request_id,
+                        sessionKey=session_key,
+                        sessionCount=session_count,
+                        error=f"{type(compact_exc).__name__}: {compact_exc}",
+                    )
             command = build_gateway_chat_completions_command(
                 config=cfg,
                 payload=payload,

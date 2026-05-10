@@ -753,19 +753,19 @@ def build_gateway_chat_completions_command(
         "max_tokens": config.gateway_max_tokens,
         "stream": False,
     }
-    # Force the model to emit at least one tool call when the original
-    # user prompt is action-shaped. The OpenAI-standard
-    # ``tool_choice: "required"`` constrains the decoder so prose-only
-    # refusals ("I can't use the tool") become structurally
-    # impossible. Detection runs against the raw user prompt
-    # (`payload["message"]`), not the full preamble — the preamble
-    # always contains action verbs from rules/descriptions, so using
-    # it would force tool calls on every request including pure
-    # explain/clarify ones. Auto mode is preserved for non-action
-    # prompts.
-    raw_user_prompt = payload.get("message")
-    if is_action_shaped_prompt(raw_user_prompt):
-        request_body["tool_choice"] = "required"
+    # 2026-05-09: tool_choice injection disabled here — the new
+    # vllm-proxy on :8000 sits between OpenClaw and vLLM and
+    # owns per-turn tool_choice control (alternating mode etc.). Having
+    # the bridge ALSO inject tool_choice="required" at the top of the
+    # stack would conflict with the proxy's per-turn logic, since
+    # OpenClaw forwards the bridge's value into every internal vLLM
+    # call and the proxy would have to STRIP it on odd turns rather
+    # than just inject on even turns. Cleaner to leave the field unset
+    # here and let the proxy be the single source of truth. Re-enable
+    # for the direct lane when we revisit it.
+    # raw_user_prompt = payload.get("message")
+    # if is_action_shaped_prompt(raw_user_prompt):
+    #     request_body["tool_choice"] = "required"
     # Sampling-parameter parity with the direct-vLLM bridge. The gateway
     # accepts standard OpenAI fields and forwards them; without these
     # the model rambles 2-15x longer per turn at OpenClaw's defaults.

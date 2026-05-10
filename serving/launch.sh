@@ -142,13 +142,16 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "hermes"
                 # Lane-parity tuning 2026-05-07: deterministic-leaning sampling
                 # so the OpenClaw lane (which never forwards per-request sampling
-                # fields) gets a tight decode pattern by default. Cosmos's chat
-                # template is already thinking-off by default — no
-                # `--default-chat-template-kwargs` needed (verified by reading
-                # the Qwen3-VL base chat template, which omits the <think> open).
-                # The direct lane sends temperature=0.0 per-request and overrides
-                # this; this only narrows the OpenClaw-lane decode behavior.
+                # fields) gets a tight decode pattern by default.
+                # 2026-05-09 (iter 17 experiment): enable thinking by default —
+                # Cosmos-Reason2-8B is post-trained on Qwen3-VL with long-CoT
+                # reasoning assumed. Running thinking-off is OOD for the model
+                # and causes narration-mode collapse on action prompts.
+                # Smoke-corpus iter 17 tests whether in-distribution thinking
+                # restores accuracy. Latency cost expected: +30-60s per turn.
+                # Revert if iter 17 doesn't show clear improvement.
                 "--override-generation-config" '{"temperature":0.2,"top_p":0.95}'
+                "--default-chat-template-kwargs" '{"enable_thinking":true}'
             )
             ;;
         nemotron3-nano-omni-30b-a3b-nvfp4)

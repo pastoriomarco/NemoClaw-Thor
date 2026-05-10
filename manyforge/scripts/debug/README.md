@@ -12,10 +12,14 @@ launched by `start-openclaw-assistant-bridge.sh` /
 
 ## Files
 
-- `vllm-logging-proxy.py` — single-file HTTP reverse proxy that logs
-  every request/response body as JSONL. Multi-100KB JSON bodies that
-  span many TCP packets are parsed correctly (tcpdump-then-regex
-  isn't reliable for these — verified empirically).
+- `../proxy/vllm-proxy.py` — single-file HTTP reverse proxy that logs
+  every request/response body as JSONL **and** optionally mutates outbound
+  request bodies (max_tokens injection, thinking budget, tool_choice
+  overrides, …). Multi-100KB JSON bodies that span many TCP packets are
+  parsed correctly (tcpdump-then-regex isn't reliable for these —
+  verified empirically). Lives under `scripts/proxy/` rather than
+  `scripts/debug/` because it's part of the iter-20 production recipe,
+  not just a debug tool.
 - `lane-parity-diff.py` — runs the same prompt on both lanes
   back-to-back, captures each lane's vLLM-bound chat-completion via
   the proxies, and emits a field-by-field diff (top-level scalars,
@@ -54,7 +58,7 @@ OpenClaw gateway) and vLLM. They listen on two ports and forward to
 DEBUG=/path/to/manyforge/scripts/debug
 
 # Direct-lane proxy (bridge :8100 → :8001 → vLLM :8000)
-python3 "$DEBUG/vllm-logging-proxy.py" \
+python3 "$DEBUG/../proxy/vllm-proxy.py" \
     --listen-port 8001 \
     --upstream http://127.0.0.1:8000 \
     --log-path /tmp/vllm_direct_proxy.jsonl &
@@ -62,7 +66,7 @@ python3 "$DEBUG/vllm-logging-proxy.py" \
 # OpenClaw-lane proxy (gateway :18789 → :8002 → vLLM :8000).
 # bind 0.0.0.0 so the in-sandbox gateway can reach it via the docker
 # bridge IP (host.openshell.internal:8002).
-python3 "$DEBUG/vllm-logging-proxy.py" \
+python3 "$DEBUG/../proxy/vllm-proxy.py" \
     --listen-port 8002 --bind 0.0.0.0 \
     --upstream http://127.0.0.1:8000 \
     --log-path /tmp/vllm_openclaw_proxy.jsonl &
@@ -118,7 +122,7 @@ content; the **Tools** section names tools present on only one lane.
 
 ## Re-arming during longer sessions
 
-`vllm-logging-proxy.py` truncates its log on startup, so each session
+`vllm-proxy.py` truncates its log on startup, so each session
 starts fresh. The harness reads with byte-offsets-from-baseline so
 multiple runs in one session don't conflict, but for clean traces
 restart the proxies between major test campaigns.

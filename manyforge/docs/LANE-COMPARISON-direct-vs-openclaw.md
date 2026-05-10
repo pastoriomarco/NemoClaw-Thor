@@ -667,19 +667,23 @@ bodies as JSONL — every field, no truncation. A diff harness runs the
 same prompt on both lanes back-to-back and emits a field-by-field
 comparison.
 
-The tooling is in `scripts/debug/`:
+The tooling lives in two places:
 
-- `vllm-logging-proxy.py` — single-file HTTP reverse proxy. Logs
+- `scripts/proxy/vllm-proxy.py` — single-file HTTP reverse proxy. Logs
   every `POST /v1/chat/completions` (and adjacent verbs) as one JSONL
-  line per call: `{ts, request:{method,path,headers,body}, response:
-  {status,headers,body,duration_ms}}`. Multi-100KB JSON bodies that
-  span TCP packets are parsed correctly — tcpdump-then-regex isn't
-  reliable for these (verified empirically 2026-05-07).
-- `lane-parity-diff.py` — runs the same prompt on both lanes, captures
-  each lane's vLLM-bound chat-completion via the proxies, computes a
-  side-by-side diff (top-level fields, sampling params, tools[],
-  messages[], extras, response). Writes per-turn request/response
-  JSON to `/tmp/lane_parity_<ts>_*` for byte-level inspection.
+  line per call: `{ts, request:{method,path,headers,body,mutation},
+  response:{status,headers,body,duration_ms}}`. Multi-100KB JSON bodies
+  that span TCP packets are parsed correctly — tcpdump-then-regex isn't
+  reliable for these (verified empirically 2026-05-07). Also rewrites
+  outbound bodies (max_tokens injection etc.) when env vars are set;
+  see [`COMPOSER-ASSISTANT-ARCHITECTURE.md`](./COMPOSER-ASSISTANT-ARCHITECTURE.md)
+  for the full env-var matrix.
+- `scripts/debug/lane-parity-diff.py` — runs the same prompt on both
+  lanes, captures each lane's vLLM-bound chat-completion via the
+  proxies, computes a side-by-side diff (top-level fields, sampling
+  params, tools[], messages[], extras, response). Writes per-turn
+  request/response JSON to `/tmp/lane_parity_<ts>_*` for byte-level
+  inspection.
 
 ### Why a logging proxy and not tcpdump
 
@@ -694,7 +698,7 @@ the JSON vLLM sees.
 
 ```
 ┌─────────────┐     ┌──────────────────────────┐     ┌──────────┐
-│ direct      │     │ vllm-logging-proxy :8001 │     │          │
+│ direct      │     │ vllm-proxy :8001 │     │          │
 │ bridge      ├─────►  /tmp/vllm_direct_proxy  ├─────► vLLM     │
 │ :8100       │     │  .jsonl                  │     │ :8000    │
 └─────────────┘     └──────────────────────────┘     │          │
@@ -720,12 +724,12 @@ the gateway's call to a non-allowlisted port.
 DEBUG=$NEMOCLAW_THOR_ROOT/manyforge/scripts/debug
 
 # Start both proxies (HTTP, no auth, log to /tmp).
-python3 "$DEBUG/vllm-logging-proxy.py" \
+python3 "$DEBUG/../proxy/vllm-proxy.py" \
     --listen-port 8001 \
     --upstream http://127.0.0.1:8000 \
     --log-path /tmp/vllm_direct_proxy.jsonl &
 
-python3 "$DEBUG/vllm-logging-proxy.py" \
+python3 "$DEBUG/../proxy/vllm-proxy.py" \
     --listen-port 8002 --bind 0.0.0.0 \
     --upstream http://127.0.0.1:8000 \
     --log-path /tmp/vllm_openclaw_proxy.jsonl &

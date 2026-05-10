@@ -1,0 +1,1359 @@
+# manyforge assistant smoke corpus
+# ===================================================================
+# Each case = one assistant prompt + its deterministic expected effects.
+#
+# "Exact expected output" is interpreted as the *contract-level* facts
+# that a passing run must produce, not the model's prose. The text
+# answer is checked separately as a soft signal (`answer_must_contain`
+# / `answer_must_not_contain`).
+#
+# Schema:
+#   id              stable identifier (used in pass/fail tables)
+#   category        groups cases for cross-model comparison
+#   detail_level    generic | medium | specific (3 prompts per shape)
+#   status          active | future. Active cases target the current
+#                   known-good composer-assistant lane. Future cases are
+#                   intentionally tracked capability probes and should be
+#                   skipped unless their required_runtime/tools/nodes are
+#                   available.
+#   required_runtime optional guard for future cases, e.g.
+#                   expanded_node_allowlist, isaac_scene_stream,
+#                   deployment_draft_tools, high_level_skills.
+#   required_tools  optional list of callback tools that must exist.
+#   required_nodes  optional list of behavior catalog node ids that must
+#                   exist and be allowed by the active assistant mode.
+#   precondition    state that must hold before the prompt is sent
+#                   (the harness sets this up before dispatching)
+#   prompt          the user message (verbatim, sent to /api/assistant/chat)
+#   expected:
+#     tools_called          ordered list; each entry has:
+#                             name           required tool id
+#                             args_contain   key/value asserts on args
+#                             allow_retries  boolean — accept a 4xx then 200
+#     state_after           dotted-path asserts on program/scene snapshot
+#     forbidden_tools       negative assertions
+#     answer_must_contain   substrings that should be in the final
+#                             assistant message (case-insensitive)
+#     answer_must_not_contain  substrings that must NOT appear
+#
+# Pass criteria (default):
+#   - All `tools_called` fire, in order, with args matching args_contain
+#   - All `state_after` asserts hold
+#   - No `forbidden_tools` fired
+#   - All answer asserts hold (soft, can be weighted)
+#
+# A run that passes tools+state but fails answer asserts is "soft-pass"
+# (counts toward effective hit rate but logged for review).
+#
+# Future cases are not "expected failures"; they are acceptance tests for
+# deliberate capability additions. Keep them in this corpus so model-level
+# progress can be measured as new tools/nodes are exposed.
+# ===================================================================
+
+schema_version: "manyforge.assistant_smoke_corpus.v0"
+
+# Default precondition for every case unless overridden:
+default_precondition:
+  deployment_path: "/workspace/examples/assistant_modes_scene_authoring.deployment.yaml"
+  program_path: "/workspace/examples/pick_and_place_ur10e_robotiq.program.yaml"
+  force_discard_overrides: true
+
+# ===================================================================
+# starting_state — what the model sees BEFORE the first prompt of each
+# case (unless that case sets `precondition.fresh_program: true`, in
+# which case the harness loads an empty deployment + empty tree). This
+# is captured from the canonical example files referenced above; if
+# either file changes, regenerate this block by inspecting the live
+# program/scene state via /api/program/state.
+# ===================================================================
+starting_state:
+
+  # The behavior tree the program ships with: a 12-step pick-and-place
+  # sequence rooted at `pick_and_place`. Every case (other than fresh-
+  # program ones) starts here. Cases that reference specific node names
+  # like `move_to_pick_approach` or `pick_retreat` are matching THESE.
+  tree:
+    name: pick_and_place
+    id: sequence
+    children:
+      - { name: command_gripper,        id: command_gripper }        # open the gripper before pick
+      - { name: move_to_pick_approach,  id: move_manipulator_action }
+      - { name: move_to_pick,           id: move_manipulator_action }
+      - { name: close_gripper,          id: command_gripper }
+      - { name: attach_graspable,       id: attach_object_to_link }
+      - { name: pick_retreat,           id: move_manipulator_action }
+      - { name: move_to_drop_approach,  id: move_manipulator_action }
+      - { name: move_to_drop,           id: move_manipulator_action }
+      - { name: open_gripper,           id: command_gripper }
+      - { name: detach_graspable,       id: detach_object_from_link }
+      - { name: drop_retreat,           id: move_manipulator_action }
+      - { name: return_rest,            id: move_manipulator_action }
+
+  # Two static collision objects in the universe frame.
+  scene:
+    objects:
+      - object_id: ground
+        shape: { type: box, box_dimensions_m: [1.0, 1.0, 0.2] }
+        pose: { frame_id: universe, position_m: [0.0, 0.0, -0.11], orientation_rpy_deg: [0, 0, 0] }
+      - object_id: graspable
+        shape: { type: box, box_dimensions_m: [0.1, 0.01, 0.01] }
+        pose: { frame_id: universe, position_m: [0.3, -0.3, 0.15], orientation_xyzw: [0, 0, -0.382683432365, 0.923879532511] }
+
+  # One program parameter (read-only at runtime, but referenced by
+  # PARAM_modify_medium / UPDATE_params_specific etc.).
+  parameters:
+    - name: velocity_scale
+      type: float
+      default: 0.5
+      constraints: { min_exclusive: 0, max_inclusive: 1 }
+      description: "Velocity scale for all moves."
+
+  # One blackboard key (referenced by BB_modify_medium etc.).
+  blackboard:
+    keys:
+      - { id: gripper_closed, type: bool, key: gripper_closed,
+          description: "Logical gripper closed/open flag written after actuation succeeds." }
+
+  # Robot/gripper come from the deployment + URDF; not directly mutable
+  # by the assistant in composer-assistant mode.
+  robot:
+    family: ur
+    model: ur10e
+    gripper: robotiq_2f_140
+
+  # Assistant modes available on this deployment (filtered tool surface).
+  # Smoke harness sets assistantMode to "composer-assistant" by default.
+  assistant_modes:
+    query:               { enabled: true,  allowed_tool_count: 3 }
+    composer-assistant:  { enabled: true,  allowed_tool_count: 25 }
+
+# Cases that explicitly start from an empty program + empty scene set
+# `precondition.fresh_program: true` (see PnP_01 in Section 13). Those
+# cases ignore the `starting_state` above.
+
+cases:
+
+# ===================================================================
+# Section 1 — Original 3-prompt smoke set (P1/P2/P3)
+# Kept for backward-comparability with prior lane-3x3-smoke.py runs.
+# ===================================================================
+
+- id: P1_wrap_root_specific
+  category: tree_wrap_root
+  detail_level: specific
+  prompt: "add a repeat node as root"
+  expected:
+    tools_called:
+      - name: tree_draft_wrap_node
+        args_contain:
+          targetName: pick_and_place
+          wrapper.id: repeat
+    state_after:
+      program.tree.id: repeat
+      program.tree.children[0].name: pick_and_place
+    forbidden_tools: [tree_draft_insert_node]
+    answer_must_contain: ["repeat", "root"]
+
+- id: P2_scene_add_specific
+  category: scene_add
+  detail_level: specific
+  prompt: "add a box of size 1.0, 0.02, 0.25 in position 0.0, -0.15, 0.125"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        args_contain:
+          shape.type: box
+          shape.box_dims: [1.0, 0.02, 0.25]
+          pose.position: [0.0, -0.15, 0.125]
+    state_after:
+      "scene.objects[*].shape.box_dims": "contains [1.0, 0.02, 0.25]"
+    answer_must_contain: ["box", "added"]
+
+- id: P3_tree_insert_runtime_obj_specific
+  category: tree_insert_runtime_obj
+  detail_level: specific
+  prompt: |
+    add an upsert node at the end of pick_and_place sequence that places
+    'graspable' object in the same position and orientation as the scene
+    start, with the same original size
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          position: -1   # i.e. last child
+          node.id: upsert_collision_object
+          node.params.object_id: graspable
+        allow_retries: true   # P3 typically retries via catalog_read
+    forbidden_tools: [scene_draft_add_object, scene_draft_update_object]
+    answer_must_contain: ["upsert", "graspable", "pick_and_place"]
+
+# ===================================================================
+# Section 2 — Three detail levels for each base shape
+# ===================================================================
+
+# --- tree_wrap_root ---
+- id: WRAP_root_generic
+  category: tree_wrap_root
+  detail_level: generic
+  prompt: "wrap the tree"
+  expected:
+    tools_called:
+      - name: tree_draft_wrap_node
+        args_contain:
+          targetName: pick_and_place
+    state_after:
+      program.tree.children[0].name: pick_and_place
+    answer_must_contain: ["wrap"]
+
+- id: WRAP_root_medium
+  category: tree_wrap_root
+  detail_level: medium
+  prompt: "wrap the root with a retry decorator"
+  expected:
+    tools_called:
+      - name: tree_draft_wrap_node
+        args_contain:
+          targetName: pick_and_place
+          wrapper.id: retry
+    state_after:
+      program.tree.id: retry
+
+# --- scene_add ---
+- id: SCENE_add_generic
+  category: scene_add
+  detail_level: generic
+  prompt: "add a small box to the scene"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        args_contain:
+          shape.type: box
+    answer_must_contain: ["box", "added"]
+
+- id: SCENE_add_medium
+  category: scene_add
+  detail_level: medium
+  prompt: "add a sphere of radius 0.05 in front of the robot"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        args_contain:
+          shape.type: sphere
+          shape.sphere_radius_m: 0.05
+    answer_must_contain: ["sphere"]
+
+# --- tree_insert_runtime_obj ---
+- id: TREE_insert_runtime_generic
+  category: tree_insert_runtime_obj
+  detail_level: generic
+  prompt: "add a node that places graspable somewhere"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          node.id: upsert_collision_object
+          node.params.object_id: graspable
+        allow_retries: true
+
+- id: TREE_insert_runtime_medium
+  category: tree_insert_runtime_obj
+  detail_level: medium
+  prompt: "at the end of the cycle, re-place the graspable at the start position"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          position: -1
+          node.id: upsert_collision_object
+          node.params.object_id: graspable
+        allow_retries: true
+
+# ===================================================================
+# Section 3 — Insert at specific positions in a sequence
+# ===================================================================
+
+- id: INSERT_position_first_specific
+  category: tree_insert_at_position
+  detail_level: specific
+  status: active   # node kinds now in the allowlist (2026-05-08)
+  precondition: { chain_timeout_s: 220 }   # novel kind + position arg
+                                           # triggers extended catalog_read
+                                           # recovery loops; 130s default
+                                           # is too tight (saw 131.3s in
+                                           # the prior run).
+  prompt: "insert a wait_for_signal_bool node as child index 0 of pick_and_place that waits for start_pick=true"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          position: 0
+          node.id: wait_for_signal_bool
+          node.params.signal_id: start_pick
+          node.params.expected: true
+        allow_retries: true
+    state_after:
+      "program.tree.children[0].id": wait_for_signal_bool
+
+- id: INSERT_position_after_named_medium
+  category: tree_insert_at_position
+  detail_level: medium
+  status: active   # node kinds now in the allowlist (2026-05-08)
+  prompt: "insert a 2 second timer after move_to_pick_approach"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          # position should be index_of('approach') + 1
+          node.id: timer
+          node.params.duration_s: 2.0
+        allow_retries: true
+    answer_must_contain: ["timer"]
+
+- id: INSERT_position_before_named_generic
+  category: tree_insert_at_position
+  detail_level: generic
+  status: active   # node kinds now in the allowlist (2026-05-08)
+  prompt: "put a delay before the place step"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          node.id: timer
+        allow_retries: true
+
+# ===================================================================
+# Section 4 — Parallel composites
+# ===================================================================
+
+- id: PARALLEL_safety_specific
+  category: tree_insert_parallel
+  detail_level: specific
+  status: future
+  required_runtime: force_monitor_node
+  required_nodes: [force_monitor]
+  prompt: |
+    wrap the lift→transport segment of pick_and_place with a parallel
+    composite that runs the existing motion sequence concurrently with
+    a force_monitor node that halts on > 30 N
+  expected:
+    tools_called:
+      - name: tree_draft_replace_subtree
+        args_contain:
+          subtree_root.kind: parallel
+        allow_retries: true
+    answer_must_contain: ["parallel"]
+
+- id: PARALLEL_concurrent_medium
+  category: tree_insert_parallel
+  detail_level: medium
+  status: active   # node kinds now in the allowlist (2026-05-08)
+  prompt: "add a parallel that runs gripper open and a status update at the same time"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          node.id: parallel
+        allow_retries: true
+
+- id: PARALLEL_generic
+  category: tree_insert_parallel
+  detail_level: generic
+  # Reframed 2026-05-08 from "expect insert_node parallel" to expected-
+  # clarification: "add a parallel" alone is genuinely under-specified
+  # (no children listed, no parent, no position). cosmos-8b reliably
+  # produces text without firing in the prior run; the bounded-autonomy
+  # answer is to ask for the missing detail.
+  prompt: "add a parallel"
+  expected:
+    tools_called: []
+    forbidden_tools: [tree_draft_insert_node, tree_draft_wrap_node]
+    answer_must_contain: ["which", "where"]
+
+# ===================================================================
+# Section 5 — Fallback composites
+# ===================================================================
+
+- id: FALLBACK_retry_specific
+  category: tree_insert_fallback
+  detail_level: specific
+  status: active   # node kinds now in the allowlist (2026-05-08)
+  prompt: |
+    insert a fallback as the second child of pick_and_place containing
+    two move_manipulator_action nodes named primary_pick and backup_pick that
+    each try a different grasp pose
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          position: 1
+          node.id: fallback
+        allow_retries: true
+    answer_must_contain: ["fallback"]
+
+- id: FALLBACK_alternate_medium
+  category: tree_insert_fallback
+  detail_level: medium
+  prompt: "add a fallback node before the gripper close that tries two alternate approach paths"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          node.id: fallback
+        allow_retries: true
+
+- id: FALLBACK_generic
+  category: tree_insert_fallback
+  detail_level: generic
+  # Reframed 2026-05-08 from "expect insert_node fallback" to expected-
+  # clarification: "add a fallback" alone has no children/parent/position.
+  # Same rationale as PARALLEL_generic.
+  prompt: "add a fallback"
+  expected:
+    tools_called: []
+    forbidden_tools: [tree_draft_insert_node, tree_draft_wrap_node]
+    answer_must_contain: ["which", "where"]
+
+# ===================================================================
+# Section 6 — Update existing-node params
+# ===================================================================
+
+- id: UPDATE_params_specific
+  category: tree_update_node_params
+  detail_level: specific
+  prompt: "set the move_to_pick_approach node's velocity_scale parameter to 0.3"
+  expected:
+    tools_called:
+      - name: tree_draft_update_node_params
+        args_contain:
+          nodeName: move_to_pick_approach
+          params.velocity_scale: 0.3
+          merge: true
+    state_after:
+      "program.tree.children[name=move_to_pick_approach].params.velocity_scale": 0.3
+
+- id: UPDATE_params_medium
+  category: tree_update_node_params
+  detail_level: medium
+  prompt: "slow down move_to_pick_approach by half"
+  expected:
+    tools_called:
+      - name: tree_draft_update_node_params
+        args_contain:
+          nodeName: move_to_pick_approach
+          merge: true
+        allow_retries: true
+    answer_must_contain: ["move_to_pick_approach", "velocity"]
+
+- id: UPDATE_params_generic
+  category: tree_update_node_params
+  detail_level: generic
+  prompt: "make the robot move slower"
+  expected:
+    tools_called:
+      - name: tree_draft_update_node_params
+        allow_retries: true
+    forbidden_tools: [tree_draft_insert_node, tree_draft_delete_node]
+
+# ===================================================================
+# Section 7 — Delete nodes
+# ===================================================================
+
+- id: DELETE_named_specific
+  category: tree_delete_node
+  detail_level: specific
+  prompt: "delete the node named move_to_pick_approach"
+  expected:
+    tools_called:
+      - name: tree_draft_delete_node
+        args_contain:
+          nodeName: move_to_pick_approach
+    state_after:
+      "program.tree.children[*].name": "does_not_contain move_to_pick_approach"
+    answer_must_contain: ["move_to_pick_approach", "delete"]
+
+- id: DELETE_kind_medium
+  category: tree_delete_node
+  detail_level: medium
+  prompt: "remove the gripper-close step"
+  expected:
+    tools_called:
+      - name: tree_draft_delete_node
+        allow_retries: true
+
+- id: DELETE_generic
+  category: tree_delete_node
+  detail_level: generic
+  prompt: "drop the last node"
+  expected:
+    tools_called:
+      - name: tree_draft_delete_node
+        allow_retries: true
+
+# ===================================================================
+# Section 8 — Move nodes
+# ===================================================================
+
+- id: MOVE_swap_specific
+  category: tree_move_node
+  detail_level: specific
+  prompt: "move pick_retreat to be the second child of pick_and_place"
+  expected:
+    tools_called:
+      - name: tree_draft_move_node
+        args_contain:
+          nodeName: pick_retreat
+          newParentName: pick_and_place
+          index: 1
+        allow_retries: true
+    state_after:
+      "program.tree.children[1].name": pick_retreat
+
+- id: MOVE_reorder_medium
+  category: tree_move_node
+  detail_level: medium
+  prompt: "swap the order of pick_retreat and move_to_drop_approach"
+  expected:
+    tools_called:
+      - name: tree_draft_move_node
+        allow_retries: true
+
+- id: MOVE_generic
+  category: tree_move_node
+  detail_level: generic
+  # 2026-05-09 (iter 9): bounded-autonomy rubric (matches CLARIFY_*).
+  # Read-only inspection allowed; mutations forbidden. Soft-passes if
+  # the model asks "which step" without firing any tree mutation tool.
+  prompt: "move that step earlier"
+  expected:
+    forbidden_tools:
+      - tree_draft_move_node
+      - tree_draft_wrap_node
+      - tree_draft_replace_subtree
+      - tree_draft_change_node_kind
+      - tree_draft_insert_node
+      - tree_draft_delete_node
+      - tree_draft_update_node_params
+    answer_must_contain: ["which", "step"]
+
+# ===================================================================
+# Section 9 — Replace subtree
+# ===================================================================
+
+- id: REPLACE_subtree_specific
+  category: tree_replace_subtree
+  detail_level: specific
+  precondition: { chain_timeout_s: 240 }   # multi-node subtree replacement
+                                           # is the slowest pattern in the
+                                           # corpus (saw 140.1s timeout in
+                                           # the prior run).
+  prompt: |
+    replace the pick step (children of pick_and_place from 'descend' to
+    'attach') with a single 'pick_routine' subtree that wraps the same
+    nodes inside a fallback for retry-on-failure semantics
+  expected:
+    tools_called:
+      - name: tree_draft_replace_subtree
+        args_contain:
+          subtree_root.kind: fallback
+        allow_retries: true
+    answer_must_contain: ["replace"]
+
+- id: REPLACE_simple_medium
+  category: tree_replace_subtree
+  detail_level: medium
+  status: active   # node kinds now in the allowlist (2026-05-08)
+  prompt: "replace the close_gripper action with a 1 second timer"
+  expected:
+    tools_called:
+      - name: tree_draft_replace_subtree   # may also be delete+insert
+        allow_retries: true
+
+# ===================================================================
+# Section 10 — Scene update / remove
+# ===================================================================
+
+- id: SCENE_update_pose_specific
+  category: scene_update
+  detail_level: specific
+  prompt: "move graspable to position (0.5, 0.1, 0.05)"
+  expected:
+    tools_called:
+      - name: scene_draft_update_object
+        args_contain:
+          objectId: graspable
+          pose.position_m: [0.5, 0.1, 0.05]
+    state_after:
+      "scene.objects[object_id=graspable].pose_in_universe.position_m": [0.5, 0.1, 0.05]
+
+- id: SCENE_update_size_medium
+  category: scene_update
+  detail_level: medium
+  prompt: "make the graspable twice as wide"
+  expected:
+    tools_called:
+      - name: scene_draft_update_object
+        args_contain:
+          objectId: graspable
+        allow_retries: true
+
+- id: SCENE_remove_specific
+  category: scene_remove
+  detail_level: specific
+  prompt: "remove graspable from the scene"
+  expected:
+    tools_called:
+      - name: scene_draft_remove_objects
+        args_contain:
+          objectIds: ["graspable"]
+    state_after:
+      "scene.objects[*].id": "does_not_contain graspable"
+
+- id: SCENE_remove_generic
+  category: scene_remove
+  detail_level: generic
+  prompt: "clean up unused obstacles"
+  expected:
+    # Ambiguous: may ask for clarification
+    answer_must_contain: ["which"]
+
+# ===================================================================
+# Section 11 — Program parameters (declared in deployment YAML)
+# ===================================================================
+
+- id: PARAM_add_specific
+  category: parameters_add
+  detail_level: specific
+  status: active   # program_draft_upsert_parameters is in the composer-
+                   # assistant tool allowlist (verified 2026-05-08).
+  prompt: "add a program parameter named max_velocity of type float with default 0.5"
+  expected:
+    tools_called:
+      - name: program_draft_upsert_parameters
+        args_contain:
+          parameters:
+            - name: max_velocity
+              type: float
+              default: 0.5
+    state_after:
+      "program.parameters[*].name": "contains max_velocity"
+
+- id: PARAM_modify_medium
+  category: parameters_modify
+  detail_level: medium
+  status: active   # tool already in the allowlist; velocity_scale exists
+                   # in the starting program (no fixture needed).
+  prompt: "change the velocity_scale parameter default to 0.25"
+  expected:
+    tools_called:
+      - name: program_draft_upsert_parameters
+        args_contain:
+          parameters:
+            - name: velocity_scale
+              type: float
+              default: 0.25
+    state_after:
+      "program.parameters[name=velocity_scale].default": 0.25
+
+- id: PARAM_delete_specific
+  category: parameters_delete
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: custom_precondition
+  notes: "Requires a harness precondition that inserts legacy_offset and removes any references before deletion."
+  prompt: "remove the parameter named legacy_offset"
+  expected:
+    tools_called:
+      - name: program_draft_remove_parameters
+        args_contain:
+          names: ["legacy_offset"]
+        allow_retries: true
+
+# ===================================================================
+# Section 12 — Blackboard keys
+# ===================================================================
+
+- id: BB_add_specific
+  category: blackboard_add
+  detail_level: specific
+  status: active   # blackboard_draft_upsert_keys is in the allowlist
+                   # (verified 2026-05-08).
+  prompt: "add a blackboard key named target_pose of type pose"
+  expected:
+    tools_called:
+      - name: blackboard_draft_upsert_keys
+        args_contain:
+          keys:
+            - id: target_pose
+              type: pose
+              key: target_pose
+    state_after:
+      "program.blackboard.keys[*].id": "contains target_pose"
+
+- id: BB_modify_medium
+  category: blackboard_modify
+  detail_level: medium
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: custom_precondition
+  notes: "Requires a harness precondition that inserts grip_force before updating it."
+  prompt: "change the type of grip_force to float"
+  expected:
+    tools_called:
+      - name: blackboard_draft_upsert_keys
+        args_contain:
+          keys:
+            - id: grip_force
+              type: float
+        allow_retries: true
+
+- id: BB_delete_specific
+  category: blackboard_delete
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: custom_precondition
+  notes: "Requires a harness precondition that inserts scratch_value before deleting it."
+  prompt: "delete the blackboard key called scratch_value"
+  expected:
+    tools_called:
+      - name: blackboard_draft_remove_keys
+        args_contain:
+          ids: ["scratch_value"]
+        allow_retries: true
+
+# ===================================================================
+# Section 13 — End-to-end pick-and-place build (from empty scene+tree)
+# Run as a chain — each prompt's expected state is the next prompt's
+# precondition. The harness must execute these in order on the SAME
+# conversation/program; do not reset between cases inside this chain.
+# ===================================================================
+
+- id: PnP_01_scene_ground
+  category: pick_and_place_build
+  detail_level: specific
+  precondition:
+    chain_step: 1
+    chain_id: pnp_build
+    fresh_program: true   # empty scene + empty tree
+  prompt: "add a ground plane: a thin box 2x2x0.01 m centered at the origin"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        args_contain:
+          shape.type: box
+          shape.box_dims: [2.0, 2.0, 0.01]
+
+- id: PnP_02_scene_graspable
+  category: pick_and_place_build
+  detail_level: specific
+  precondition: { chain_id: pnp_build, chain_step: 2 }
+  prompt: "add a graspable cube 0.05x0.05x0.05 m at (0.4, 0.0, 0.05) named graspable"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        args_contain:
+          objectId: graspable
+          shape.type: box
+          shape.box_dims: [0.05, 0.05, 0.05]
+          pose.position: [0.4, 0.0, 0.05]
+
+- id: PnP_03_scene_pick_pad
+  category: pick_and_place_build
+  detail_level: specific
+  precondition: { chain_id: pnp_build, chain_step: 3 }
+  prompt: "add a pick pad: 0.2x0.2x0.025 m box at (0.4, 0.0, 0.012) named pick_pad"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        args_contain: { objectId: pick_pad }
+
+- id: PnP_04_scene_place_pad
+  category: pick_and_place_build
+  detail_level: specific
+  precondition: { chain_id: pnp_build, chain_step: 4 }
+  prompt: "add a place pad: 0.2x0.2x0.025 m box at (0.0, 0.4, 0.012) named place_pad"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        args_contain: { objectId: place_pad }
+
+- id: PnP_05_tree_root
+  category: pick_and_place_build
+  detail_level: specific
+  precondition: { chain_id: pnp_build, chain_step: 5 }
+  # 2026-05-09 (iter 5): the empty-program fixture pre-names the root
+  # `pick_and_place`, so this turn no longer needs a rename. Instead it
+  # asks the assistant to verify the current tree before the build chain
+  # starts inserting children — a turn that REQUIRES a tool call
+  # (`program_read`). Empirically PnP_06+ collapses to text-only
+  # narration when PnP_05 is a "no-op text answer"; keeping the model in
+  # tool-use mode here is what actually unblocks the rest of the chain.
+  prompt: "before adding any children, read the current program state so we know the root we'll insert under"
+  expected:
+    tools_called:
+      - name: program_read
+        allow_retries: true
+    state_after:
+      "program.tree.id": sequence
+      "program.tree.name": pick_and_place
+
+- id: PnP_06_approach
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [move_manipulator_action]
+  precondition: { chain_id: pnp_build, chain_step: 6 }
+  prompt: "as the first child, add a move-to-pose that approaches above the graspable: position (0.4, 0.0, 0.20)"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          position: 0
+          node.id: move_manipulator_action
+          node.params.motion_type: pose_goal
+        allow_retries: true
+
+- id: PnP_07_descend
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [move_manipulator_action]
+  precondition: { chain_id: pnp_build, chain_step: 7 }
+  prompt: "after the approach, add a move-to-pose that descends to (0.4, 0.0, 0.07) for grasping"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          node.id: move_manipulator_action
+          node.params.motion_type: pose_goal
+        allow_retries: true
+
+- id: PnP_08_close_gripper
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [command_gripper]
+  precondition: { chain_id: pnp_build, chain_step: 8 }
+  prompt: "after the descend, close the gripper"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+
+- id: PnP_09_attach
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: pnp_build_chain
+  precondition: { chain_id: pnp_build, chain_step: 9 }
+  prompt: "after the gripper close, attach graspable to link grasp_frame"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          node.id: attach_object_to_link
+          node.params.object_id: graspable
+          node.params.link_frame: grasp_frame
+        allow_retries: true
+
+- id: PnP_10_lift
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [move_manipulator_action]
+  precondition: { chain_id: pnp_build, chain_step: 10 }
+  prompt: "after the attach, add a lift move-to-pose at (0.4, 0.0, 0.20)"
+  expected:
+    tools_called: [{ name: tree_draft_insert_node, allow_retries: true }]
+
+- id: PnP_11_transport
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [move_manipulator_action]
+  precondition: { chain_id: pnp_build, chain_step: 11 }
+  prompt: "after the lift, add a transport move-to-pose at (0.0, 0.4, 0.20)"
+  expected:
+    tools_called: [{ name: tree_draft_insert_node, allow_retries: true }]
+
+- id: PnP_12_place_descend
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [move_manipulator_action]
+  precondition: { chain_id: pnp_build, chain_step: 12 }
+  prompt: "after the transport, add a descend-to-place move at (0.0, 0.4, 0.07)"
+  expected:
+    tools_called: [{ name: tree_draft_insert_node, allow_retries: true }]
+
+- id: PnP_13_detach
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: pnp_build_chain
+  precondition: { chain_id: pnp_build, chain_step: 13 }
+  prompt: "after the place descend, detach graspable from grasp_frame"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          node.id: detach_object_from_link
+          node.params.object_id: graspable
+          node.params.link_frame: grasp_frame
+        allow_retries: true
+
+- id: PnP_14_upsert
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: pnp_build_chain
+  precondition: { chain_id: pnp_build, chain_step: 14 }
+  prompt: "after the detach, upsert graspable at the new location (0.0, 0.4, 0.05)"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          node.id: upsert_collision_object
+          node.params.object_id: graspable
+          node.params.pose.position: [0.0, 0.4, 0.05]
+        allow_retries: true
+
+- id: PnP_15_open_gripper
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [command_gripper]
+  precondition: { chain_id: pnp_build, chain_step: 15 }
+  prompt: "after the upsert, open the gripper"
+  expected:
+    tools_called: [{ name: tree_draft_insert_node, allow_retries: true }]
+
+- id: PnP_16_retract
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [move_manipulator_action]
+  precondition: { chain_id: pnp_build, chain_step: 16 }
+  prompt: "after the open, add a retract move-to-pose at (0.0, 0.4, 0.20)"
+  expected:
+    tools_called: [{ name: tree_draft_insert_node, allow_retries: true }]
+
+- id: PnP_17_home
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: expanded_node_allowlist
+  required_nodes: [move_manipulator_action]
+  precondition: { chain_id: pnp_build, chain_step: 17 }
+  prompt: "after the retract, add a return-home move-to-pose"
+  expected:
+    tools_called: [{ name: tree_draft_insert_node, allow_retries: true }]
+
+- id: PnP_18_repeat_root
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: pnp_build_chain
+  precondition: { chain_id: pnp_build, chain_step: 18 }
+  prompt: "wrap the whole pick_and_place sequence with a repeat node as the new root, num_cycles=-1"
+  expected:
+    tools_called:
+      - name: tree_draft_wrap_node
+        args_contain:
+          targetName: pick_and_place
+          wrapper.id: repeat
+          wrapper.params.num_cycles: -1
+    state_after:
+      "program.tree.id": repeat
+      "program.tree.params.num_cycles": -1
+
+- id: PnP_19_safety_parallel
+  category: pick_and_place_build
+  detail_level: specific
+  status: future
+  required_runtime: force_monitor_node
+  required_nodes: [force_monitor]
+  precondition: { chain_id: pnp_build, chain_step: 19 }
+  prompt: |
+    add a parallel safety wrapper around the lift→transport segment
+    that halts if force feedback exceeds 30 N
+  expected:
+    tools_called:
+      - name: tree_draft_replace_subtree
+        args_contain: { subtree_root.kind: parallel }
+        allow_retries: true
+
+- id: PnP_20_grip_force
+  category: pick_and_place_build
+  detail_level: specific
+  status: active   # 2026-05-08: harness now provides this runtime
+  required_runtime: pnp_build_chain
+  precondition: { chain_id: pnp_build, chain_step: 20 }
+  prompt: "set the gripper-close grip force to 40 N"
+  expected:
+    tools_called:
+      - name: tree_draft_update_node_params
+        args_contain: { params.grip_force: 40 }
+        allow_retries: true
+
+# ===================================================================
+# Section 14 — Current-lane realistic regression cases
+# These should run against the current known-good composer-assistant mode.
+# They use canonical schema argument names rather than historical smoke
+# aliases where practical.
+# ===================================================================
+
+- id: CUR_wrap_existing_motion_with_retry
+  category: current_tree_control
+  detail_level: specific
+  status: active
+  prompt: "retry the move_to_pick step up to 2 times before failing"
+  expected:
+    tools_called:
+      - name: tree_draft_wrap_node
+        args_contain:
+          targetName: move_to_pick
+          wrapper.id: retry
+          wrapper.params.num_attempts: 2
+        allow_retries: true
+    state_after:
+      "program.tree.children[*].id": "contains retry"
+    forbidden_tools: [tree_draft_replace_subtree]
+    answer_must_contain: ["retry", "move_to_pick"]
+
+- id: CUR_update_existing_motion_speed
+  category: current_tree_update
+  detail_level: specific
+  status: active
+  prompt: "set move_to_pick_approach velocity_scale to 0.25 and keep the rest of its motion parameters"
+  expected:
+    tools_called:
+      - name: tree_draft_update_node_params
+        args_contain:
+          nodeName: move_to_pick_approach
+          params.velocity_scale: 0.25
+          merge: true
+        allow_retries: true
+    state_after:
+      "program.tree.children[name=move_to_pick_approach].params.velocity_scale": 0.25
+    forbidden_tools: [tree_draft_replace_subtree]
+
+- id: CUR_scene_add_static_fixture_not_runtime
+  category: current_scene_tool_routing
+  detail_level: medium
+  status: active
+  prompt: "add a fixed 0.4 by 0.02 by 0.2 meter safety wall at x=0.2 y=-0.45 z=0.1"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        args_contain:
+          shape.type: box
+          shape.box_dims: [0.4, 0.02, 0.2]
+          pose.position: [0.2, -0.45, 0.1]
+        allow_retries: true
+    forbidden_tools: [tree_draft_insert_node]
+    answer_must_contain: ["wall"]
+
+- id: CUR_scene_update_graspable_pose
+  category: current_scene_update
+  detail_level: specific
+  status: active
+  prompt: "move the static scene object graspable to [0.35, -0.25, 0.15] in the universe frame"
+  expected:
+    tools_called:
+      - name: scene_draft_update_object
+        args_contain:
+          objectId: graspable
+          pose.position_m: [0.35, -0.25, 0.15]
+          pose.frame_id: universe
+        allow_retries: true
+    state_after:
+      "scene.objects[object_id=graspable].pose_in_universe.position_m": [0.35, -0.25, 0.15]
+    forbidden_tools: [tree_draft_insert_node]
+
+- id: CUR_runtime_remove_then_restore_graspable
+  category: current_runtime_scene_mutation
+  detail_level: specific
+  status: active
+  prompt: |
+    at the end of pick_and_place, remove graspable from the runtime scene
+    and then upsert it again at its initial scene pose and size
+  expected:
+    tools_called:
+      - name: scene_inspect
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          node.id: remove_collision_object
+          node.params.object_id: graspable
+        allow_retries: true
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          node.id: upsert_collision_object
+          node.params.object_id: graspable
+          node.params.shape_type: box
+          node.params.box_dimensions_m: [0.1, 0.01, 0.01]
+          node.params.pose.frame_id: universe
+        allow_retries: true
+    forbidden_tools: [scene_draft_remove_objects, scene_draft_update_object]
+    answer_must_contain: ["runtime", "graspable"]
+
+- id: CUR_runtime_update_graspable_pose_each_cycle
+  category: current_runtime_scene_mutation
+  detail_level: medium
+  status: active
+  prompt: "after each cycle, set graspable's runtime pose back to [0.3, -0.3, 0.15]"
+  expected:
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          parentName: pick_and_place
+          node.id: update_collision_object_pose
+          node.params.object_id: graspable
+          node.params.pose.position_m: [0.3, -0.3, 0.15]
+        allow_retries: true
+    forbidden_tools: [scene_draft_update_object, scene_draft_upsert_objects]
+    answer_must_contain: ["runtime", "pose"]
+
+# ===================================================================
+# Section 15 — Clarification / no-mutation cases
+# These protect bounded autonomy. The assistant may inspect state, but it
+# must not mutate the draft when the target or timing is underspecified.
+# ===================================================================
+
+- id: CLARIFY_scene_remove_pronoun
+  category: clarification
+  detail_level: generic
+  status: active
+  # 2026-05-09 (iter 9): bounded-autonomy rubric. Read-only inspection
+  # tools (program_read, scene_inspect) are now ALLOWED before asking
+  # — only mutations are forbidden. The case passes if (a) no mutating
+  # tool fires AND (b) the answer asks "which object?". Matches what
+  # an industrial-safety bounded agent should actually do: check state,
+  # then ask the user. Drops the over-strict `tools_called: []`.
+  prompt: "remove it from the scene"
+  expected:
+    forbidden_tools:
+      - scene_draft_remove_objects
+      - scene_draft_add_object
+      - scene_draft_update_object
+      - scene_draft_upsert_objects
+      - tree_draft_delete_node
+      - tree_draft_insert_node
+      - tree_draft_wrap_node
+      - tree_draft_update_node_params
+      - tree_draft_move_node
+      - tree_draft_replace_subtree
+      - tree_draft_change_node_kind
+    answer_must_contain: ["which", "object"]
+
+- id: CLARIFY_tree_wrap_pronoun
+  category: clarification
+  detail_level: generic
+  status: active
+  prompt: "wrap that step in a retry"
+  expected:
+    forbidden_tools:
+      - tree_draft_wrap_node
+      - tree_draft_replace_subtree
+      - tree_draft_insert_node
+      - tree_draft_delete_node
+      - tree_draft_move_node
+      - tree_draft_change_node_kind
+      - tree_draft_update_node_params
+      - scene_draft_remove_objects
+      - scene_draft_add_object
+    answer_must_contain: ["which", "step"]
+
+- id: CLARIFY_motion_generic
+  category: clarification
+  detail_level: generic
+  status: active
+  prompt: "make the robot move over there"
+  expected:
+    forbidden_tools:
+      - tree_draft_insert_node
+      - tree_draft_update_node_params
+      - tree_draft_wrap_node
+      - tree_draft_replace_subtree
+      - tree_draft_move_node
+      - scene_draft_add_object
+      - scene_draft_remove_objects
+    answer_must_contain: ["where"]
+
+# ===================================================================
+# Section 16 — Isaac/ROS integration probes
+# These are realistic acceptance tests for the laptop-Isaac + Thor
+# Composer workflow. They should be skipped unless an Isaac scene stream
+# is configured and the corresponding proposal tools are enabled.
+# ===================================================================
+
+- id: ISAAC_import_floor_and_graspable
+  category: isaac_scene_import
+  detail_level: specific
+  status: future
+  required_runtime: isaac_scene_stream
+  required_tools: [inspect_isaac_scene, propose_scene_objects, scene_draft_upsert_objects]
+  prompt: |
+    read the Isaac Sim scene and add only the floor and the graspable
+    object as Composer scene resources, preserving their world poses
+  expected:
+    tools_called:
+      - name: inspect_isaac_scene
+        args_contain:
+          requested_kinds: ["floor", "graspable"]
+        allow_retries: true
+      - name: propose_scene_objects
+        allow_retries: true
+      - name: scene_draft_upsert_objects
+        allow_retries: true
+    state_after:
+      "scene.objects[*].id": "contains graspable"
+    answer_must_contain: ["Isaac", "floor", "graspable"]
+
+- id: ISAAC_reject_all_scene_import
+  category: isaac_scene_import
+  detail_level: medium
+  status: future
+  required_runtime: isaac_scene_stream
+  required_tools: [inspect_isaac_scene, propose_scene_objects]
+  prompt: "import everything from Isaac Sim into the Composer scene"
+  expected:
+    tools_called:
+      - name: inspect_isaac_scene
+        allow_retries: true
+    forbidden_tools: [scene_draft_upsert_objects]
+    answer_must_contain: ["which", "objects"]
+
+- id: ISAAC_runtime_colliders_from_selection
+  category: isaac_scene_import
+  detail_level: specific
+  status: future
+  required_runtime: isaac_scene_stream
+  required_tools: [inspect_isaac_scene, propose_scene_object_nodes]
+  prompt: |
+    use the current Isaac scene selection to create runtime
+    upsert_collision_object nodes for the selected floor and graspable
+  expected:
+    tools_called:
+      - name: inspect_isaac_scene
+        allow_retries: true
+      - name: propose_scene_object_nodes
+        allow_retries: true
+      - name: tree_draft_insert_node
+        allow_retries: true
+    forbidden_tools: [scene_draft_add_object]
+
+# ===================================================================
+# Section 17 — Coherent future high-level tools
+# These cases intentionally name tool surfaces that do not exist yet.
+# Keep them here to make the desired assistant contract concrete before
+# implementation: each future tool should collapse a repeated, brittle
+# primitive-call sequence into one bounded-autonomy operation.
+# ===================================================================
+
+- id: FUTURE_deployment_set_robot_and_gripper_from_isaac
+  category: future_deployment_draft
+  detail_level: specific
+  status: future
+  required_runtime: deployment_draft_tools
+  required_tools: [inspect_isaac_scene, deployment_draft_set_robot, deployment_draft_set_gripper]
+  prompt: |
+    read the Isaac Sim scene, select the UR robot and Robotiq gripper,
+    and configure this Composer program to use that robot and gripper
+  expected:
+    tools_called:
+      - name: inspect_isaac_scene
+        allow_retries: true
+      - name: deployment_draft_set_robot
+        args_contain:
+          robot_family: ur
+        allow_retries: true
+      - name: deployment_draft_set_gripper
+        args_contain:
+          gripper_family: robotiq
+        allow_retries: true
+    answer_must_contain: ["robot", "gripper"]
+
+- id: FUTURE_apply_pick_place_skill_from_scene
+  category: future_high_level_skill
+  detail_level: specific
+  status: future
+  required_runtime: high_level_skills
+  required_tools: [skills_read, program_draft_apply_skill]
+  prompt: |
+    build a complete pick-and-place behavior using the selected robot,
+    the selected Robotiq gripper, and the scene object named graspable
+  expected:
+    tools_called:
+      - name: skills_read
+        allow_retries: true
+      - name: program_draft_apply_skill
+        args_contain:
+          skill_id: pick_and_place
+          bindings.object_id: graspable
+        allow_retries: true
+    state_after:
+      "program.tree.name": "contains pick"
+
+- id: FUTURE_preview_plan_before_mutating
+  category: future_high_level_skill
+  detail_level: medium
+  status: future
+  required_runtime: plan_then_apply_tools
+  required_tools: [assistant_plan_draft]
+  prompt: |
+    plan the edits needed to turn the current static scene into a
+    repeating pick-and-place program, but do not mutate the draft yet
+  expected:
+    tools_called:
+      - name: assistant_plan_draft
+        allow_retries: true
+    forbidden_tools:
+      - scene_draft_add_object
+      - tree_draft_insert_node
+      - tree_draft_wrap_node
+    answer_must_contain: ["plan"]
+
+# ===================================================================
+# Notes for the harness implementer
+# ===================================================================
+# - Cases share `default_precondition` unless they override `fresh_program`
+#   or `chain_id`.
+# - Cases without `status` are active by default. A harness should skip
+#   `status: future` cases unless its run profile declares the matching
+#   `required_runtime`, `required_tools`, and `required_nodes` capabilities.
+# - Cases in the SAME `chain_id` MUST run in `chain_step` order on the same
+#   conversation; cases in different chains (or no chain_id) reset the
+#   program before running.
+# - `args_contain` does deep-key matching. Lists are checked element-wise
+#   when both values are lists; otherwise a list value means "contains
+#   element". Strings are case-sensitive substring matches by default.
+# - `allow_retries: true` accepts the documented Composer pattern:
+#   first call may 4xx (catalog/schema mismatch) → model calls
+#   `catalog_read` → retries with corrected args → 200. Counts as one
+#   logical pass.
+# - `state_after` queries the live program/scene snapshot via
+#   `/api/program/state`. Path syntax `[name=foo]` selects the first
+#   element where `.name == "foo"`. `[*]` projects all elements.
+# - Soft-pass (tools+state ✅, answer asserts ❌) is logged but counted
+#   toward effective hit rate by default. Configure via
+#   `--strict-answer-asserts` to demote to fail.

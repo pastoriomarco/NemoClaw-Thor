@@ -23,12 +23,18 @@ Composer-assistant pipeline:
 - **`openclaw_assistant_bridge/`** — the bridge service source (Python
   FastAPI). The provisioner and the launcher both reference this path.
 - **`docs/`** — operational docs (see *Where to read* below).
-- **`scripts/debug/`** — lane-parity debugging harness:
-  `vllm-logging-proxy.py` (HTTP reverse proxy that logs full
-  request/response bodies as JSONL),
+- **`scripts/proxy/`** — `vllm-proxy.py`, the HTTP reverse proxy that
+  logs every request/response between the chat-completions client (the
+  bridge or OpenClaw gateway) and vLLM, and optionally mutates outbound
+  request bodies (max_tokens injection, thinking budget, tool_choice
+  overrides, …). Part of the iter-20 production recipe. See
+  [`docs/COMPOSER-ASSISTANT-ARCHITECTURE.md`](docs/COMPOSER-ASSISTANT-ARCHITECTURE.md)
+  for the proxy's role in the full request flow.
+- **`scripts/debug/`** — lane-parity debugging harnesses:
   `lane-parity-diff.py` (single-prompt structural diff between the two
   lanes), `lane-3x3-smoke.py` (3-round × 3-prompt × 2-lane reliability
-  smoke). README under `scripts/debug/`.
+  smoke), and the smoke corpus runner (`smoke_corpus_runner.py`). README
+  under `scripts/debug/`.
 
 ## Bringing up the production default
 
