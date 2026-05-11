@@ -18,7 +18,7 @@ and deployment reconfigurations.
 | [`manyforge/scripts/debug/smoke_corpus.yaml`](../scripts/debug/smoke_corpus.yaml) | The corpus — 74 cases organized by category × detail level. |
 | [`manyforge/scripts/debug/smoke_corpus_runner.py`](../scripts/debug/smoke_corpus_runner.py) | Loader + dispatcher + assertion engine + reporter. |
 | [`<sibling-manyforge-repo>/examples/assistant_modes_scene_authoring.deployment.yaml`](../../../../dev_ws/src/manyforge/examples/assistant_modes_scene_authoring.deployment.yaml) | Deployment that scopes the assistant's tool + node allowlist. The smoke runs against this by default. |
-| [`<sibling-manyforge-repo>/examples/pick_and_place_ur10e_robotiq.program.yaml`](../../../../dev_ws/src/manyforge/examples/pick_and_place_ur10e_robotiq.program.yaml) | The populated-state program (12-step pick-and-place, 2 scene objects, 1 param, 1 blackboard key). |
+| [`<sibling-manyforge-repo>/examples/pick_and_place_ur10e_robotiq.program.yaml`](../../../../dev_ws/src/manyforge/examples/pick_and_place_ur10e_robotiq.program.yaml) | The populated-state program (12-step pick-and-place, 2 scene objects, 1 param, 0 blackboard keys). |
 | [`<sibling-manyforge-repo>/examples/empty_pick_and_place_ur10e_robotiq.program.yaml`](../../../../dev_ws/src/manyforge/examples/empty_pick_and_place_ur10e_robotiq.program.yaml) | Empty-state fixture used when a case sets `precondition.fresh_program: true` (PnP build chain). Has a `command_gripper` scaffold leaf because Composer rejects fully-empty composite trees. |
 
 ## Schema Highlights

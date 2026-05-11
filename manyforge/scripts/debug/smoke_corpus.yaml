@@ -108,11 +108,10 @@ starting_state:
       constraints: { min_exclusive: 0, max_inclusive: 1 }
       description: "Velocity scale for all moves."
 
-  # One blackboard key (referenced by BB_modify_medium etc.).
+  # No blackboard keys ship with the canonical program. Blackboard cases that
+  # need an existing key are seeded by the smoke harness.
   blackboard:
-    keys:
-      - { id: gripper_closed, type: bool, key: gripper_closed,
-          description: "Logical gripper closed/open flag written after actuation succeeds." }
+    keys: []
 
   # Robot/gripper come from the deployment + URDF; not directly mutable
   # by the assistant in composer-assistant mode.
@@ -850,6 +849,12 @@ cases:
       - name: tree_draft_insert_node
         args_contain:
           parentName: pick_and_place
+          node.id: command_gripper
+          node.params.position: 0.66
+          node.params.max_effort: 40.0
+          node.params.duration_s: 1.0
+          node.params.timeout_s: 0.0
+        allow_retries: true
 
 - id: PnP_09_attach
   category: pick_and_place_build
@@ -942,7 +947,15 @@ cases:
   precondition: { chain_id: pnp_build, chain_step: 15 }
   prompt: "after the upsert, open the gripper"
   expected:
-    tools_called: [{ name: tree_draft_insert_node, allow_retries: true }]
+    tools_called:
+      - name: tree_draft_insert_node
+        args_contain:
+          node.id: command_gripper
+          node.params.position: 0.0
+          node.params.max_effort: 40.0
+          node.params.duration_s: 1.0
+          node.params.timeout_s: 0.0
+        allow_retries: true
 
 - id: PnP_16_retract
   category: pick_and_place_build
