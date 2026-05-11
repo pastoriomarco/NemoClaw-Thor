@@ -447,6 +447,58 @@ PY
 "${KEX_USER[@]}" "printf %s '${REASONING_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
 ok "OpenClaw model.reasoning=true ensured on active inference model"
 
+# 2026-05-10 (iter 32): route OpenClaw's compaction calls through the
+# same local inference model. The default is `openai/gpt-5.5` which is
+# unreachable from the sandbox; without this fix, every `/compact` call
+# (bridge-fired via OPENCLAW_ASSISTANT_COMPACT_EVERY_N) silently fails
+# and the chain-session-ON PnP cascade returns. Idempotent: re-runs
+# leave the field at the same value.
+step "Step 6b/6: route OpenClaw compaction through the active inference model"
+COMPACTION_SCRIPT_B64="$(cat <<'PY' | base64 -w0
+import json
+import os
+import sys
+import urllib.request
+
+target_id = os.environ.get("MANYFORGE_MODEL_NAME") or ""
+if not target_id:
+    try:
+        with urllib.request.urlopen(
+            "http://host.openshell.internal:8000/v1/models", timeout=5
+        ) as resp:
+            data = json.load(resp)
+            entries = data.get("data") or []
+            if entries:
+                target_id = entries[0].get("id") or ""
+    except Exception:
+        pass
+
+if not target_id:
+    print("WARN: could not determine active model name; skipping compaction route", file=sys.stderr)
+    sys.exit(0)
+
+compact_model = f"inference/{target_id}"
+path = os.path.expanduser("~/.openclaw/openclaw.json")
+with open(path, "r", encoding="utf-8") as handle:
+    cfg = json.load(handle)
+
+agents = cfg.setdefault("agents", {})
+defaults = agents.setdefault("defaults", {})
+compaction = defaults.setdefault("compaction", {})
+before = compaction.get("model")
+compaction["model"] = compact_model
+print(f"agents.defaults.compaction.model: {before} -> {compact_model}")
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(cfg, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+)"
+"${KEX_USER[@]}" "printf %s '${COMPACTION_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
+ok "OpenClaw agents.defaults.compaction.model routed to the active inference model"
+
 step "Composer reachability check (mode-scoped manifest)"
 MODE_URL="${COMPOSER_BASE}/api/assistant/modes/${ASSISTANT_MODE}"
 if curl -fsS -o /dev/null --max-time 3 "${MODE_URL}" 2>/dev/null; then

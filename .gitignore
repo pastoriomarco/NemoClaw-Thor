@@ -7,3 +7,8 @@
 # Editor directories
 .vscode/
 .idea/
+
+# Python bytecode caches (smoke runner imports yaml + pulls in pycache)
+__pycache__/
+*.pyc
+*.pyo

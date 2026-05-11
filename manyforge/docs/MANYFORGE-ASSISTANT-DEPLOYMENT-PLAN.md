@@ -1,14 +1,25 @@
 # ManyForge Assistant — LLM Stack Deployment Plan for Thor and Jetson Orin AGX
 
-**Status (2026-05-05):** Thor-side assistant lane is operative end-to-end
-through both the direct-vLLM bridge (`nemoclaw` provider) and the canonical
-OpenClaw gateway lane (`openclaw` provider, demo default). The Phase 3
-A/B harness landed at [`../ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py)
-with first-run measurements captured (see runbook validation log in
+**Status (2026-05-10, iter 32):** Thor-side assistant lane is operative
+end-to-end through both the direct-vLLM bridge (`nemoclaw` provider) and the
+canonical OpenClaw gateway lane (`openclaw` provider, **production default
+since 2026-05-07**). The Phase 3 A/B harness landed at
+[`../ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py) with first-run
+measurements captured (see runbook validation log in
 [`./MANYFORGE-MCP-INTEGRATION.md`](./MANYFORGE-MCP-INTEGRATION.md)
 "Phase 3 A/B harness — first run, 2026-05-05 evening"). Outstanding work in
 this plan is **per-Orin per-profile validation** of the candidate outcomes
 below — Thor mechanics are no longer the gate.
+
+**Active production profile (2026-05-10):** **Outcome A — Cosmos-Reason2-8B
+alone, with thinking-on.** Validated via the smoke corpus iter 32 baseline
+(51/66 = 77.3% under the OpenClaw lane with chain-session ON and bridge-fired
+`/compact every 2`). Outcomes B (ManyForge profile alone), C (text-ManyForge
++ Cosmos-2B split), and D (Nemotron 3 Nano Omni) remain documented below as
+**future candidates** — they're not currently deployed. Iter-33 and iter-34
+experimental directions (`request_clarification` tool, `tool_choice=required`
+proxy injection) were tested and reverted; they don't affect the model
+profile choice. See SMOKE-CORPUS.md for the iter history.
 
 **Target hardware:**
 

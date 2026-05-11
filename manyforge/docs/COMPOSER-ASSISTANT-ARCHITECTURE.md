@@ -29,10 +29,20 @@ post-iter-20 refinement plan (Pattern A/B/C/E from the failure analysis).
   `nodeCatalog`, e.g. `upsert_collision_object`'s description) lives in
   `manyforge_behavior/resources/node_catalog.yaml`.
 - **Smoke corpus** drives Composer's `/api/assistant/chat` endpoint with 74
-  cases and grades each as pass / soft-pass / fail. **Best config (iter 20)**:
-  Cosmos-Reason2-8B, proxy with `max_tokens=2048` injected, `enable_thinking:true`
-  default, no `tool_choice` mutation, smoke runner with `--no-chain-session`.
-  **49/66 effective (74.2 %), 45/66 first-try (68.2 %).**
+  cases and grades each as pass / recovered-pass / clarified-pass / soft-pass / fail. **Production recipe (iter 32)**: Cosmos-Reason2-8B with thinking-on, proxy
+  with `max_tokens=2048` injected, no `tool_choice` mutation, bridge-fired
+  `/compact` every 2nd request (`OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2`),
+  chain-session ON. **51/66 effective (77.3 %), 47/66 first-try (71.2 %).**
+- **`request_clarification` tool + `[NEEDS-CLARIFY]` marker + bridge auto-retry**
+  was tried in iter 33-34 and **fully reverted**. The tool was registered, the
+  bridge had marker detection + auto-retry, and the proxy could force tool
+  selection via `OPENCLAW_PROXY_FORCE_TOOL_CHOICE=required`. Cosmos-Reason2-8B
+  did not invoke the tool on the Pattern A cases that needed it (iter 33), and
+  forcing tool selection every turn made the agent loop unable to terminate
+  naturally (iter 34, halted after 3 cases / 14 min). See SMOKE-CORPUS.md
+  "Iter 33 + 34 negative result" for the full analysis. The proxy still
+  supports the `FORCE_TOOL_CHOICE` knob if a future iter wants to test the
+  `required-first` mode (force only turn 1).
 
 ---
 
@@ -51,7 +61,7 @@ The two are *separate repos* checked out side-by-side. Composer reads from
 
 ---
 
-## Component map (iter-20 production setup)
+## Component map (iter-32 production setup)
 
 ```
                              host machine (Thor)
@@ -103,7 +113,7 @@ The two are *separate repos* checked out side-by-side. Composer reads from
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Key port assignments in iter-20 production setup:
+Key port assignments in iter-32 production setup:
 
 | Port | Process |
 |------|---------|
@@ -395,28 +405,63 @@ For each case in `smoke_corpus.yaml`:
 
 Default behavior is **chain-session ON**: PnP_01 → PnP_02 → … all share the
 same `conversationId`, so OpenClaw's session memory persists across chain
-steps. A failure in PnP_06 leaves broken state in the session and the
-remaining PnP_07–PnP_20 cascade-fail.
+steps. In iter 19/29, a failure in PnP_06 left broken state in the session
+and the remaining PnP_07–PnP_20 cascade-failed (cases dropped to 4/19 in
+PnP).
 
 `--no-chain-session` overrides this: every chain step gets a fresh
-conversationId. Failures stay independent. This is the iter-16 fix that
-unlocked iter 20's win.
+conversationId. Failures stay independent. This was iter 16/20's escape
+hatch — the chain-off win.
+
+**Iter 32 made chain-session-ON viable** without `--no-chain-session` by
+firing bridge-side `/compact` every 2nd request on the same session-key.
+Chain memory is preserved across steps, but accumulated context is
+periodically rolled up so it never overflows. PnP suite went 4/19 (iter 29
+chain-on no-compact) → 15/19 (iter 32 chain-on + compact). Real users
+chain prompts; iter 32 made the realistic production setup work, so we
+no longer pass `--no-chain-session` in the production recipe. The flag
+is still available for chain-off baseline comparisons.
+
+### `--enable-recovery-turn` flag
+
+When a case fails its initial asserts AND the chat returned 200, the runner
+sends ONE generic follow-up message in the same conversation:
+- *Path A — 4xx recovery*: if any tool call hit a 4xx, send "the previous
+  call failed: `<err>`. Re-read the structured recovery fields and retry
+  with corrected arguments."
+- *Path B — no-tool-fired*: if zero successful tools fired but the case
+  expected one, send "the previous turn produced no tool call. Please call
+  the appropriate tool now."
+
+Then re-asserts on the combined first+second turn observed log. Cases that
+pass on retry become `recovered-pass`. Same wording for every case; no
+per-case content. Iter 33 measured **+10 cases salvaged**, mostly PnP
+chain steps that had first-turn malformed args. Default-on from iter 33
+onward.
 
 ### Effective rate vs first-try rate
 
 ```
 first-try = pass / total
-effective = (pass + recovered-pass + soft-pass) / total
+effective = (pass + recovered-pass + clarified-pass + soft-pass) / total
 ```
 
-Iter 20: 45/66 first-try (68.2 %), 49/66 effective (74.2 %).
+- Iter 20: 45/66 first-try (68.2 %), 49/66 effective (74.2 %) — chain-off, no recovery turn.
+- Iter 32: 47/66 first-try (71.2 %), 51/66 effective (77.3 %) — chain-on, no recovery turn.
+- Iter 33: 38/66 first-try (57.6 %), 48/66 effective (72.7 %) — chain-on, recovery turn (negative net result due to 7-case rubric tightening on Pattern A; +10 recovered, -13 from tightening).
 
 ---
 
-## Iter-20 production recipe (best config, 49/66 = 74.2 %)
+## Iter-32 production recipe (51/66 = 77.3 %, chain-session ON)
 
 End-to-end commands to reproduce. Stop any conflicting containers/processes
-first (`docker rm -f manyforge-e2e-vllm`, `pkill -f vllm-proxy`).
+first (`docker rm -f manyforge-e2e-vllm`, `pkill -f vllm-proxy`,
+`pkill -f openclaw_assistant_bridge.service`).
+
+> Operational note: the SMOKE-ITER-RUNBOOK is the procedural source of truth
+> for the cold-start sequence (which container to bounce in which order
+> when you change what). This section gives the iter-32 specific env vars
+> that the runbook reads as parameters.
 
 ```bash
 # 1. vLLM with thinking-on default
@@ -428,19 +473,34 @@ THOR_VLLM_PORT=8050 \
 # (waits ~2-3 min for first-time model load; subsequent restarts ~30 s)
 
 # 2. Mutator proxy with cap and thinking budget injected
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/scripts/debug
 OPENCLAW_PROXY_LISTEN_PORT=8000 \
 OPENCLAW_PROXY_BIND=0.0.0.0 \
 OPENCLAW_PROXY_UPSTREAM=http://127.0.0.1:8050 \
-OPENCLAW_PROXY_LOG_PATH=/tmp/iter20_proxy.jsonl \
+OPENCLAW_PROXY_LOG_PATH=/tmp/iterN_proxy.jsonl \
 OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 \
 OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048 \
-  nohup python3 vllm-proxy.py >> /tmp/iter20_proxy_stdout.log 2>&1 &
+  nohup python3 manyforge/scripts/proxy/vllm-proxy.py \
+    >> /tmp/iterN_proxy_stdout.log 2>&1 &
 
-# 3. Smoke runner (no chain-session)
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/scripts/debug
-nohup python3 -u smoke_corpus_runner.py --no-chain-session \
-  > /tmp/instrumented_run/iter20.log 2>&1 &
+# 3. OpenClaw assistant bridge (iter 32 production env, + iter-33 retained)
+OPENCLAW_ASSISTANT_USE_GATEWAY=true \
+OPENCLAW_ASSISTANT_BRIDGE_HOST=127.0.0.1 \
+OPENCLAW_ASSISTANT_BRIDGE_PORT=8200 \
+OPENCLAW_ASSISTANT_AGENT=manyforge-composer \
+OPENCLAW_ASSISTANT_TIMEOUT_S=300 \
+OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2 \
+OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S=120 \
+  nohup manyforge/openclaw_assistant_bridge/.venv/bin/python \
+    -m openclaw_assistant_bridge.service \
+    > /tmp/iterN_bridge.log 2>&1 &
+
+# 4. Smoke runner (chain-session ON by default; --enable-recovery-turn is default-on)
+cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge
+nohup python3 scripts/debug/smoke_corpus_runner.py \
+  --corpus scripts/debug/smoke_corpus.yaml \
+  --enable-recovery-turn \
+  --report /tmp/smoke_corpus_iterN.json \
+  > /tmp/iterN_runner.log 2>&1 &
 ```
 
 Composer (`manyforge-e2e-composer` container, host:9000) and
@@ -532,15 +592,33 @@ doesn't name-match on tool ids, so no edit was needed there.
 
 ## After applying the plan
 
-1. Re-run iter 20's recipe verbatim. Same model, same proxy config, same
-   `--no-chain-session`. The only differences are the source-code edits.
-2. Compare against iter 20's failure set (15 consistent fails listed in
-   SMOKE-CORPUS.md). Predicted lift: 9 cases, putting the corpus at ~58/66
-   (~88 %).
-3. Document the result as iter 27 in SMOKE-CORPUS.md.
-4. If the lift lands as predicted, the remaining fails are split between
-   genuinely-hard multi-arg cases (Pattern D, 2) and corpus-rubric
-   choices (Pattern A, 2) — neither addressable from infra.
+*Historical note: this section described the iter-20 → iter-27 transition.
+Iter 27 → 33 has now happened; iter 32 is the production recipe. The
+forecast in this section was partially borne out (iter 27 → 28 landed
++2 effective from the schema refactor, hitting 51/66; iter 32 then
+moved chain-session ON without regression) and partially didn't (the
+predicted ~58/66 was not reached — Pattern A turned out to be a deeper
+model ceiling than predicted, see iter 33 negative result on the
+`request_clarification` direction). See SMOKE-CORPUS.md for the full
+per-iter history.*
+
+For a future refinement cycle:
+
+1. Re-run iter 32's production recipe verbatim (commands above). Confirm
+   you can reproduce 51/66 (77.3 %) on the unchanged corpus before
+   layering any new change. This is the regression baseline.
+2. Compare against the iter-32 failure set: 15 consistent fails grouped
+   into Pattern A (Pattern A residuals — model won't ask), Pattern B
+   (insert_node multi-arg specificity), Pattern C (tool-mismatch), and
+   variance (PnP_06, PnP_14, PnP_18). See SMOKE-CORPUS.md and IDEAS-BRIEF.md
+   for the full breakdown by group.
+3. Apply ONE cross-cutting change at a time. The corpus is sensitive
+   enough that two simultaneous changes interact unpredictably (e.g.,
+   iter 33 changed corpus rubrics AND added the recovery turn —
+   disentangling the net effect required careful counterfactual scoring).
+4. Document the result as the next iter in SMOKE-CORPUS.md, including
+   a counterfactual line ("would have been X/66 if Y had stayed at iter-32
+   value") so future readers can disentangle interacting changes.
 
 ---
 

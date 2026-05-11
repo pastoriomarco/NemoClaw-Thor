@@ -437,9 +437,11 @@ sit at cross-family transitions.
 | 28 | 51/66 (77.3%) | 71.2% | OFF | Schema refactor (afterName/beforeName/change_node_kind) + trimmed description |
 | 29 | 40/66 (60.6%) | 53.0% | ON | Same code as 28 with chain-on; cascade returns identically to iter 19 |
 | 30 | 50/66 (75.8%) | 68.2% | OFF | Final `nodeName` top-level move; ties iter 28 within variance |
-| **32 (NEW BEST UNDER CHAIN-ON)** | **51/66 (77.3%)** | **71.2%** | **ON** | **Bridge fires `/compact` every 2 prompts; matches iter 28 chain-off** |
+| **32 (PRODUCTION RECIPE, CHAIN-ON)** | **51/66 (77.3%)** | **71.2%** | **ON** | **Bridge fires `/compact` every 2 prompts; matches iter 28 chain-off** |
+| 33 | 48/66 (72.7%) | 57.6% | ON | `request_clarification` tool + `[NEEDS-CLARIFY]` marker + bridge auto-retry — model never used the new tool; 7 cases got stricter rubric and 5 hard-failed; `--enable-recovery-turn` salvaged 10 cases (+10 recovered-pass). See "Iter 33 — Pattern A direction 3 attempt" below. |
+| 34 | HALTED at 3/66 | — | ON | Proxy `tool_choice=required` every turn — force the model to pick A tool, hoping it'd choose `request_clarification` on ambiguous prompts. Halted after 14 min: P1 fail (275 s), P2 soft-pass (167 s), P3 fail (425 s). Force-required prevented natural loop termination → every case ran 5-7× normal duration. Direction 3 fully reverted; iter-32 stack restored. See "Iter 34 — Pattern A direction 3 attempt #2" below. |
 
-**Iter 32 is the production recipe** — it's the first chain-session-ON setup that matches the chain-off rate. Real users chain prompts in a single conversation; iter 32 makes that work.
+**Iter 32 remains the production recipe** — iter 33 regressed by 3 cases (rubric tightening on 7 Pattern-A cases turned soft-passes into hard fails without the model adopting the new tool), iter 34 was halted as unrecoverable after 3 cases. Both iter 33 and iter 34 are fully reverted; the request_clarification tool + bridge auto-retry + corpus rubric changes are gone. Two durable wins were preserved: `--enable-recovery-turn` is now default-on for smoke runs (+10 cases in iter 33 measurement), and a long-standing stdout-buffering bug in the smoke runner was fixed so per-case verdicts stream realtime (this paid for itself in iter 34 — saved >4 hours of wasted wallclock).
 
 ### Production recipe (iter 32)
 
@@ -488,6 +490,117 @@ In iter 32 with N=2: 9 compactions fired across the 19-case PnP suite, all succe
 - **Tool-mismatch / wrong-family (3)**: REPLACE_simple_medium (uses replace_subtree but gets wrong tool), UPDATE_params_generic (model emits prose instead of `update_node_params`), CUR_runtime_remove_then_restore_graspable (3-tool sequence, model only emits 1).
 - **Variance fails (4)**: TREE_insert_runtime_medium, PnP_06_approach (174s), PnP_14_upsert (237s), PnP_18_repeat_root (275s HTTP-1). These pass in some iter-28/30 runs.
 - **Soft-pass: SCENE_remove_generic, MOVE_generic** — scoring rubric satisfied loosely.
+
+### Iter 33 — Pattern A direction 3 attempt: `request_clarification` tool (NEGATIVE RESULT, 2026-05-10)
+
+**Goal:** close Pattern A residuals (no-tool over-eagerness on intentionally ambiguous prompts) by giving the model a structured way to ask the user a question, plus tightening the rubric so "fire a guess" no longer satisfies asserts.
+
+**Approach.** Three coordinated changes:
+
+1. **New tool `request_clarification(question: string)`** registered in the assistant catalog with handler at [`routes_assistant.py:_apply_request_clarification`](../../../../dev_ws/src/manyforge/manyforge_composer/backend/routes_assistant.py). The handler returns a payload that instructs the model to end its turn with prose prefixed by `[NEEDS-CLARIFY] ` plus the question text — the marker is the cross-process signal because the bridge can't see tool calls inside the gateway loop, only the final assistant message.
+
+2. **Bridge auto-retry** on the marker — `openclaw_assistant_bridge/service.py` strips `[NEEDS-CLARIFY]` from the final message, sets `clarificationRequested=true` on the response envelope, and if no follow-up is queued by the caller (`OPENCLAW_ASSISTANT_CLARIFICATION_AUTO_RETRY_MAX=1` enabled), re-fires the original prompt once. Idea: give the model a second pass to pick a sensible default if the marker fired spuriously.
+
+3. **Corpus rewrites on 7 Pattern-A cases**: `PARALLEL_generic`, `FALLBACK_generic`, `MOVE_generic`, `SCENE_remove_generic`, `CLARIFY_scene_remove_pronoun`, `CLARIFY_tree_wrap_pronoun`, `CLARIFY_motion_generic`. Each got `expected.clarified: true` (asserts model must fire the marker) plus a `clarification_followup` disambiguated prompt the runner sends as turn 2 when the marker fired. New status: `clarified-pass`.
+
+**Result: 48/66 (72.7%) effective, 38/66 (57.6%) first-try — regressed 3 cases vs iter 32.** Breakdown: 38 pass, 10 recovered-pass, 0 clarified-pass, 0 soft-pass, 18 fail. Wall-clock 80.5 min (+5 min vs iter 32, attributable to recovery turns + clarification retries).
+
+**Why direction 3 failed:**
+
+- **Model never invoked `request_clarification` on any of the 7 targeted cases.** Of the 3 clarifications detected across the full run, all 3 were on `TREE_insert_runtime_*` cases (unrelated to the 7 — model self-elected to ask there). On the 7 we explicitly targeted: 0 clarifications. Tool registration + mode allowlist + system-prompt rule rewrite were not enough to flip Cosmos-Reason2-8B's action-bias. Hypothesis: the workspace-AGENTS.md system prompt is large; one new paragraph competing for attention against ~100 lines of "you MUST emit a tool call" framing won't win.
+
+- **The bridge auto-retry never fired on the 7 either** (no marker → nothing to retry). The 3 clarifications that did fire all retried successfully (auto-retry mechanism itself is sound — see `TREE_insert_runtime_generic` recovering in 41.6 s and `TREE_insert_runtime_medium` in 27.7 s).
+
+- **Net rubric tightening: 5 of 7 hard-failed.** Cases that previously soft-passed via `answer_must_contain: ["which", "where"]` now hard-fail on `expected.clarified=true`. The 2 that survived (`MOVE_generic`, `CLARIFY_motion_generic`) recovered via the new `--enable-recovery-turn` flag — but the model's recovery-turn behavior on these was to *take an action that happened to satisfy the followup-turn assertions*, not to ask. The rubric let it through; the model did not actually request clarification. **This is a rubric gap, not a model win.**
+
+**Side effect — `--enable-recovery-turn` validated and made default.** The flag was added before iter 33 but never measured at scale. iter 33 fired 18 recovery turns and 10 cases became `recovered-pass` (would otherwise have been hard fails). Notable recoveries: 7 of the 10 are PnP chain steps (PnP_09–PnP_17) that initially had malformed args and the generic "re-read the structured recovery fields and retry" nudge unblocked them. The flag is now keep-on for all future iters; iter 32's 51/66 baseline did NOT use it, so iter 33 vs iter 32 isn't strictly apples-to-apples. Equivalent iter-32-rubric scoring of iter 33 (revert the 5 hard-failing rubric changes back to soft-pass): **53/66 ≈ 80.3%** — that would be +2 vs iter 32 driven purely by `--enable-recovery-turn`.
+
+**Side effect — smoke runner stdout buffering bug fixed.** Iter 33 exposed that the runner's `print()` calls were block-buffered when stdout is redirected to a file. Per-case verdicts were deferred to end-of-run, blocking early-halt decisions on a clearly-failing iter. We burned the full 80 min wallclock before knowing direction 3 had failed even though it was visible from the bridge log halfway through. Fix landed in [`smoke_corpus_runner.py:48`](../scripts/debug/smoke_corpus_runner.py) — `sys.stdout.reconfigure(line_buffering=True)` at startup. No more `python3 -u` needed; verdicts now stream in realtime.
+
+**Side effect — `done` counter undercounts during chain-on phase.** The smoke runner reuses one `rid` (= conversationId) across all PnP chain steps in chain-on mode. From the bridge's POV all 19+ chain step requests look like recovery turns on a single rid. Live monitors that compute "cases done" from unique-rids see only +1 per chain (not +19). Worth fixing in a future iter by either: (a) extending the bridge audit log with a per-step turn counter, or (b) reading the runner's now-realtime stdout for `status=` lines as the source of truth.
+
+**Failure breakdown (iter 33 — same model as iter 32):**
+
+- Pattern A (5): `PARALLEL_generic`, `FALLBACK_generic`, `SCENE_remove_generic`, `CLARIFY_scene_remove_pronoun`, `CLARIFY_tree_wrap_pronoun` — model fired action tools without emitting `[NEEDS-CLARIFY]` marker; failed `expected.clarified=true`. **All 5 are rubric-tightening fails, not model regressions.**
+- Insert-node multi-arg specificity (4): `P3_tree_insert_runtime_obj_specific`, `TREE_insert_runtime_generic`, `INSERT_position_first_specific`, `FALLBACK_alternate_medium`, `PARALLEL_concurrent_medium` — same pattern as iter 32.
+- Tool-mismatch / wrong-family (3): `REPLACE_simple_medium`, `REPLACE_subtree_specific`, `CUR_runtime_remove_then_restore_graspable`.
+- Variance fails (4): `MOVE_reorder_medium`, `PnP_13_detach`, `PnP_14_upsert`, `PnP_18_repeat_root` (395 s — slowest case of the run, ran out the agent loop).
+- Other (2): `FALLBACK_retry_specific` (insert-node arg shape).
+
+**Recovered-pass cases (10):** `UPDATE_params_specific`, `MOVE_generic`, `CLARIFY_motion_generic`, `PnP_09_attach`, `PnP_10_lift`, `PnP_11_transport`, `PnP_12_place_descend`, `PnP_15_open_gripper`, `PnP_16_retract`, `PnP_17_home`.
+
+**Timings (iter 33):**
+
+| metric | overall | pass | recovered-pass | fail |
+|---|---|---|---|---|
+| n | 66 | 38 | 10 | 18 |
+| min | 11.6 s | 11.6 s | 46.5 s | 11.9 s |
+| median | 30.9 s | 19.2 s | 98.3 s | 120.5 s |
+| mean | 73.2 s | 27.4 s | 107.2 s | 150.9 s |
+| max | 395.7 s | 105.1 s | 200.0 s | 395.7 s |
+
+Recovered-pass is inherently expensive (2-turn). Fails skew long because the model usually retries until the agent loop times out.
+
+**Decisions / what changes after iter 33:**
+
+1. **Revert `expected.clarified=true` on the 5 still-failing Pattern-A cases.** They go back to iter-32 rubric (`forbidden_tools` + `answer_must_contain: ["which", "where"]`). 2 of the 7 (the ones that "recovered" by taking action) need stricter rubric instead: make their `forbidden_tools` actually catch the model's "do something plausible" — currently the rubric lets a model that fires `tree_draft_move_node` after recovery turn satisfy a case whose first-turn expected no mutations. Fix: forbidden_tools should apply across BOTH turns, not just the followup.
+2. **Keep the `request_clarification` tool + bridge auto-retry registered.** They didn't hurt and the auto-retry cleanly handled the 3 clarifs that did fire. Future system-prompt iterations may yet activate it.
+3. **`--enable-recovery-turn` is default-on for all future iters.** Save the flag in the runbook.
+4. **Stdout buffering fix is permanent.** No future iter loses early-halt visibility.
+5. **Pattern A is a model-capability ceiling.** Cosmos-Reason2-8B's action-bias on bare-verb prompts is not addressable from the corpus / harness / system-prompt surface alone. Future direction options (not pursued this iter): (a) fine-tune a clarification-bias adapter on cosmos-reason2-8b; (b) swap to a model with measurably better bounded-autonomy behavior (the 9B Claude-distilled checkpoint cleared bounded-autonomy probes in earlier testing); (c) accept Pattern A as the model ceiling and exclude those cases from headline rate.
+
+### Iter 34 — Pattern A direction 3 attempt #2: `tool_choice=required` (HALTED EARLY, 2026-05-10)
+
+**Goal:** with the `request_clarification` tool already installed (iter 33), test whether forcing tool selection at the proxy layer would activate it. Hypothesis: if `tool_choice=required` is injected on every chat-completion, the model can't fall through to prose; it must pick one of the 26 tools. With `request_clarification` available AND the system-prompt rule pointing at it for ambiguous prompts AND thinking-on letting the model reason before answering, the ambiguous-prompt cases should pick the clarification tool over an action.
+
+**Setup.** Held iter-32 settings (chain-on, `/compact every 2`, recovery turn). Added one proxy env: `OPENCLAW_PROXY_FORCE_TOOL_CHOICE=required`. Reverted the 7 corpus rubric changes from iter 33 (no `expected.clarified=true` / no `clarification_followup`) so cases could soft-pass via answer-text if the model emitted prose answers, comparable to iter-32 scoring.
+
+**Result: HALTED after 3 cases in 14 minutes. Trajectory was clearly unrecoverable.**
+
+| # | Case | Duration | Status | Notes |
+|---|---|---|---|---|
+| 1 | `P1_wrap_root_specific` | 275.1 s | ❌ fail | "add a repeat node as root" — normally trivial. 4.6× iter-32 typical. |
+| 2 | `P2_scene_add_specific` | 166.5 s | 🟡 soft-pass | Text answer matched but extra tool calls violated tools_called assert. |
+| 3 | `P3_tree_insert_runtime_obj_specific` | 424.9 s | ❌ fail | 7 minutes on a normally-30s case. |
+
+**Why it failed (predicted in advance and confirmed):**
+
+- `tool_choice=required` forces a tool call **every turn**. After the model successfully completed the requested action on turn 1, the agent loop's natural termination signal — "I'm done, emit a final assistant message" — was disallowed. The model was forced to keep firing tools, picking increasingly-irrelevant read/inspect calls until either (a) the case timed out, (b) the proxy's 200 s socket timeout fired, or (c) the model fired a forbidden tool and tripped the case rubric.
+
+- Each case ran 5-7× iter-32's typical duration. Pace projected to ~5-6 hours wallclock for the full 66-case suite (vs iter 32's 75 min). Direction was unrecoverable; halting early conserved >4 hours.
+
+- The hypothesis was unfalsifiable in this configuration: even if the model HAD picked `request_clarification` on an ambiguous prompt's turn 1, every subsequent turn would still be forced to fire another tool, and the case would either over-call or time out before completing.
+
+**Lessons:**
+
+1. `tool_choice=required` (every turn) is not viable with a multi-turn agent loop. The mode that COULD test the hypothesis is `tool_choice=required-first` (force only turn 1, let the model self-decide to terminate on later turns) — but that's a separate experiment and wasn't run this iter.
+
+2. **Direction 3 is now fully exhausted.** Iter 33 tested the soft path: tool registered + system-prompt rule + bridge auto-retry + corpus rubric tightening. Model didn't reach for the tool. Iter 34 tested the hard path: forced tool calling. Setup was unviable. No remaining lever short of `tool_choice=required-first` (untested but unlikely to fundamentally flip the model's action-bias) or moving off-corpus (fine-tune, model swap).
+
+3. **The user's halt instinct after seeing 3 bad results in 14 minutes was correct.** Without realtime per-case verdict streaming, this run would have consumed the full ~5 hours before its trajectory became visible. The iter-33 stdout-buffering fix paid for itself in iter 34: we saw the first failure at minute 4, the second at minute 7, the third at minute 14, and pulled the plug. The runner's realtime visibility is a permanent fixture from here on.
+
+**Decision: revert all request_clarification-direction code; restore iter-32 as the production stack.**
+
+Reverted (uncommitted, restored to last-commit HEAD):
+- `dev_ws/manyforge/manyforge_composer/backend/assistant_tool_schemas.py` — removed `_REQUEST_CLARIFICATION_SCHEMA` + registry entry
+- `dev_ws/manyforge/manyforge_composer/backend/routes_assistant.py` — removed `_apply_request_clarification` handler + dispatcher branch
+- `dev_ws/manyforge/examples/assistant_modes_scene_authoring.deployment.yaml` — removed tool from mode allowlist + tool-catalog entry
+- `dev_ws/manyforge/agent-skills/manyforge-composer/workspace-AGENTS.md` — restored original "When ambiguous" paragraph
+- `NemoClaw-Thor/manyforge/openclaw_assistant_bridge/service.py` — removed marker detection, auto-retry, env-var reading
+- `NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus.yaml` — restored 7 corpus cases to iter-32 rubric
+- `NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus_runner.py` — removed clarification flow, `clarified-pass` status, two-turn followup logic
+
+Preserved (durable wins from iter 33-34):
+- `NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus_runner.py` line 50: `sys.stdout.reconfigure(line_buffering=True)` — realtime per-case verdict streaming
+- `--enable-recovery-turn` is now the default flag on every smoke iter (recipe in SMOKE-ITER-RUNBOOK.md). The flag itself was added before iter 33 but iter 33 was the first measurement at scale: +10 cases recovered. Iter-32 baseline runs with the flag would likely show 53-55/66 (~80-83%) but that's never been measured.
+- `NemoClaw-Thor/.gitignore` — added `__pycache__/` and `*.pyc`/`*.pyo`. Durable fix; was missing for the smoke harness directory.
+- New file `NemoClaw-Thor/manyforge/docs/SMOKE-ITER-RUNBOOK.md` — operational runbook with cold-start sequence + restart matrix per change type. Captures the SSH-namespace gateway gotcha that ate ~10 min of iter-33 setup.
+- This SMOKE-CORPUS.md section + the IDEAS-BRIEF.md refresh — so the next iteration cycle doesn't re-propose direction 3.
+
+Bridge env reverted: `OPENCLAW_ASSISTANT_CLARIFICATION_AUTO_RETRY_MAX` is no longer set. `OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2` and `OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S=120` retained (iter-32 production).
+Proxy env reverted: `OPENCLAW_PROXY_FORCE_TOOL_CHOICE` no longer set; iter-32 max_tokens + thinking budget retained.
+
+**Iter 32 (51/66 = 77.3%, chain-session ON) is the current production-stack baseline.** Code state in both repos matches the last-tagged commits (`00e24b2` and `9c4cc4d`) plus durable narrative/runbook additions; the `request_clarification` direction is closed out.
 
 ### Round-1 to round-4 research findings (per-iter parallel research agents)
 

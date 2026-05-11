@@ -48,6 +48,18 @@ from typing import Any
 
 import yaml
 
+# Per-case status lines must stream to disk realtime when stdout is
+# redirected to a file (the typical `nohup ... > /tmp/iterN_runner.log`
+# invocation). Default Python stdio block-buffers at 4KB on a non-tty,
+# which deferred all 66 cases' verdicts to end-of-run on iter 33 and
+# blocked early-halt decisions. Reconfigure here so callers don't need
+# to remember `python3 -u`.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except AttributeError:  # Python <3.7 (defensive)
+    pass
+
 # ----------------------------------------------------------------------
 # Constants / endpoints
 # ----------------------------------------------------------------------

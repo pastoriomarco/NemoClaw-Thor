@@ -1,11 +1,23 @@
 # Composer-Assistant lane comparison: Direct vLLM vs OpenClaw
 
+> **Currency note (2026-05-10):** This document captures the
+> A/B benchmark that justified the lane-default switch to OpenClaw on
+> 2026-05-07. The production model has since changed (iter-32 production
+> is **Cosmos-Reason2-8B** with thinking-on, not Nemotron-3-Nano-Omni —
+> see COMPOSER-ASSISTANT-ARCHITECTURE.md). The lane-choice conclusions
+> here still apply (OpenClaw runs the agent loop server-side; direct
+> vLLM runs it bridge-side; both produce the same outputs at different
+> wall-clock costs). The model-specific numbers below are historical;
+> the lane *architecture* analysis is current.
+
 **Last run:** 2026-05-06
-**Model:** `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4`
-(`--tool-call-parser qwen3_coder --reasoning-parser nemotron_v3`)
+**Model under test:** `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4`
+(`--tool-call-parser qwen3_coder --reasoning-parser nemotron_v3`) —
+historical; production is now Cosmos-Reason2-8B.
 **Deployment:** `ur10e_robotiq_assistant_modes_scene_authoring`,
 catalogHash `76e1824b7e2d5625…`, mode `composer-assistant`
-(24 tools, 12 nodes).
+(24 tools, 12 nodes — iter-32 production has 25 tools after
+`tree_draft_change_node_kind` rename).
 
 The two paths under test:
 
