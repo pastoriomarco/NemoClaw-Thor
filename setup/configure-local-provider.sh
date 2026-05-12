@@ -152,11 +152,26 @@ fi
 # Apply local-inference policy preset so the sandbox can reach vLLM.
 # NemoClaw v0.0.18+ includes the local-inference preset which allows
 # egress to host.openshell.internal:8000 (vLLM) and :11434 (Ollama).
+#
+# 2026-05-11: wrapped in `timeout` because `nemoclaw policy-add` can
+# hang indefinitely on an internal epoll_wait (observed: 10+ min with
+# no progress, no error, on an otherwise-healthy OpenShell). The script
+# already tolerates failure on the else branch — downstream
+# `setup-manyforge-assistant.sh` removes `local-inference` and applies
+# the superset `manyforge-composer.preset.yaml` anyway, so a timeout
+# here is safe. 30 s is generous for a healthy call (normally <2 s).
+# Upstream NemoClaw issue: `policy-add` should have its own timeout.
 if [[ -n "${sandbox_name}" ]]; then
-    if nemoclaw "${sandbox_name}" policy-add local-inference 2>/dev/null; then
+    if timeout 30 nemoclaw "${sandbox_name}" policy-add local-inference 2>/dev/null; then
         pass "Applied local-inference policy preset"
     else
-        info "local-inference preset already applied or unavailable"
+        rc=$?
+        if [[ ${rc} -eq 124 ]]; then
+            warn "local-inference policy-add timed out after 30 s; continuing"
+            fix "Downstream setup-manyforge-assistant.sh applies the superset 'manyforge-composer' preset, which makes this preset redundant; the timeout is safe."
+        else
+            info "local-inference preset already applied or unavailable"
+        fi
     fi
 fi
 
