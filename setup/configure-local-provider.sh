@@ -153,16 +153,21 @@ fi
 # NemoClaw v0.0.18+ includes the local-inference preset which allows
 # egress to host.openshell.internal:8000 (vLLM) and :11434 (Ollama).
 #
-# 2026-05-11: wrapped in `timeout` because `nemoclaw policy-add` can
-# hang indefinitely on an internal epoll_wait (observed: 10+ min with
-# no progress, no error, on an otherwise-healthy OpenShell). The script
-# already tolerates failure on the else branch — downstream
-# `setup-manyforge-assistant.sh` removes `local-inference` and applies
-# the superset `manyforge-composer.preset.yaml` anyway, so a timeout
-# here is safe. 30 s is generous for a healthy call (normally <2 s).
-# Upstream NemoClaw issue: `policy-add` should have its own timeout.
+# 2026-05-11: pass `--yes` for non-interactive operation. Without it,
+# `nemoclaw <sandbox> policy-add <preset>` prints
+#   "Apply '<preset>' to sandbox '<name>'? [Y/n]:"
+# and blocks on stdin. When called from demo-assistant-known-good.sh
+# via a `tee`-piped subshell, the prompt is hidden behind the pipe and
+# the user sees the script "hang" indefinitely. The `--yes` flag makes
+# the operation deterministic and CI-safe.
+# 30 s timeout is belt-and-suspenders: keeps any future regression
+# (network call, slow gateway probe) from blocking cold-start. The
+# script's existing else-branch is tolerant — downstream
+# setup-manyforge-assistant.sh removes `local-inference` and applies
+# the superset `manyforge-composer.preset.yaml`, so a timeout / failure
+# here doesn't degrade production.
 if [[ -n "${sandbox_name}" ]]; then
-    if timeout 30 nemoclaw "${sandbox_name}" policy-add local-inference 2>/dev/null; then
+    if timeout 30 nemoclaw "${sandbox_name}" policy-add local-inference --yes 2>/dev/null; then
         pass "Applied local-inference policy preset"
     else
         rc=$?
