@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .adapter import (
     AdapterConfig,
@@ -25,6 +25,14 @@ from .adapter import (
     parse_chat_completions_response,
     parse_openclaw_json,
     request_id_from_payload,
+)
+from .circuit_breaker import CircuitBreaker
+from .metrics import (
+    ACTIVE_REQUESTS,
+    COMPACT_FIRES_TOTAL,
+    REQUEST_DURATION,
+    REQUESTS_TOTAL,
+    TOOL_CALLS_TOTAL,
 )
 
 
@@ -84,6 +92,23 @@ def _should_fire_compact(session_request_count: int) -> bool:
 # active chat. See the matching endpoints in
 # manyforge_composer.backend.routes_assistant.bind_principal.
 _COMPOSER_BASE = os.environ.get("OPENCLAW_ASSISTANT_COMPOSER_BASE", "http://127.0.0.1:9000").rstrip("/")
+
+# Per-transport circuit breaker around the bridge → gateway dispatch.
+# Opt-in via OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_ENABLED. When enabled,
+# after N consecutive failures (timeout / RuntimeError / non-zero exit)
+# the bridge fails fast with a 503 envelope for the cooldown window
+# instead of repeatedly hammering a sick gateway. Half-open probe
+# allows a single recovery attempt per cooldown cycle.
+_CIRCUIT_BREAKER = CircuitBreaker(
+    enabled=os.environ.get("OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_ENABLED", "false").lower()
+    in {"1", "true", "yes", "on"},
+    failure_threshold=int(
+        os.environ.get("OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_THRESHOLD", "5") or "5"
+    ),
+    cooldown_seconds=float(
+        os.environ.get("OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_COOLDOWN_S", "30") or "30"
+    ),
+)
 _ACTIVE_PROCESSES: dict[str, asyncio.subprocess.Process] = {}
 _ACTIVE_REQUESTS: dict[str, dict[str, Any]] = {}
 _CANCELLED: set[str] = set()
@@ -167,12 +192,16 @@ def _env_optional_bool(name: str, default: bool | None) -> bool | None:
 
 
 def _config_from_env() -> AdapterConfig:
-    # Sampling defaults (temperature/top_k/top_p/enable_thinking) are
-    # not resolved here — vLLM owns them server-side via
-    # --override-generation-config / --default-chat-template-kwargs in
-    # nemoclaw-thor/serving/launch.sh. AdapterConfig defaults all those
-    # fields to None so the adapter omits them from the request body
-    # and lets vLLM apply its own defaults.
+    # Sampling defaults (temperature/top_k/top_p/enable_thinking) default
+    # to None and the adapter omits them from the request body — vLLM
+    # owns the server-side defaults via --override-generation-config /
+    # --default-chat-template-kwargs in nemoclaw-thor/serving/launch.sh.
+    # The env vars below exist as per-process escape hatches: a deployment
+    # can flip enable_thinking on/off without rebuilding vLLM, useful for
+    # agentic-turn vs chat-turn A/B testing (see Dynamo-style per-request
+    # thinking control). Template-level "keep reasoning in history"
+    # behavior (Dynamo's truncate_history_thinking=false) remains owned by
+    # the chat template + --default-chat-template-kwargs at vLLM startup.
     return AdapterConfig(
         sandbox=os.environ.get("OPENCLAW_ASSISTANT_SANDBOX", "my-assistant"),
         namespace=os.environ.get("OPENCLAW_ASSISTANT_NAMESPACE", "openshell"),
@@ -200,6 +229,12 @@ def _config_from_env() -> AdapterConfig:
         gateway_max_tokens=int(
             os.environ.get("OPENCLAW_ASSISTANT_GATEWAY_MAX_TOKENS", "4096")
         ),
+        gateway_temperature=_env_float("OPENCLAW_ASSISTANT_GATEWAY_TEMPERATURE", None),
+        gateway_top_k=_env_int("OPENCLAW_ASSISTANT_GATEWAY_TOP_K", None),
+        gateway_top_p=_env_float("OPENCLAW_ASSISTANT_GATEWAY_TOP_P", None),
+        gateway_enable_thinking=_env_optional_bool(
+            "OPENCLAW_ASSISTANT_GATEWAY_ENABLE_THINKING", None
+        ),
     )
 
 
@@ -207,6 +242,24 @@ app = FastAPI(
     title="ManyForge OpenClaw assistant-provider adapter",
     version="0.1.0",
 )
+
+
+# Opt-in Prometheus metrics endpoint. When OPENCLAW_ASSISTANT_METRICS_ENABLED
+# is unset/false the /metrics route is not mounted; metric objects in
+# `.metrics` still accumulate cheaply in process memory. Enable via env to
+# expose a standard Prometheus scrape target on the same FastAPI port.
+_METRICS_ENABLED = os.environ.get("OPENCLAW_ASSISTANT_METRICS_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+if _METRICS_ENABLED:
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+    @app.get("/metrics")
+    async def metrics() -> Response:
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/healthz")
@@ -255,6 +308,13 @@ async def cancel_request(request_id: str) -> dict[str, Any]:
 
 @app.post("/v1/manyforge/assistant")
 async def assistant(request: Request) -> JSONResponse:
+    # Single timer for end-to-end metrics. Set before any early-return path
+    # so the duration histogram covers parse errors too. ACTIVE_REQUESTS is
+    # decremented at every return statement via explicit calls (the function
+    # is too large to wrap cleanly in a single try/finally).
+    handler_started = time.perf_counter()
+    transport = "unknown"  # tightened to gateway_http / cli_shell_out once cfg loads
+    ACTIVE_REQUESTS.inc()
     try:
         payload = await request.json()
     except Exception as exc:  # noqa: BLE001
@@ -263,6 +323,8 @@ async def assistant(request: Request) -> JSONResponse:
             code="invalid_json",
             detail=f"request body is not valid JSON: {exc}",
         )
+        _record_outcome("invalid_json", transport, time.perf_counter() - handler_started)
+        ACTIVE_REQUESTS.dec()
         return JSONResponse(status_code=400, content=body)
     if not isinstance(payload, dict):
         body = error_envelope(
@@ -270,6 +332,8 @@ async def assistant(request: Request) -> JSONResponse:
             code="invalid_envelope",
             detail="request body must be a JSON object",
         )
+        _record_outcome("invalid_envelope", transport, time.perf_counter() - handler_started)
+        ACTIVE_REQUESTS.dec()
         return JSONResponse(status_code=400, content=body)
 
     request_id = request_id_from_payload(payload)
@@ -280,9 +344,12 @@ async def assistant(request: Request) -> JSONResponse:
             code="cancelled",
             detail=f"request {request_id} was cancelled before dispatch",
         )
+        _record_outcome("cancelled", transport, time.perf_counter() - handler_started)
+        ACTIVE_REQUESTS.dec()
         return JSONResponse(status_code=200, content=body)
 
     cfg = _config_from_env()
+    transport = "gateway_http" if cfg.use_gateway else "cli_shell_out"
     total_started = time.perf_counter()
     prompt_started = time.perf_counter()
     # Gateway path skips the prompt-augmentation work the CLI path needs.
@@ -327,6 +394,7 @@ async def assistant(request: Request) -> JSONResponse:
         allowed_mcp_tools = inferred_mcp_tools or None
         prompt = build_agent_prompt(payload, mcp_allowed_tools=allowed_mcp_tools)
     prompt_ms = (time.perf_counter() - prompt_started) * 1000.0
+    REQUEST_DURATION.labels(stage="prompt_build", transport=transport).observe(prompt_ms / 1000.0)
     timeout_s = _request_timeout(payload, cfg.timeout_s)
     session_id = str(payload.get("conversationId") or request_id)
     _ACTIVE_REQUESTS[request_id] = {
@@ -354,6 +422,34 @@ async def assistant(request: Request) -> JSONResponse:
     # binding and explicit unbind is just hygiene.
     principal = _principal_for(cfg)
     await _bind_principal_async(principal, request_id)
+
+    # Circuit-breaker gate (opt-in via OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_*).
+    # When disabled this is a fast no-op. When enabled and OPEN, the bridge
+    # short-circuits with a 503 envelope rather than dispatching to a sick
+    # gateway. The compact firing (above) is intentionally NOT gated by the
+    # breaker: it is best-effort already, and gating it would create a
+    # confusing partial-state outcome where the user request runs but the
+    # session is not compacted as expected.
+    cb_allowed, cb_reason = await _CIRCUIT_BREAKER.before_dispatch(transport)
+    if not cb_allowed:
+        _log_event(
+            "openclaw_circuit_breaker_open",
+            requestId=request_id,
+            transport=transport,
+            reason=cb_reason or "",
+        )
+        body = error_envelope(
+            request_id=request_id,
+            code="circuit_breaker_open",
+            detail=(
+                "bridge circuit breaker is open after consecutive upstream "
+                f"failures ({cb_reason or 'open'}); try again after the cooldown"
+            ),
+        )
+        _record_outcome("circuit_breaker_open", transport, time.perf_counter() - handler_started)
+        ACTIVE_REQUESTS.dec()
+        return JSONResponse(status_code=503, content=body)
+
     try:
         # 2026-05-10 (iter 32): periodic bridge-fired compaction. When
         # OPENCLAW_ASSISTANT_COMPACT_EVERY_N is set, fire `/compact` to
@@ -365,6 +461,8 @@ async def assistant(request: Request) -> JSONResponse:
             session_key = derive_gateway_session_key(payload)
             session_count = _bump_session_request_counter(session_key)
             if _should_fire_compact(session_count):
+                COMPACT_FIRES_TOTAL.labels(outcome="started").inc()
+                compact_started_perf = time.perf_counter()
                 _log_event(
                     "openclaw_compact_fire_started",
                     requestId=request_id,
@@ -385,6 +483,10 @@ async def assistant(request: Request) -> JSONResponse:
                         command=compact_command,
                         timeout_s=_COMPACT_TIMEOUT_S,
                     )
+                    COMPACT_FIRES_TOTAL.labels(outcome="succeeded").inc()
+                    REQUEST_DURATION.labels(stage="compact", transport=transport).observe(
+                        time.perf_counter() - compact_started_perf
+                    )
                     _log_event(
                         "openclaw_compact_fire_succeeded",
                         requestId=request_id,
@@ -396,6 +498,7 @@ async def assistant(request: Request) -> JSONResponse:
                     # don't fail the user request; proceed with the
                     # un-compacted session. The user-facing error rate
                     # is what we care about; compaction is best-effort.
+                    COMPACT_FIRES_TOTAL.labels(outcome="failed").inc()
                     _log_event(
                         "openclaw_compact_fire_failed",
                         requestId=request_id,
@@ -428,8 +531,12 @@ async def assistant(request: Request) -> JSONResponse:
             command=command,
             timeout_s=timeout_s,
         )
+        REQUEST_DURATION.labels(stage="agent_run", transport=transport).observe(
+            result.duration_ms / 1000.0
+        )
     except asyncio.TimeoutError:
         await _kill_sandbox_agent(cfg, session_id=session_id)
+        await _CIRCUIT_BREAKER.record_failure(transport)
         _log_event(
             "openclaw_request_timeout",
             requestId=request_id,
@@ -441,14 +548,19 @@ async def assistant(request: Request) -> JSONResponse:
             code="timeout",
             detail=f"OpenClaw agent exceeded timeout {timeout_s:.1f}s",
         )
+        _record_outcome("timeout", transport, time.perf_counter() - handler_started)
+        ACTIVE_REQUESTS.dec()
         return JSONResponse(status_code=504, content=body)
     except RuntimeError as exc:
+        await _CIRCUIT_BREAKER.record_failure(transport)
         _log_event("openclaw_request_error", requestId=request_id, detail=str(exc))
         body = error_envelope(
             request_id=request_id,
             code="upstream_call_error",
             detail=str(exc),
         )
+        _record_outcome("upstream_call_error", transport, time.perf_counter() - handler_started)
+        ACTIVE_REQUESTS.dec()
         return JSONResponse(status_code=502, content=body)
 
     if request_id in _CANCELLED:
@@ -458,9 +570,12 @@ async def assistant(request: Request) -> JSONResponse:
             code="cancelled",
             detail=f"request {request_id} was cancelled",
         )
+        _record_outcome("cancelled", transport, time.perf_counter() - handler_started)
+        ACTIVE_REQUESTS.dec()
         return JSONResponse(status_code=200, content=body)
 
     if result.returncode != 0:
+        await _CIRCUIT_BREAKER.record_failure(transport)
         detail = (
             f"OpenClaw agent exited with code {result.returncode}: "
             f"{(result.stderr or result.stdout)[:1000]}"
@@ -470,7 +585,15 @@ async def assistant(request: Request) -> JSONResponse:
             code="upstream_call_error",
             detail=detail,
         )
+        _record_outcome("upstream_call_error", transport, time.perf_counter() - handler_started)
+        ACTIVE_REQUESTS.dec()
         return JSONResponse(status_code=502, content=body)
+
+    # Gateway round-trip succeeded with a clean exit code. Even if downstream
+    # parse / normalize surfaces a content problem, the transport itself is
+    # healthy — record success on the breaker so a partial-content blip does
+    # not count against the failure threshold.
+    await _CIRCUIT_BREAKER.record_success(transport)
 
     parse_started = time.perf_counter()
     if cfg.use_gateway:
@@ -495,7 +618,20 @@ async def assistant(request: Request) -> JSONResponse:
             parse_warnings=parse_warnings,
         )
     parse_normalize_ms = (time.perf_counter() - parse_started) * 1000.0
+    REQUEST_DURATION.labels(stage="parse", transport=transport).observe(
+        parse_normalize_ms / 1000.0
+    )
     total_ms = (time.perf_counter() - total_started) * 1000.0
+    # Tool calls in the normalized envelope — `body["toolCalls"]` is set by
+    # the adapter's normalize_* functions. Count emitted calls; if there
+    # were tool-call warnings (unknown tool names, schema validation), count
+    # those separately for visibility into model/schema drift.
+    tool_calls = body.get("toolCalls") if isinstance(body, dict) else None
+    if isinstance(tool_calls, list):
+        TOOL_CALLS_TOTAL.labels(outcome="emitted").inc(len(tool_calls))
+    tool_warnings = body.get("toolCallWarnings") if isinstance(body, dict) else None
+    if isinstance(tool_warnings, list) and tool_warnings:
+        TOOL_CALLS_TOTAL.labels(outcome="warning").inc(len(tool_warnings))
     body["openclaw"] = {
         "adapter": "openclaw_assistant_bridge",
         "transport": "gateway_http" if cfg.use_gateway else "cli_shell_out",
@@ -521,6 +657,8 @@ async def assistant(request: Request) -> JSONResponse:
         allowedMcpTools=allowed_mcp_tools or [],
         promptChars=len(prompt),
     )
+    _record_outcome("success", transport, time.perf_counter() - handler_started)
+    ACTIVE_REQUESTS.dec()
     return JSONResponse(status_code=200, content=body)
 
 
@@ -580,6 +718,16 @@ def _request_timeout(payload: dict[str, Any], default_s: float) -> float:
 
 def _log_event(event: str, **fields: Any) -> None:
     print(json.dumps({"event": event, **fields}, sort_keys=True), flush=True)
+
+
+def _record_outcome(status: str, transport: str, total_seconds: float) -> None:
+    """Single point that increments the outcome counter + total-duration histogram.
+
+    Status and transport are bounded enums; never pass requestId/sessionId
+    or other high-cardinality fields here.
+    """
+    REQUESTS_TOTAL.labels(status=status, transport=transport).inc()
+    REQUEST_DURATION.labels(stage="total", transport=transport).observe(total_seconds)
 
 
 async def _kill_sandbox_agent(config: AdapterConfig, *, session_id: str) -> None:
