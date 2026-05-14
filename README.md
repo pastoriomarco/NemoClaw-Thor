@@ -2,6 +2,13 @@
 
 Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwell).
 
+> **For LLMs** (Claude, ChatGPT, agentic IDEs): read
+> [`AGENTS.md`](AGENTS.md) before making any change. It tells you what
+> this repo is, what it does NOT own (specs live in `manyforge_specs`;
+> orchestration lives in `manyforge`), and the branch + commit workflow
+> that applies to LLM contributors. Full contributor reference is
+> [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 > **📖 Operator manual**: this README is a landing page / quickstart.
 > For the full step-by-step procedure — swap setup, image rebuild, JIT
 > compile expectations, sandbox workflows, cleanup procedure,
@@ -23,8 +30,7 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 ## Quick start
 
 From scratch, using the validated v6-pinned image and default profile
-(PrismaQuant + DFlash-15 — **50.7 tok/s single peak, 142.4 tok/s aggregate @ 5-concurrent**,
-matched methodology: coding prompts + `enable_thinking: false` + temp 0.2):
+(`cosmos-reason2-8b`, NVIDIA Cosmos Reason 2 8B):
 
 ```bash
 # Terminal 1: start the fastest model
@@ -45,7 +51,8 @@ parser; 64 K context). Selected as the production default 2026-05-07 after a
 for the data.
 
 For **higher single-stream throughput** at the cost of a less-reliable
-OpenClaw lane, the 35B Qwen variant is the documented alternative:
+OpenClaw lane, the 35B Qwen variant remains the documented alternative from
+the PrismaQuant + DFlash-15 benchmark set:
 
 ```bash
 ./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge
@@ -148,7 +155,11 @@ To swap to the direct lane (fast-path for simple prompts; sandboxed
 bypass — bridge runs its own loop with a tool_choice pin):
 
 ```bash
-ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart-bridge
+# manyforge's unified launcher tears the whole assistant stack down
+# and brings it back up with the new provider. The legacy
+# `restart-bridge` partial-restart verb is deprecated and now maps to
+# a full `restart` — see manyforge/scripts/MIGRATION.md.
+ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
 ```
 
 ### After reboot
@@ -324,6 +335,33 @@ NemoClaw-Thor/
 - [OpenClaw](https://github.com/openclaw/openclaw) — agent runtime
 - [PLAN-v5-transition.md](PLAN-v5-transition.md) — v5 upgrade plan (historical)
 - [DFLASH-INVESTIGATION.md](DFLASH-INVESTIGATION.md) — DFlash speculative decoding investigation and results
+
+## Versioning, releases, security
+
+- **Current version**: see [`VERSION`](VERSION) (single line, SemVer).
+  Per-component pins (vLLM container, FlashInfer, NemoClaw CLI,
+  OpenClaw, model profiles) live in [`VERSIONS.md`](VERSIONS.md) and
+  move on external upstream releases, independent of the repo SemVer.
+- **What changed**: [`CHANGELOG.md`](CHANGELOG.md) (Keep-a-Changelog
+  format).
+- **What's next**: [`ROADMAP.md`](ROADMAP.md).
+- **License**: MIT — see [`LICENSE`](LICENSE). Upstream NemoClaw has
+  its own license; NemoClaw-Thor is a sibling project, not a fork.
+- **Reporting a security vulnerability**: see [`SECURITY.md`](SECURITY.md).
+  Do NOT use public issues for security topics.
+
+## Contributing
+
+Both human contributors and LLM agents are first-class. The branch
+workflow (`main` = released, `dev` = integration where work lands,
+squash-merge `dev → main` on release) and the LLM-specific commit/push
+rules are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md) and
+reinforced in [`AGENTS.md`](AGENTS.md). Special rule for this repo:
+model-profile changes in `serving/config.sh` require operator approval
+and a smoke-corpus retest before merge.
+
+Compatible with **manyforge 0.1.x** for the assistant lane — see the
+companion repo at <https://github.com/pastoriomarco/manyforge>.
 
 ## Acknowledgements
 

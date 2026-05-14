@@ -1,8 +1,25 @@
 # NemoClaw-Thor — Current Versions
 
-Single source of truth across the three scopes this repository owns. When a
-version changes, update **only this file**; `README.md`, `AGENTS.md`, and
-`USER_QUICKSTART_MANUAL.md` link here rather than duplicating tables.
+## Repository version
+
+| Field | Value |
+|---|---|
+| Repository SemVer | `0.1.0` (see [`VERSION`](VERSION)) |
+| Compatible manyforge | `0.1.x` |
+| License | MIT — see [`LICENSE`](LICENSE) |
+
+The `VERSION` file is the source of truth for "what NemoClaw-Thor release
+this checkout represents." It moves on the SemVer schedule documented in
+[`CHANGELOG.md`](CHANGELOG.md). The sections below pin external
+dependencies independently — those pins move when external upstreams
+release, not on NemoClaw-Thor's own release cadence.
+
+---
+
+Single source of truth across the three external-dependency scopes this
+repository owns. When a pin changes, update **only this file**;
+`README.md`, `AGENTS.md`, and `USER_QUICKSTART_MANUAL.md` link here
+rather than duplicating tables.
 
 | Scope | Where it lives | What it pins |
 |---|---|---|

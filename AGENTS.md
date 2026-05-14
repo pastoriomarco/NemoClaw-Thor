@@ -470,6 +470,60 @@ them in permanent-pointer tables.
 
 ---
 
+## Branch & commit workflow for agents
+
+NemoClaw-Thor uses the same two-branch model as manyforge (mirroring
+[manymove](https://github.com/pastoriomarco/manymove)):
+
+- **`main`** — released. Tagged. Protected. Off-limits to direct push.
+- **`dev`** — integration. Where work lands. **Only the maintainer
+  pushes to upstream `dev`.** External contributors fork the repo and
+  open a PR from their fork to upstream `dev`.
+- **Topic branches** off `dev` — optional. Used when a change is
+  large enough to warrant pre-merge review, or when an external
+  contributor opens a PR.
+
+**Rules for LLM agents** (load-bearing, do not skip):
+
+1. **Never push to `main`.** Only the maintainer does that, via the
+   release squash-merge from `dev`. If you are running in the
+   maintainer's checkout, an authorized push goes to `origin/dev` (or
+   a topic branch if the operator explicitly asks). If you are
+   running in a contributor's fork, an authorized push goes to the
+   fork — never directly to upstream `dev` or `main`.
+2. **`git commit` requires explicit human authorization** — every
+   time. Stage the diff, present it, wait for the literal word
+   `commit`. Priority memory rule
+   `feedback_commits_explicit_only.md` is operative.
+3. **`git push` is a separate authorization** from `git commit`.
+   Wait for an explicit `push` reply.
+4. **Never open a PR autonomously.** Operator opens via the GitHub
+   UI.
+5. **Releases are operator-driven.** Do not bump `VERSION`, do not
+   write `[X.Y.Z]` sections in `CHANGELOG.md`, do not tag, do not
+   squash-merge `dev → main`.
+
+### Special rules for this repo
+
+- **Do not modify `serving/config.sh` model profiles** without
+  operator approval. The default profile (`cosmos-reason2-8b` as of
+  2026-05-07) is the production lane; changing it requires the
+  full smoke-corpus retest documented in
+  `manyforge/docs/MANYFORGE-PROFILE-CALIBRATION.md`.
+- **`VERSIONS.md` is the per-component pin table; `VERSION` is the
+  repo SemVer.** Don't conflate them. Bumping vLLM updates
+  `VERSIONS.md`; bumping the repo SemVer updates `VERSION` + adds
+  a section to `CHANGELOG.md`.
+- **Coordinate cross-repo changes with manyforge** when the bridge
+  wire contract, deployment YAML's `assistant` block, or runtime
+  status surface is affected. Open paired PRs.
+
+Full contributor reference, applicable to both humans and LLMs:
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Companion repo: [`manyforge`
+AGENTS.md](https://github.com/pastoriomarco/manyforge/blob/main/AGENTS.md).
+
+---
+
 ## Maintaining this file
 
 When the verified-version pins shift, the scope shifts, or a new

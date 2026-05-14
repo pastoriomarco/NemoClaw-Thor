@@ -1,0 +1,42 @@
+name: python-tests
+
+on:
+  pull_request:
+    paths:
+      - "manyforge/openclaw_assistant_bridge/**"
+      - "manyforge/*.py"
+      - "manyforge/scripts/proxy/**"
+      - ".github/workflows/python-tests.yml"
+  push:
+    branches: [main, dev]
+    paths:
+      - "manyforge/openclaw_assistant_bridge/**"
+      - "manyforge/*.py"
+      - "manyforge/scripts/proxy/**"
+  workflow_dispatch:
+
+jobs:
+  python-tests:
+    name: OpenClaw bridge unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest httpx fastapi uvicorn
+          if [[ -f manyforge/openclaw_assistant_bridge/requirements.txt ]]; then
+            pip install -r manyforge/openclaw_assistant_bridge/requirements.txt || true
+          fi
+      - name: Run bridge pytest
+        run: |
+          if [[ -d manyforge/openclaw_assistant_bridge/tests ]]; then
+            cd manyforge/openclaw_assistant_bridge
+            pytest -x --tb=short
+          else
+            echo "No bridge tests directory found; skipping"
+          fi

@@ -1,0 +1,40 @@
+name: bash-syntax
+
+on:
+  pull_request:
+    paths:
+      - "setup/**/*.sh"
+      - "serving/**/*.sh"
+      - "manyforge/**/*.sh"
+      - "scripts/**/*.sh"
+      - ".github/workflows/bash-syntax.yml"
+  push:
+    branches: [main, dev]
+    paths:
+      - "setup/**/*.sh"
+      - "serving/**/*.sh"
+      - "manyforge/**/*.sh"
+      - "scripts/**/*.sh"
+  workflow_dispatch:
+
+jobs:
+  bash-syntax:
+    name: bash -n on shell scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check every shell script
+        run: |
+          set -euo pipefail
+          errors=0
+          while IFS= read -r script; do
+            if ! bash -n "${script}" 2>&1; then
+              echo "syntax error in ${script}" >&2
+              errors=$((errors + 1))
+            fi
+          done < <(find setup serving manyforge scripts -type f -name '*.sh' 2>/dev/null)
+          if (( errors > 0 )); then
+            echo "Found ${errors} script(s) with syntax errors" >&2
+            exit 1
+          fi
+          echo "All shell scripts pass bash -n"
