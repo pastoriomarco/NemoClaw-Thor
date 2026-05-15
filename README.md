@@ -155,10 +155,8 @@ To swap to the direct lane (fast-path for simple prompts; sandboxed
 bypass — bridge runs its own loop with a tool_choice pin):
 
 ```bash
-# manyforge's unified launcher tears the whole assistant stack down
-# and brings it back up with the new provider. The legacy
-# `restart-bridge` partial-restart verb is deprecated and now maps to
-# a full `restart` — see manyforge/scripts/MIGRATION.md.
+# manyforge's unified launcher tears the assistant stack down
+# and brings it back up with the new provider.
 ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
 ```
 
@@ -333,8 +331,8 @@ NemoClaw-Thor/
 - [NemoClaw](https://github.com/NVIDIA/NemoClaw) — sandbox framework
 - [OpenShell](https://github.com/NVIDIA/OpenShell) — container orchestration
 - [OpenClaw](https://github.com/openclaw/openclaw) — agent runtime
-- [PLAN-v5-transition.md](PLAN-v5-transition.md) — v5 upgrade plan (historical)
-- [DFLASH-INVESTIGATION.md](DFLASH-INVESTIGATION.md) — DFlash speculative decoding investigation and results
+- Historical v5 transition notes now live in git history.
+- [serving/docs/DFLASH-INVESTIGATION.md](serving/docs/DFLASH-INVESTIGATION.md) — DFlash speculative decoding investigation and results
 
 ## Versioning, releases, security
 

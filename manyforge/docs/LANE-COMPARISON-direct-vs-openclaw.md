@@ -1016,7 +1016,7 @@ fix (§8.4) but with a non-trivial timing race on the larger turn.
 Switch via:
 
 ```bash
-ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart-bridge
+ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
 ```
 
 Direct works only when the served model's tool descriptions carry

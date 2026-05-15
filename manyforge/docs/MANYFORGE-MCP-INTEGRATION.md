@@ -302,9 +302,9 @@ cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
 ./manyforge/setup-manyforge-assistant.sh         # default sandbox: my-assistant
 
 # Plus, in the manyforge demo lane:
-cd ../../../dev_ws/src/manyforge
+cd ${HOME}/workspaces/dev_ws/src/manyforge
 REBUILD_FRONTEND_ON_COMPOSER_RELOAD=false \
-  ./scripts/demo-assistant-known-good.sh reload-composer
+  ./scripts/demo-assistant-known-good.sh restart
 ```
 
 Then run the verification commands above.
@@ -756,7 +756,7 @@ content + success table, plus aggregates.
   `dev_ws/src/manyforge/manyforge_assistant_bridge/` and
   `dev_ws/src/manyforge/manyforge_composer/backend/routes_assistant.py`.
 - Wire contract that both paths preserve:
-  [`dev_ws/src/manyforge/docs/reference/ASSISTANT_PROVIDER_CONTRACT.md`](../../../dev_ws/src/manyforge/docs/reference/ASSISTANT_PROVIDER_CONTRACT.md).
+  [`ASSISTANT_PROVIDER_CONTRACT.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/reference/ASSISTANT_PROVIDER_CONTRACT.md).
 - NemoClaw onboarding workflow this integration plugs into:
   `../../setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`.
 - Profile selection for the assistant model:

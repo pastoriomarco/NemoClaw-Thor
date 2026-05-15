@@ -17,9 +17,9 @@ and deployment reconfigurations.
 |---|---|
 | [`manyforge/scripts/debug/smoke_corpus.yaml`](../scripts/debug/smoke_corpus.yaml) | The corpus — 74 cases organized by category × detail level. |
 | [`manyforge/scripts/debug/smoke_corpus_runner.py`](../scripts/debug/smoke_corpus_runner.py) | Loader + dispatcher + assertion engine + reporter. |
-| [`<sibling-manyforge-repo>/examples/assistant_modes_scene_authoring.deployment.yaml`](../../../../dev_ws/src/manyforge/examples/assistant_modes_scene_authoring.deployment.yaml) | Deployment that scopes the assistant's tool + node allowlist. The smoke runs against this by default. |
-| [`<sibling-manyforge-repo>/examples/pick_and_place_ur10e_robotiq.program.yaml`](../../../../dev_ws/src/manyforge/examples/pick_and_place_ur10e_robotiq.program.yaml) | The populated-state program (12-step pick-and-place, 2 scene objects, 1 param, 0 blackboard keys). |
-| [`<sibling-manyforge-repo>/examples/empty_pick_and_place_ur10e_robotiq.program.yaml`](../../../../dev_ws/src/manyforge/examples/empty_pick_and_place_ur10e_robotiq.program.yaml) | Empty-state fixture used when a case sets `precondition.fresh_program: true` (PnP build chain). Has a `command_gripper` scaffold leaf because Composer rejects fully-empty composite trees. |
+| [`manyforge/examples/assistant_modes_scene_authoring.deployment.yaml`](https://github.com/pastoriomarco/manyforge/blob/main/examples/assistant_modes_scene_authoring.deployment.yaml) | Deployment that scopes the assistant's tool + node allowlist. The smoke runs against this by default. |
+| [`manyforge/examples/pick_and_place_ur10e_robotiq.program.yaml`](https://github.com/pastoriomarco/manyforge/blob/main/examples/pick_and_place_ur10e_robotiq.program.yaml) | The populated-state program (12-step pick-and-place, 2 scene objects, 1 param, 0 blackboard keys). |
+| [`manyforge/examples/empty_pick_and_place_ur10e_robotiq.program.yaml`](https://github.com/pastoriomarco/manyforge/blob/main/examples/empty_pick_and_place_ur10e_robotiq.program.yaml) | Empty-state fixture used when a case sets `precondition.fresh_program: true` (PnP build chain). Has a `command_gripper` scaffold leaf because Composer rejects fully-empty composite trees. |
 
 ## Schema Highlights
 
@@ -497,7 +497,7 @@ In iter 32 with N=2: 9 compactions fired across the 19-case PnP suite, all succe
 
 **Approach.** Three coordinated changes:
 
-1. **New tool `request_clarification(question: string)`** registered in the assistant catalog with handler at [`routes_assistant.py:_apply_request_clarification`](../../../../dev_ws/src/manyforge/manyforge_composer/backend/routes_assistant.py). The handler returns a payload that instructs the model to end its turn with prose prefixed by `[NEEDS-CLARIFY] ` plus the question text — the marker is the cross-process signal because the bridge can't see tool calls inside the gateway loop, only the final assistant message.
+1. **New tool `request_clarification(question: string)`** registered in the assistant catalog with handler at [`routes_assistant.py:_apply_request_clarification`](https://github.com/pastoriomarco/manyforge/blob/main/manyforge_composer/backend/routes_assistant.py). The handler returns a payload that instructs the model to end its turn with prose prefixed by `[NEEDS-CLARIFY] ` plus the question text — the marker is the cross-process signal because the bridge can't see tool calls inside the gateway loop, only the final assistant message.
 
 2. **Bridge auto-retry** on the marker — `openclaw_assistant_bridge/service.py` strips `[NEEDS-CLARIFY]` from the final message, sets `clarificationRequested=true` on the response envelope, and if no follow-up is queued by the caller (`OPENCLAW_ASSISTANT_CLARIFICATION_AUTO_RETRY_MAX=1` enabled), re-fires the original prompt once. Idea: give the model a second pass to pick a sensible default if the marker fired spuriously.
 
@@ -595,7 +595,8 @@ Preserved (durable wins from iter 33-34):
 - `--enable-recovery-turn` is now the default flag on every smoke iter (recipe in SMOKE-ITER-RUNBOOK.md). The flag itself was added before iter 33 but iter 33 was the first measurement at scale: +10 cases recovered. Iter-32 baseline runs with the flag would likely show 53-55/66 (~80-83%) but that's never been measured.
 - `NemoClaw-Thor/.gitignore` — added `__pycache__/` and `*.pyc`/`*.pyo`. Durable fix; was missing for the smoke harness directory.
 - New file `NemoClaw-Thor/manyforge/docs/SMOKE-ITER-RUNBOOK.md` — operational runbook with cold-start sequence + restart matrix per change type. Captures the SSH-namespace gateway gotcha that ate ~10 min of iter-33 setup.
-- This SMOKE-CORPUS.md section + the IDEAS-BRIEF.md refresh — so the next iteration cycle doesn't re-propose direction 3.
+- This SMOKE-CORPUS.md section — so the next iteration cycle doesn't
+  re-propose direction 3.
 
 Bridge env reverted: `OPENCLAW_ASSISTANT_CLARIFICATION_AUTO_RETRY_MAX` is no longer set. `OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2` and `OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S=120` retained (iter-32 production).
 Proxy env reverted: `OPENCLAW_PROXY_FORCE_TOOL_CHOICE` no longer set; iter-32 max_tokens + thinking budget retained.

@@ -228,7 +228,7 @@ alternative.**
   workflows against a local frontier-class model. Single user, single stream,
   long context — exactly mitkox's pattern
 - **RLM sub-LM substrate.** If we adopt rlmgw for long-context audit lanes
-  (per [feedback_agent_timeouts.md](../../../../.claude/projects/-home-tndlux-workspaces-nemoclaw/memory/feedback_agent_timeouts.md)),
+  (per the local agent-timeout operating guidance),
   DeepSeek V4 Flash on ds4 would be a strong recursive-call backend (the RLM
   paper benchmarks against GPT-5-mini; DeepSeek V4 Flash is in the same league)
 - **1M-context experimental lane.** Validation that Thor + custom-CUDA + 80 GB

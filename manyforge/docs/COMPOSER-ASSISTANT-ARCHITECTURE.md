@@ -610,8 +610,8 @@ For a future refinement cycle:
 2. Compare against the iter-32 failure set: 15 consistent fails grouped
    into Pattern A (Pattern A residuals — model won't ask), Pattern B
    (insert_node multi-arg specificity), Pattern C (tool-mismatch), and
-   variance (PnP_06, PnP_14, PnP_18). See SMOKE-CORPUS.md and IDEAS-BRIEF.md
-   for the full breakdown by group.
+   variance (PnP_06, PnP_14, PnP_18). See SMOKE-CORPUS.md for the
+   full breakdown by group.
 3. Apply ONE cross-cutting change at a time. The corpus is sensitive
    enough that two simultaneous changes interact unpredictably (e.g.,
    iter 33 changed corpus rubrics AND added the recovery turn —

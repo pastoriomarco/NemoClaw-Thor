@@ -30,7 +30,7 @@ To switch back to the direct lane (fast-path for simple prompts only —
 P3-style compound prompts race the 60s budget on this lane):
 
 ```bash
-ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart-bridge
+ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
 ```
 
 ---

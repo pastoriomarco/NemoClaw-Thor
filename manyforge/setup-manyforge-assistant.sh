@@ -525,6 +525,6 @@ Next steps:
         "openclaw agent --agent manyforge-composer --message 'List the manyforge MCP tools you can call. Reply with a JSON array of tool names.' --json --timeout 120"
   - Composer is now wired to use the openclaw lane by default
     (demo-assistant-known-good.sh ASSISTANT_PROVIDER=openclaw). Run the
-    launcher's 'start' or 'restart-bridge' to bring the openclaw bridge
+    launcher's 'start' or 'restart' to bring the openclaw bridge
     on :8200 up against this provisioned sandbox.
 EOF

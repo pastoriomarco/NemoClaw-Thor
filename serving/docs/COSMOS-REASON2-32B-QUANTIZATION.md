@@ -7,7 +7,7 @@ that fits Thor's serving budget and preserves Physical AI reasoning quality.
 **Why**: The 32B was released 2026-04-29 in BF16 only (~64 GB on disk). At that
 size it cannot co-serve with Qwen3.6-MTP on Thor and cannot fit the 30–40 GB
 Orin envelope. It also blocks `manyforge_assistant` adoption: the deployment
-plan's Outcome A/B/C lineup ([MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md))
+plan's Outcome A/B/C lineup ([MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](../../manyforge/docs/MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md))
 requires quantized perception specialists. NVIDIA published quants for the 2B
 and 8B siblings (FP8 on NGC, mixed-precision W4A16 / NVFP4A16 from Embedl, NVFP4
 from Firworks for the 8B); for the 32B we'd be the first.
@@ -212,7 +212,7 @@ maturity, not memory capacity** — see "Spark vs Thor" below.
 ### Memory budget
 
 Confirmed today on this Thor: 122 GB total, 63 GB swap. With vLLM stopped and
-the standard `sync && drop_caches` ([AGENTS.md § "End-of-session cleanup"](AGENTS.md#c--end-of-session-cleanup)),
+the standard `sync && drop_caches` ([AGENTS.md § "End-of-session cleanup"](../../AGENTS.md#c--end-of-session-cleanup)),
 ~110 GB is available.
 
 Quantization peak memory for 32B BF16:
@@ -286,7 +286,7 @@ running off-Thor.
 | `transformers >= 4.52` | aarch64 wheel exists |
 | `torch` with CUDA 13 | Available via Jetson AI Lab index (`pypi.jetson-ai-lab.io/sbsa/cu130`) |
 | `datasets` | Pure Python |
-| `lmms-lab/flickr30k` download | ~2 GB; HF token already configured per [AGENTS.md § Workflows A.3](AGENTS.md) |
+| `lmms-lab/flickr30k` download | ~2 GB; HF token already configured per [AGENTS.md § Workflows A.3](../../AGENTS.md) |
 
 No fundamental aarch64/cu130 blocker. The ecosystem is one `pip install
 llmcompressor` + a Flickr30k download away.
@@ -356,7 +356,7 @@ on the serving side.
   no speculative-decoding gain available without training a drafter.
 - **Audio support** — Cosmos-Reason2 is vision+text only; for audio the
   candidate is `nemotron3-nano-omni-30b-a3b-nvfp4`
-  ([MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md)
+  ([MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](../../manyforge/docs/MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md)
   Outcome D), not Cosmos.
 
 ---

@@ -35,8 +35,10 @@ headroom on the same device.
 
 **ManyForge contract references:**
 
-- `${HOME}/workspaces/dev_ws/src/manyforge/docs/plans/AI_ASSISTANT_INTEGRATION_PLAN.md`
-- `${HOME}/workspaces/dev_ws/src/manyforge/docs/reference/ASSISTANT_BACKEND_CONTRACT.md`
+- ManyForge stack and assistant bringup:
+  [`STACK_SETUP.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/operations/STACK_SETUP.md)
+- Assistant provider wire contract:
+  [`ASSISTANT_PROVIDER_CONTRACT.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/reference/ASSISTANT_PROVIDER_CONTRACT.md)
 
 ManyForge owns the assistant provider contract, tool contracts, proposal
 review/apply boundary, and workflow tests. This document owns model-serving

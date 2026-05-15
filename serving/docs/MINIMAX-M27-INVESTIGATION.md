@@ -10,9 +10,9 @@ Target: `dervig/m51Lab-MiniMax-M2.7-REAP-139B-A10B-NVFP4-GB10`
 (75 GB, 62 all-attention layers, head_dim=128, 154 experts × 10B active).
 
 Profile added in [../config.sh](../config.sh) + [../launch.sh](../launch.sh) as
-`minimax-m2.7-139b-a10b-nvfp4`. Runtime mod created:
-[../docker/mods/fix-nvfp4-moe-scale-merge/run.sh](../docker/mods/fix-nvfp4-moe-scale-merge/run.sh)
-(replaces `w13_weight_global_scale[:, 0]` with `torch.minimum(w1, w3)`).
+`minimax-m2.7-139b-a10b-nvfp4`. A historical runtime mod
+`serving/docker/mods/fix-nvfp4-moe-scale-merge/run.sh` replaced
+`w13_weight_global_scale[:, 0]` with `torch.minimum(w1, w3)`.
 
 Tested matrix of attention and MoE backends until one produced readable output.
 
@@ -107,9 +107,9 @@ more factual errors and formatting mistakes than a healthy checkpoint of the sam
 
 ## Artifacts kept
 
-- [../docker/mods/fix-nvfp4-moe-scale-merge/run.sh](../docker/mods/fix-nvfp4-moe-scale-merge/run.sh) —
-  reusable for any future NVFP4 W4A4 checkpoint with split per-half scales. Not specific to
-  MiniMax.
+- Historical `serving/docker/mods/fix-nvfp4-moe-scale-merge/run.sh` —
+  reusable if restored for any future NVFP4 W4A4 checkpoint with split
+  per-half scales. Not specific to MiniMax.
 - [../config.sh](../config.sh) + [../launch.sh](../launch.sh) profile block — left in
   place with a header comment pointing to this document. The working launch config (MARLIN
   forced, `VLLM_USE_FLASHINFER_MOE_FP4=0`, fp8 KV, `max_num_seqs=1`, `max_model_len=16384`)

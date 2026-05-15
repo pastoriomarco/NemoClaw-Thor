@@ -58,7 +58,7 @@ To swap to the direct lane (fast-path for simple prompts only — sandbox
 bypass; the bridge runs its own loop with a `tool_choice` pin):
 
 ```bash
-ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart-bridge
+ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
 ```
 
 ## Where to read
