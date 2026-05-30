@@ -437,6 +437,98 @@ prepare_thor_launch_profile() {
         # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv-n4 REMOVED 2026-04-28 — variance-
         # probe profile, mission accomplished. TEB 91 confirmed N=2 (TEB 93)
         # is the right pick for FP8 KV; this profile was empirically dominated.
+        qwen3.6-35b-a3b-nvfp4-nvidia)
+            # EXPERIMENTAL (2026-05-30 v9 staging): NVIDIA-official NVFP4 quant
+            # of Qwen3.6-35B-A3B (MoE 3B active / 35B total). Combines NVIDIA's
+            # ModelOpt v0.44.0 quantization with the iter-32 production sampling
+            # recipe and the froggeric Qwen3.6 chat-template fix.
+            #
+            # Rationale: the dense qwen3.6-27b-fp8-mtp-kvfp8 baseline run on
+            # cosmos-reason2-8b lineage was too slow for the composer-assistant
+            # workload (60-100s per simple case, several full timeouts). 35B-A3B
+            # MoE has only ~3B active parameters per token — should be
+            # substantially faster than the 27B dense path while gaining the
+            # quality benchmarks (τ²-Bench Telecom 94.7 NVFP4 vs 95.5 BF16 per
+            # NVIDIA's model card). MTP K=3 with moe_backend:triton is NVIDIA's
+            # explicit Spark/DGX recommendation; combined with froggeric's
+            # template (which guarantees 100% prefix-cache hit rate), agent loop
+            # iterations should be far cheaper than the 27B's were.
+            #
+            # SM110 / Thor compatibility env vars (mirroring the RedHat quant's
+            # working configuration):
+            #   VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass — picks the SM110-
+            #     compatible NVFP4 GEMM path.
+            #   VLLM_USE_FLASHINFER_MOE_FP4=1 — enables FlashInfer NVFP4 MoE.
+            #   VLLM_USE_FLASHINFER_MOE_FP16=0 — routes unquantized BF16 MoE
+            #     paths (drafter forward) through Triton to dodge the SM100-only
+            #     CUTLASS tile <128,64,64> crash that hit on SM110 in v7/v8.
+            #
+            # Tool-call parser: qwen3_coder. The froggeric template emits native
+            # XML tool calls; qwen3_coder parses that format. Do NOT use qwen3_xml
+            # (designed for the stock-template format) or hermes (designed for
+            # JSON-in-tags).
+            #
+            # MTP K=3 vs K=2: NVIDIA's Spark recipe specifies K=3; community
+            # forum tests on the dense 27B at K=3 hit 85-94% acceptance. The
+            # RedHat-quant siblings use K=2 (proven historically at TEB 93).
+            # Starting at K=3 to match NVIDIA's testing; drop to K=2 if MTP
+            # acceptance falls below ~70% in smoke runs.
+            #
+            # Proxy caps (active automatically via launch.sh env, not profile):
+            #   OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048 — iter-21b proved this
+            #     is the sweet spot; bigger caps cause model wander → timeouts.
+            #   OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 — bounds <think> block
+            #     within the 2048 cap. Iter-21a proved this is neutral on cosmos
+            #     but load-bearing as a thinking-on safety net.
+            # Iter 3 working config (2026-05-30 PM): RedHatAI weights + NVIDIA
+            # Spark serving recipe. Smoke corpus 51/66 = 77.3% — matches the
+            # iter-32 cosmos-reason2-8b winner.
+            #
+            # Iter 4 attempt with nvidia/Qwen3.6-35B-A3B-NVFP4 weights + NVIDIA's
+            # full Spark recipe (VLLM_USE_FLASHINFER_MOE_FP4=0, VLLM_FP8_MOE_BACKEND,
+            # FLASHINFER_DISABLE_VERSION_CHECK, CUTE_DSL_ARCH=sm_110a, --moe-backend
+            # marlin, --quantization modelopt) FAILED at 67% weight load with:
+            #   ValueError: There is no module or parameter named 'lm_head.input_scale'
+            #   in Qwen3_5MoeForCausalLM. Available: {'lm_head.weight'}
+            # MoE backend was MARLIN (NVIDIA-recommended), but the error is in the
+            # weight loader (qwen3_5.py:525), not the MoE path. vLLM 0.22.1.dev0
+            # (v9 image) does NOT attach a quant method to ParallelLMHead for
+            # this model class. NVIDIA's recipe requires `vllm/vllm-openai:nightly`
+            # which presumably has the fix. Re-evaluate on next vLLM image bump.
+            # See serving/docs/V9-35B-A3B-NVFP4-NVIDIA-RECIPE.md for details.
+            #
+            # RedHat ships the same Qwen3.6-35B-A3B base quantized via
+            # llm-compressor (the upstream tool for vLLM) — lm_head is BF16
+            # (vocab×hidden, 248320×2048), matching ParallelLMHead's expected
+            # dtype. Format: compressed-tensors / nvfp4-pack-quantized.
+            # vLLM auto-detects the quant format from config.json's
+            # quantization_config — no --quantization flag needed.
+            THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen-fixed-froggeric.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen-fixed-froggeric.jinja"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--kv-cache-dtype" "fp8"
+                "--attention-backend" "flashinfer"
+                "--enforce-eager"
+                "--language-model-only"
+                "--enable-prefix-caching"
+                "--enable-chunked-prefill"
+                "--async-scheduling"
+                "--max-num-batched-tokens" "8192"
+                "--reasoning-parser" "qwen3"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
+                "--default-chat-template-kwargs" '{"enable_thinking":true}'
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}'
+                "--trust-remote-code"
+            )
+            ;;
         qwen3.6-35b-a3b-nvfp4-tq-mtp)
             # ★ MAX CONTEXT: 28.0 tok/s, 79% acceptance, 2.22M KV tokens.
             # NVFP4 weights + TurboQuant K8V4 KV + MTP N=4.
@@ -573,18 +665,42 @@ prepare_thor_launch_profile() {
             # head_dim=256 forces FlashInfer attention. VLLM_DISABLED_KERNELS
             # (set higher up) routes FP8 GEMM through Triton fallback to dodge
             # the Xid 43 CutlassFp8BlockScaledMMKernel crash on SM110.
+            #
+            # 2026-05-30 (v9 staging): chat-template + tool-call parser
+            # corrections. Stock Qwen3.6 chat template ships several bugs
+            # (Python-only Jinja filters that crash C++ engines, empty
+            # <think>\n</think> injection causing ~80%+ premature <|im_end|>
+            # aborts on agentic loops, KV-cache-invalidating history pruning,
+            # false-positive error retry loops). Applying
+            # froggeric/Qwen-Fixed-Chat-Templates v19 (Apache 2.0,
+            # variant-agnostic: covers all Qwen 3.5/3.6 sizes, BF16/FP8/NVFP4
+            # alike). Pairs with --tool-call-parser qwen3_coder (the native
+            # XML parser the fixed template emits) — replaces the prior
+            # qwen3_xml parser which expected the stock template's broken
+            # XML format. This combination is the likely root cause of the
+            # prior 1/9 lane-comparison Qwen3.6 failure per froggeric's
+            # documented symptom set.
+            #
+            # MTP K bumped 2 → 3. Community single-node recipe (forum
+            # @Turrican area) runs K=3 at 19-21 tok/s with 85-94% acceptance
+            # on Qwen3.6-27B-FP8. K=2 was the conservative pre-template-fix
+            # pick; the chat-template fix removes speculative-decoding
+            # mismatches and unlocks higher K without quality drop. Watch
+            # agentic-quality smoke for any cliff vs K=2.
             THOR_LAUNCH_MODEL_SOURCE="Qwen/Qwen3.6-27B-FP8"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen-fixed-froggeric.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen-fixed-froggeric.jinja"
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--attention-backend" "flashinfer"
                 "--language-model-only"
                 "--reasoning-parser" "qwen3"
                 "--enable-auto-tool-choice"
-                "--tool-call-parser" "qwen3_xml"
+                "--tool-call-parser" "qwen3_coder"
                 "--enable-prefix-caching"
                 "--max-num-batched-tokens" "32768"
-                "--speculative-config" '{"method":"qwen3_next_mtp","num_speculative_tokens":2}'
+                "--speculative-config" '{"method":"qwen3_next_mtp","num_speculative_tokens":3}'
             )
             ;;
         gemma4-e4b-it)

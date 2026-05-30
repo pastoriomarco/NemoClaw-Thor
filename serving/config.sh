@@ -155,6 +155,7 @@ Supported model profiles:
     qwen3.6-35b-a3b-nvfp4-tq-mtp       ★★ throughput+context (TEB 90, 89% IFEval, 24.8 tps, 2.22M KV)
     qwen3.6-35b-a3b-nvfp4-dflash       heavy coding bursts (DFlash-8, ~v6 87 TEB, peak ~130 tps)
     qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge  ★ ManyForge production: TQ+MTP-2 + VISION, 3×64K, co-serves w/ Cosmos
+    qwen3.6-35b-a3b-nvfp4-nvidia       ★ EXPERIMENTAL — NVIDIA-official NVFP4 quant + froggeric template + MTP K=3 (τ²-Bench 94.7)
 
   Other Qwen3.6:
     qwen3.6-27b-fp8-mtp-kvfp8     dense 27B FP8 + MTP + FP8 KV (TEB 84)
@@ -309,6 +310,27 @@ resolve_model_profile() {
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="8192"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        qwen3.6-35b-a3b-nvfp4-nvidia)
+            # EXPERIMENTAL (added 2026-05-30): NVIDIA-official NVFP4 quant of
+            # Qwen3.6-35B-A3B (MoE, ~3B active / 35B total). Combines:
+            #   - NVIDIA's ModelOpt v0.44.0 quant (preserves MTP heads + vision tower BF16)
+            #   - froggeric Qwen-Fixed-Chat-Templates v19 (variant-agnostic across Qwen3.5/3.6)
+            #   - qwen3_coder tool-call parser (matches template's native XML emission)
+            #   - MTP K=3 per NVIDIA Spark-config recommendation + moe_backend:triton
+            #   - iter-32 production proxy caps (MAX_TOKENS=2048, THINKING_BUDGET=512)
+            # NVIDIA benchmark numbers (τ²-Bench Telecom agentic tool-use): BF16 95.5 → NVFP4 94.7.
+            # MoE active params 3B → should be substantially faster than 27B dense baseline
+            # which proved too slow on this Thor stack.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-nvidia"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="5"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_QUANTIZATION=""
             ;;
         cosmos-reason2-2b)
