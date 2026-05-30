@@ -418,7 +418,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if body_json is not None:
             request_record["body"] = body_json
         else:
-            request_record["body_raw_excerpt"] = _truncate(body_raw, 4096)
+            request_record["body_raw_excerpt"] = _truncate(body_raw, 1048576)
 
         # Forward to upstream. Buffered (we read entire response before
         # returning to caller). For SSE/streaming responses this serializes
@@ -474,7 +474,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if resp_body_json is not None:
             response_record["body"] = resp_body_json
         else:
-            response_record["body_raw_excerpt"] = _truncate(resp_body_raw, 4096)
+            response_record["body_raw_excerpt"] = _truncate(resp_body_raw, 1048576)
 
         _append_log({
             "ts": int(ts_in * 1000),
