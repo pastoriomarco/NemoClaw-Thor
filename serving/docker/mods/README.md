@@ -17,11 +17,24 @@ If `VLLM_MODS` is unset, the entrypoint skips this dispatch entirely.
 
 ### `fix-pr39931-turboquant/`
 
-**Status:** restored 2026-04-27 after v7 image testing revealed PR #39931
-**did NOT** actually merge into vLLM v0.20.0 (despite earlier research
-claiming it did). The hybrid-rejection guard is still present in v0.20.0
-source, blocking TurboQuant on Qwen3.6 hybrid (linear+full attention)
-profiles.
+**Status:** **obsolete on v9 (vLLM 0.22.0)** — PR #39931 merged upstream on
+2026-05-05 (commit `4f2af1a7`) and is included in vLLM v0.20.2 / v0.21.0 /
+v0.22.0. The hybrid-rejection guard the mod patched around is no longer
+present in v9 vLLM source.
+
+**Status (v7-v8.1 images):** restored 2026-04-27 after v7 image testing
+revealed PR #39931 **did NOT** actually merge into vLLM v0.20.0 (despite
+earlier research claiming it did). The hybrid-rejection guard is still
+present in v0.20.0 / v0.20.1 source, blocking TurboQuant on Qwen3.6 hybrid
+(linear+full attention) profiles. Keep the mod in the directory for back-
+compat with anyone still running v7/v8/v8.1 images.
+
+**For v9 launch.sh wiring:** the `THOR_DOCKER_ENV_ARGS+=("-e"
+"VLLM_MODS=fix-pr39931-turboquant")` lines on the 3 TurboQuant profiles
+(`fp8-turboquant`, `nvfp4-tq-mtp`, `nvfp4-tq-mtp-manyforge`) become no-ops
+on v9 since the entrypoint will detect the patches are already applied
+upstream (marker-based idempotency). Safe to leave in place; cleaner to
+drop once the v8.x lineage is fully retired.
 
 **What it does:** replays PR #39931's 6 source-level hunks across 4
 files (`vllm/engine/arg_utils.py`, `vllm/model_executor/layers/quantization/turboquant/config.py`,

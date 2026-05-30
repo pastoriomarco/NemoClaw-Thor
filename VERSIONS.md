@@ -49,30 +49,31 @@ Detailed onboarding workflow: [`setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`](setup/NEMO
 
 | Image generation | Status | Notes |
 |---|---|---|
-| **`v8.1`** | staged in source, not yet built | vLLM/FlashInfer/flash-attn-4/cuDNN/tvm-ffi bumps (see table below) |
-| `v8` | last shipped (2026-04-29) | hygiene release on top of v7 (apt cuDNN drop, audio deps, transformers 5.7.0) |
+| **`v9`** | staged in source, not yet built | Major bump (vLLM 0.20.1 → 0.22.0 skipping v0.21 as waypoint) + FlashInfer / flash-attn-4 / transformers / cuDNN minor bumps. See per-pin table below. |
+| `v8.1` | last shipped (2026-05-06) | vLLM 0.20.1 + FlashInfer 0.6.10 + flash-attn-4 b12 + transformers 5.8.0 + cutlass-dsl 4.5.0 + cuDNN 9.21.1.3. Carries the v8 baseline (sm_110 build target, SM100+ spec-decode fix, TQ+FA prefill, MRv2 acceptance) plus PTX FP32→FP4 codegen and NVFP4 KV path. |
+| `v8` | superseded (2026-04-29) | hygiene release on top of v7 (apt cuDNN drop, audio deps, transformers 5.7.0) |
 | `v7` | superseded | full-rebuild generation; introduced TurboQuant + DFlash on SM110 |
 
-Build invocation for the canonical v8.1 image:
+Build invocation for the canonical v9 image:
 
 ```bash
-./serving/docker/build-vllm.sh --vllm-ref v0.20.1 --flashinfer-ref v0.6.10
+./serving/docker/build-vllm.sh --vllm-ref v0.22.0 --flashinfer-ref v0.6.12
 ```
 
-Per-pin status:
+Per-pin status (v8.1 → v9 transitions):
 
-| Pin | v8 (shipped) | **v8.1 (staged)** | Notes |
+| Pin | v8.1 (shipped) | **v9 (staged)** | Notes |
 |---|---|---|---|
-| vLLM | `v0.20.0` | **`v0.20.1`** | bump — PTX FP32→FP4 codegen, CUDA-graph batched-token capture fix, KV-block override fix |
-| FlashInfer | `v0.6.9` | **`v0.6.10`** | bump — NVFP4 KV cache (SM80+), autotuner correctness + bucketing perf, vLLM OOB fix |
-| flash-attn-4 | `4.0.0b10` | **`4.0.0b12`** | bump — b11 added first-class hd256 in CUTE DSL, 3–9% hd256 perf, SM100 MLA stream + empty-tile fixes; b12 is the rolling post-b11 fix tail |
-| nvidia-cudnn-cu13 | `9.20.0.48` | **`9.21.1.3`** | bump (both stages) — safe now that v8 fixed the apt-vs-pip mismatch |
-| apache-tvm-ffi | `0.1.10` | **`0.1.11`** | single patch release |
-| transformers | `5.7.0` | **`5.8.0`** | bump — rolling minor; smoke-test 5.7.0-known-good areas (Qwen3.5 GDN, Gemma4 rotary, KV-dedup ≥16K, NVFP4+torchao) after build |
-| nvidia-nvshmem-cu13 | `3.6.5` | `3.6.5` | already-latest |
-| nvidia-cutlass-dsl | `4.4.2` | **`4.5.0`** | bump to stable — 4.5.0 release-line headline ("optimal codegen for CUDA 13.2") does NOT apply at CUDA 13.0.3, but accumulated 4.4.2 → 4.5.0 bug fixes do; revisit codegen win after JetPack 7.2 |
-| fastsafetensors | `0.3` | **`0.3.1`** | single patch release |
-| instanttensor | `0.1.8` | `0.1.8` | already-latest |
+| vLLM | `v0.20.1` | **`v0.22.0`** | major bump (skipping v0.21 as a waypoint) — batch-invariant Cutlass FP8 path (+28.9% E2E on FP8-KV decode, directly applies to cosmos-reason2-8b production), CutlassFP8 padding pre-processing (+13.5% TTFT), Qwen3.5 ViT full CUDA graph, stream-aware allocator (long-running gateway stability), streaming tool dispatch primitives (#40700, #41110 — basis for Bridge Tier 1.1), XGrammar 0.2.0 structural tags (#40894), FP8-on-Thor formalization (#39712 — removes launch.sh SM-guard workarounds), Qwen3-VL deepstack heavy-load fix. Breaking changes (benign): C++20 compiler (GCC 13 supports), transformers v4 deprecation. |
+| FlashInfer | `v0.6.10` | **`v0.6.12`** | bump — XQA kernel fixes for multi-iteration scenarios (connects to FlashRT-on-Thor XQA FP8-KV transferable opt from audit); per-token NVFP4 quantization kernel perf; "limit sm110 builds to aarch64" CI hardening. NOTE: vLLM 0.22 bundles 0.6.11.post2; we override to 0.6.12 via wheel-cache override (see PATCHES-AUDIT.md). |
+| flash-attn-4 | `4.0.0b12` | **`4.0.0b15`** | bump — b15 (2026-05-27) added "Include sm_110 in Blackwell-family arch gating" (first commit-level signal of first-class Thor support); b13/b14 carry varlen blocksparsity and varlen-paged-KV split-config fixes. |
+| transformers | `5.8.0` | **`5.9.0`** | bump — "support for custom field prefilling (reasoning_content, thinking, etc.) in chat template handling" — template-side primitive for Bridge Tier 2 reasoning-block preservation pattern. Bridge can opt into reasoning_content prefill via chat_template_kwargs (subject to per-model template support; verify Qwen3-VL template support on cosmos-reason2-8b after build). |
+| nvidia-cudnn-cu13 | `9.21.1.3` | **`9.23.0.39`** | minor bump (both stages). Pin subject to vLLM's transitive cuDNN constraint at install time; documents requested version as current latest. |
+| nvidia-cutlass-dsl | `4.5.0` | **`4.5.2`** | bump — two patch releases on the 4.5.0 stable line; accumulated bug fixes. CUDA-13.2 codegen win still gated on JetPack 7.2. |
+| nvidia-nvshmem-cu13 | `3.6.5` | `3.6.5` | already-latest (held) |
+| apache-tvm-ffi | `0.1.11` | `0.1.11` | already-latest (held) |
+| fastsafetensors | `0.3.1` | **`0.3.2`** | bump — single patch release; paired with instanttensor 0.1.9 for the fast-load codepath. |
+| instanttensor | `0.1.8` | **`0.1.9`** | bump — single patch release; paired with fastsafetensors 0.3.2 for the --load-format instanttensor boot path. |
 | triattention | `@325297218a` | `@325297218a` | held — HEAD is one README-only commit ahead |
 | torch | `2.13.0.dev20260426+cu130` | `2.13.0.dev20260426+cu130` | held — CUDA-coupled |
 | torchvision | `0.27.0.dev20260426+cu130` | (held) | tied to torch pin |

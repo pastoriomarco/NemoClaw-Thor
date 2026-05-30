@@ -13,11 +13,11 @@
 # already-built components.
 #
 # Usage:
-#   ./build-vllm.sh                              # defaults: v8.1 build (vLLM v0.20.1 + FlashInfer v0.6.10 + 14 jobs)
-#   ./build-vllm.sh --vllm-ref v0.20.1           # pin vLLM to a tag/branch/SHA
-#   ./build-vllm.sh --flashinfer-ref v0.6.10     # pin FlashInfer
+#   ./build-vllm.sh                              # defaults: v9 build (vLLM v0.22.0 + FlashInfer v0.6.12 + 14 jobs)
+#   ./build-vllm.sh --vllm-ref v0.22.0           # pin vLLM to a tag/branch/SHA
+#   ./build-vllm.sh --flashinfer-ref v0.6.12     # pin FlashInfer
 #   ./build-vllm.sh --build-jobs 8               # lower parallelism if rebuilding while serving
-#   ./build-vllm.sh --apply-vllm-pr 40941        # cherry-pick a PR onto vLLM
+#   ./build-vllm.sh --apply-vllm-pr 40941        # cherry-pick a PR onto vLLM (escape hatch)
 #   ./build-vllm.sh --tf5                        # use transformers >= 5 (default: ON)
 #   ./build-vllm.sh --no-tf5                     # disable the >=5 override (legacy behavior)
 #   ./build-vllm.sh --skip-flashinfer            # reuse existing FlashInfer wheels
@@ -36,22 +36,36 @@ export BUILDKIT_STEP_LOG_MAX_SIZE=${BUILDKIT_STEP_LOG_MAX_SIZE:-104857600}    # 
 export BUILDKIT_STEP_LOG_MAX_SPEED=${BUILDKIT_STEP_LOG_MAX_SPEED:-10485760}    # 10 MiB/s
 
 # ── Defaults ────────────────────────────────────────────────────────
-# v8.1 build (2026-05-05): vLLM/FlashInfer/flash-attn-4/cuDNN/tvm-ffi bumps
-# on top of v8. Header of docker/Dockerfile.vllm carries the full per-pin
-# rationale and the held-version list (CUDA, torch nightly, transformers,
-# nvidia-cutlass-dsl).
-#   - vLLM v0.20.0 → v0.20.1: PTX FP32→FP4 codegen, CUDA-graph batched-token
-#     capture, num_gpu_blocks_override / max_model_len reconciliation,
-#     cumem expandable_segments fix, reasoning-parser kwargs propagation.
-#   - FlashInfer v0.6.9 → v0.6.10: NVFP4 KV cache for prefill+attention
-#     (parallel option to TurboQuant K8V4), autotuner correctness +
-#     hybrid-bucketing perf, vLLM OOB fix, SWA cubin update.
-# v7→v8 baseline retained (now anchored at v8.1):
+# v9 build (2026-05-21 staging): major vLLM bump 0.20.1 → 0.22.0 plus FlashInfer
+# / flash-attn-4 / transformers / cuDNN minor bumps. Header of
+# docker/Dockerfile.vllm carries the full per-pin rationale and the held-version
+# list (CUDA, torch nightly, cutlass-dsl, nvshmem, tvm-ffi, fastsafetensors,
+# instanttensor, triattention).
+#   - vLLM v0.20.1 → v0.22.0: batch-invariant Cutlass FP8 path (+28.9% E2E on
+#     FP8-KV decode, directly applies to cosmos-reason2-8b production profile),
+#     Qwen3.5 ViT full CUDA graph, FlashInfer metadata for Qwen2.5-VL vision
+#     attention, stream-aware allocator (long-running gateway stability),
+#     streaming tool dispatch primitives (#40700, #41110 — basis for Bridge
+#     Tier 1.1), XGrammar 0.2.0 structural tags (#40894), FP8-on-Thor
+#     formalization (#39712 — removes launch.sh SM-guard workarounds),
+#     Qwen3-VL deepstack heavy-load fix. Breaking changes (benign for us):
+#     C++20 compiler (GCC 13 supports), transformers v4 deprecation (we're
+#     already on v5).
+#   - FlashInfer v0.6.10 → v0.6.12: XQA kernel fixes for multi-iteration
+#     scenarios (connects to FlashRT-on-Thor XQA FP8-KV transferable opt
+#     identified during audit); per-token NVFP4 quantization kernel perf;
+#     "limit sm110 builds to aarch64" CI hardening. NOTE: vLLM 0.22 bundles
+#     0.6.11.post2; we override to 0.6.12 via the standard wheel-cache
+#     override pattern (see PATCHES-AUDIT.md).
+# v7 → v8 → v8.1 baseline retained (now anchored at v9):
 #   - sm_110 build target, SM100+ spec-decode test fix, TQ+FA prefill,
-#     seq_lens_cpu sync removal, MRv2 acceptance fixes (vLLM v0.20.x line).
+#     seq_lens_cpu sync removal, MRv2 acceptance fixes (vLLM v0.20.x line);
+#     PTX FP32→FP4 codegen, CUDA-graph batched-token capture, NVFP4 KV cache
+#     opens for evaluation (v0.20.1 + FlashInfer 0.6.10 line);
+#     batch-invariant FP8-KV decode path opens (v0.22 + FlashInfer 0.6.12 line).
 # Override with --vllm-ref / --flashinfer-ref. Use "main" for bleeding edge.
-VLLM_REF="v0.20.1"
-FLASHINFER_REF="v0.6.10"
+VLLM_REF="v0.22.0"
+FLASHINFER_REF="v0.6.12"
 # Thor has 14 ARM cores. Default to full parallelism. Drop to 8-10 only when
 # rebuilding while a vLLM model is actively serving (memory pressure).
 BUILD_JOBS=14
@@ -195,9 +209,9 @@ FLASHINFER_COMMIT="unknown"
 [ -f "$WHEELS_DIR/.vllm-commit" ] && VLLM_COMMIT=$(cat "$WHEELS_DIR/.vllm-commit")
 [ -f "$WHEELS_DIR/.flashinfer-commit" ] && FLASHINFER_COMMIT=$(cat "$WHEELS_DIR/.flashinfer-commit")
 
-# Auto-generate image tag from vLLM commit. v8.1 marker baked into the tag so
+# Auto-generate image tag from vLLM commit. v9 marker baked into the tag so
 # `docker images` makes the generation obvious without consulting metadata.
-IMAGE_GEN="${IMAGE_GEN:-v8.1}"
+IMAGE_GEN="${IMAGE_GEN:-v9}"
 if [ -z "$IMAGE_TAG" ]; then
     VLLM_SHORT="${VLLM_COMMIT:0:9}"
     IMAGE_TAG="${VLLM_REF}-g${VLLM_SHORT}-thor-sm110-cu132-${IMAGE_GEN}"

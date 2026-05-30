@@ -383,6 +383,51 @@ Recorded so future bumps can predict cost and explain regressions. All numbers
 are wall-clock at the documented `BUILD_JOBS` setting on Thor (14× ARM Cortex-A78AE,
 122 GiB unified memory, 449 GiB free on `/var/lib/docker`).
 
+### v9 — staged 2026-05-21 (not yet built)
+
+`BUILD_JOBS=14` (planned). Pin set: vLLM v0.22.0 + FlashInfer v0.6.12 +
+flash-attn-4 4.0.0b15 + nvidia-cutlass-dsl 4.5.2 + transformers 5.9.0 +
+nvidia-cudnn-cu13 9.23.0.39 + fastsafetensors 0.3.2 + instanttensor 0.1.9 +
+apache-tvm-ffi 0.1.11 (CUDA 13.0.3, torch nightly held at 2026-04-26+cu130).
+See `Dockerfile.vllm` header for full per-pin rationale.
+
+**Major-version vLLM bump** (0.20.1 → 0.22.0, skipping v0.21 as a waypoint):
+the v9 build is the first release with vLLM's batch-invariant Cutlass FP8 path
+on the FP8-KV decode lane — the production cosmos-reason2-8b profile (BF16
+weights + FP8 KV cache + Qwen3-VL family) is exactly the target of the
+upstream "+28.9% E2E latency" headline. Also lands FlashInfer 0.6.12's XQA
+kernel fixes (connects to the FlashRT-on-Thor XQA FP8-KV transferable
+optimization identified during audit). Carries forward the deferred v0.21
+features: FP8-on-Thor formalization (PR #39712 removes runtime SM-guard
+workarounds in `launch.sh`), streaming tool dispatch primitives (#40700,
+#41110 — upstream basis for Bridge Tier 1.1), XGrammar 0.2.0 structural tags
+for strict tool calling (#40894), Qwen3-VL deepstack heavy-load fix.
+
+**Expected build cost.** Phase 1 (FlashInfer JIT cache) is the cost driver
+and depends on the cubin manifest at the new pin. v8.1 stretched Phase 1 to
+~3h 5min because v0.6.10 introduced the NVFP4 KV cache attention path
+(PR #3097) requiring SM110a-targeted JIT compile of all FA paths. v0.6.12
+adds further kernels (per-token NVFP4 quant, XQA fixes) on top, so Phase 1
+budget should be **at least the v8.1 baseline (~3h 5min)** and possibly
+20-40 min longer if the cubin manifest has grown again. Phases 2-3 should
+be comparable to v8.1 (~1h 6min + 6m 34s). **Total expected wall time:
+~4h 30min – 5h.**
+
+**Pre-build checklist** (lessons from v8.1):
+
+1. Prune stale wheels in `serving/docker/wheels/`. v8.1 hit a runner-stage
+   failure because v0.6.9 + v0.6.10 wheels cohabited; `uv pip install`
+   rejected duplicate package URLs. Same risk for v0.6.10 + v0.6.12 cohabitation.
+2. Ensure `BUILDKIT_STEP_LOG_MAX_SIZE` is set to 100 MiB (default in build-vllm.sh).
+3. Confirm 14 ARM cores are not contended by an active vLLM model on the host
+   (peak compile RSS at MAX_JOBS=14 stays under 30 GiB but doesn't leave much
+   headroom for a model).
+4. **vLLM 0.22 → FlashInfer 0.6.12 override**: vLLM 0.22 ships pinned to
+   FlashInfer 0.6.11.post2. We build FlashInfer 0.6.12 separately and the
+   runner stage installs from the wheel cache (which contains 0.6.12). The
+   override happens naturally as long as the wheels dir contains 0.6.12 and
+   not 0.6.11.post2. Verify the wheels dir state before kicking the build.
+
 ### v8.1 — built 2026-05-06 18:44 (image `v0.20.1-g132765e35-thor-sm110-cu132-v8.1`)
 
 `BUILD_JOBS=14`. Pin set: vLLM v0.20.1 + FlashInfer v0.6.10 + flash-attn-4 4.0.0b12 +
