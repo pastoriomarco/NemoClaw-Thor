@@ -12,3 +12,10 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Built wheels — large (≈0.5-1 GB per build), aarch64-specific, reproducible
+# from serving/docker/ build scripts. Use Git LFS or attach to a GitHub Release
+# if air-gapped reproducibility is needed.
+serving/docker/wheels/
+serving/docker/wheels.*/
+*.whl
