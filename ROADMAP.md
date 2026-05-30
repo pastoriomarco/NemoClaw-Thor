@@ -268,6 +268,25 @@ Items the team is aware of but not committing to as roadmap deliverables.
 - **Dynamo / TokenSpeed / SMG** — agentic-harness frameworks discussed
   as architectural references for the Bridge lane work. Not
   Thor-compatible today; revisit after JP7.2 SBSA.
+- **Transient DNS race during `launch.sh` step 7 / manyforge-composer
+  provisioner** — recurring intermittent failure. The compatibility
+  check at the end of `setup-manyforge-assistant.sh` curls
+  `http://host.openshell.internal:9000/api/assistant/modes/composer-assistant`
+  from inside the `my-assistant` sandbox immediately after the
+  `local-inference` egress policy preset is applied. The
+  `host.openshell.internal` host alias has not yet propagated to the
+  sandbox's resolver — curl returns
+  `curl: (6) Could not resolve host: host.openshell.internal` and
+  the launch script bails before reaching `start_bridge_openclaw`.
+  The DNS entry IS valid within seconds (verified
+  `getent hosts host.openshell.internal → 172.17.0.1` immediately
+  after, and the workaround
+  `source scripts/lib/assistant.sh && start_bridge` succeeds reliably).
+  Observed twice in close succession (2026-05-30). Fix candidates:
+  retry loop in the provisioner's compatibility check, or wait for
+  the policy preset to settle before firing the check. Capture as
+  an `open-points.md` item in `manyforge_specs` next session; not
+  Thor-specific but Thor surfaces it via the OpenClaw lane.
 
 ---
 
