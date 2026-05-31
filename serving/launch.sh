@@ -480,39 +480,35 @@ prepare_thor_launch_profile() {
             #   OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 — bounds <think> block
             #     within the 2048 cap. Iter-21a proved this is neutral on cosmos
             #     but load-bearing as a thinking-on safety net.
-            # Iter 3 working config (2026-05-30 PM): RedHatAI weights + NVIDIA
-            # Spark serving recipe. Smoke corpus 51/66 = 77.3% — matches the
-            # iter-32 cosmos-reason2-8b winner.
+            # V9.1 PHASE 4 TEST (2026-05-31): switched to nvidia/ weights + full
+            # NVIDIA Spark recipe to validate PR #42124 (LM head ModelOpt support).
+            # The v9 image lacked this fix — load crashed at 67% with
+            # lm_head.input_scale ValueError. v9.1 image (vLLM main @ 3fd9d2d35,
+            # post #42124) should load cleanly.
             #
-            # Iter 4 attempt with nvidia/Qwen3.6-35B-A3B-NVFP4 weights + NVIDIA's
-            # full Spark recipe (VLLM_USE_FLASHINFER_MOE_FP4=0, VLLM_FP8_MOE_BACKEND,
-            # FLASHINFER_DISABLE_VERSION_CHECK, CUTE_DSL_ARCH=sm_110a, --moe-backend
-            # marlin, --quantization modelopt) FAILED at 67% weight load with:
-            #   ValueError: There is no module or parameter named 'lm_head.input_scale'
-            #   in Qwen3_5MoeForCausalLM. Available: {'lm_head.weight'}
-            # MoE backend was MARLIN (NVIDIA-recommended), but the error is in the
-            # weight loader (qwen3_5.py:525), not the MoE path. vLLM 0.22.1.dev0
-            # (v9 image) does NOT attach a quant method to ParallelLMHead for
-            # this model class. NVIDIA's recipe requires `vllm/vllm-openai:nightly`
-            # which presumably has the fix. Re-evaluate on next vLLM image bump.
-            # See serving/docs/V9-35B-A3B-NVFP4-NVIDIA-RECIPE.md for details.
-            #
-            # RedHat ships the same Qwen3.6-35B-A3B base quantized via
-            # llm-compressor (the upstream tool for vLLM) — lm_head is BF16
-            # (vocab×hidden, 248320×2048), matching ParallelLMHead's expected
-            # dtype. Format: compressed-tensors / nvfp4-pack-quantized.
-            # vLLM auto-detects the quant format from config.json's
-            # quantization_config — no --quantization flag needed.
-            THOR_LAUNCH_MODEL_SOURCE="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+            # NVIDIA Spark recipe (from model card, sm_121a → sm_110a for Thor):
+            #   env: VLLM_USE_FLASHINFER_MOE_FP4=0 (explicit 0)
+            #        VLLM_FP8_MOE_BACKEND=flashinfer_cutlass
+            #        FLASHINFER_DISABLE_VERSION_CHECK=1
+            #        CUTE_DSL_ARCH=sm_110a
+            #   vllm: --quantization modelopt --moe-backend marlin
+            #         (rest matches iter-3 RedHat recipe)
+            THOR_LAUNCH_MODEL_SOURCE="nvidia/Qwen3.6-35B-A3B-NVFP4"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen-fixed-froggeric.jinja"
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen-fixed-froggeric.jinja"
             THOR_DOCKER_ENV_ARGS+=(
+                "-e" "VLLM_USE_FLASHINFER_MOE_FP4=0"
+                "-e" "VLLM_FP8_MOE_BACKEND=flashinfer_cutlass"
+                "-e" "FLASHINFER_DISABLE_VERSION_CHECK=1"
+                "-e" "CUTE_DSL_ARCH=sm_110a"
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
             )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
+                "--quantization" "modelopt"
+                "--moe-backend" "marlin"
                 "--kv-cache-dtype" "fp8"
                 "--attention-backend" "flashinfer"
                 "--enforce-eager"
