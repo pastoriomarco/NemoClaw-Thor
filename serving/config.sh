@@ -151,11 +151,11 @@ print_supported_model_profiles() {
 Supported model profiles:
 
   Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration):
-    qwen3.6-35b-a3b-nvfp4-mtp-fp8kv    ★★ DEFAULT — max correctness (TEB 93, 90% IFEval, 19.5 tps)
-    qwen3.6-35b-a3b-nvfp4-tq-mtp       ★★ throughput+context (TEB 90, 89% IFEval, 24.8 tps, 2.22M KV)
+    qwen3.6-35b-a3b-nvfp4-nvidia       ★★ DEFAULT (Task 4 winner) — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock
+    qwen3.6-35b-a3b-nvfp4-mtp-fp8kv    ★ FALLBACK — RedHat full-NVFP4 + FlashInfer CUTLASS + Thor MoE config. 53/66 (80.3%), 23.8 tok/s, 82min wall-clock
+    qwen3.6-35b-a3b-nvfp4-tq-mtp       ★ throughput+context (TEB 90, 89% IFEval, 24.8 tps, 2.22M KV)
     qwen3.6-35b-a3b-nvfp4-dflash       heavy coding bursts (DFlash-8, ~v6 87 TEB, peak ~130 tps)
     qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge  ★ ManyForge production: TQ+MTP-2 + VISION, 3×64K, co-serves w/ Cosmos
-    qwen3.6-35b-a3b-nvfp4-nvidia       ★ EXPERIMENTAL — NVIDIA-official NVFP4 quant + froggeric template + MTP K=3 (τ²-Bench 94.7)
 
   Other Qwen3.6:
     qwen3.6-27b-fp8-mtp-kvfp8     dense 27B FP8 + MTP + FP8 KV (TEB 84)
@@ -264,6 +264,14 @@ resolve_model_profile() {
         # tuned for throughput on a different methodology and proved agentic-
         # weak on our v7 bench (DFlash N=15 → TEB 40-46 across all DFlash
         # variants).
+        #
+        # 2026-05-31 — Task 4 head-to-head shifted production-recommended 35B
+        # profile to qwen3.6-35b-a3b-nvfp4-nvidia (W4A16_NVFP4 + Marlin + Thor
+        # MoE config). NVIDIA quant won 56/66 vs RedHat 53/66 (full-NVFP4 +
+        # FlashInfer CUTLASS + Thor MoE config), in 65min vs 82min wall-clock.
+        # Net delta: +3 quality cases, +22% steady-state decode (29.2 vs 23.8
+        # tok/s). mtp-fp8kv profile retained as proven fallback. See
+        # serving/docs/V9.1-TASK4-FP4-UNLOCK.md for the full comparison.
         qwen3.6-35b-a3b-nvfp4-mtp-fp8kv)
             # EXPERIMENTAL (re-added 2026-04-23 for tool-eval-bench quality testing).
             # NVFP4 weights + MTP N=2 + FP8 KV. MTP N=2 mirrors the 27B-FP8 winning

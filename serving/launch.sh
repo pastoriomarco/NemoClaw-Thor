@@ -421,6 +421,15 @@ prepare_thor_launch_profile() {
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP4=1"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
+                # sm110a-fp4-dsl-unlock mod: patches CUTLASS DSL +
+                # vLLM FlashInfer NVFP4 MoE arch gates to accept sm_110a.
+                "-e" "VLLM_MODS=sm110a-fp4-dsl-unlock"
+                # Force FlashInfer CUTLASS backend (=throughput). CuteDSL hits
+                # an explicit kernel-level ValueError ("Blockscaled contiguous
+                # gather grouped GEMM with SwiGLU requires SM100 family. Got
+                # SM110.") — no sm_110a kernel implementation exists for that
+                # specific path. CUTLASS (different code path, not DSL) might.
+                "-e" "VLLM_FLASHINFER_MOE_BACKEND=throughput"
             )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
@@ -498,16 +507,34 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen-fixed-froggeric.jinja"
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen-fixed-froggeric.jinja"
             THOR_DOCKER_ENV_ARGS+=(
+                # NVIDIA's W4A16_NVFP4 quant has 16-bit activations. ALL
+                # FlashInfer NVFP4 MoE backends (TRTLLM/CUTEDSL/CUTLASS) require
+                # full NVFP4 (4-bit weights AND 4-bit activations) per the
+                # is_supported_config quant_scheme check (kNvfp4Static x
+                # kNvfp4Dynamic). Setting =1 causes NotImplementedError at
+                # engine init because no backend matches. Marlin handles
+                # weight-only int4/NVFP4 correctly via software dequant — keep
+                # =0 so the oracle picks MARLIN. (Verified empirically by
+                # this Task 4 iteration.)
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP4=0"
                 "-e" "VLLM_FP8_MOE_BACKEND=flashinfer_cutlass"
                 "-e" "FLASHINFER_DISABLE_VERSION_CHECK=1"
                 "-e" "CUTE_DSL_ARCH=sm_110a"
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
+                # Mod is INERT for NVIDIA's W4A16 path (no FlashInfer NVFP4
+                # backend matches the quant scheme regardless of patch). Kept
+                # here only to mirror the RedHat profile config — no harm.
+                "-e" "VLLM_MODS=sm110a-fp4-dsl-unlock"
             )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--quantization" "modelopt"
+                # --moe-backend marlin: NVIDIA Spark recipe. Re-added because
+                # the previous iteration removed it expecting the oracle to
+                # pick FLASHINFER_CUTEDSL with the patch — but cutedsl needs
+                # full-NVFP4 activations which W4A16 doesn't supply. Force
+                # marlin to avoid the oracle wasting backends.
                 "--moe-backend" "marlin"
                 "--kv-cache-dtype" "fp8"
                 "--attention-backend" "flashinfer"
@@ -521,6 +548,13 @@ prepare_thor_launch_profile() {
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
                 "--default-chat-template-kwargs" '{"enable_thinking":true}'
+                # EAGLE-3.1 attempted with Dogacel/specdrift-qwen3.6-35b-a3b-eagle3
+                # but vLLM 0.22.1.dev0+g3fd9d2d35 doesn't support the drafter's
+                # architecture (EagleLlamaForCausalLMEagle3). vLLM has Eagle3
+                # wrappers for Llama, MiniMax, Qwen2.5-VL, Qwen3-VL, DeepSeek but
+                # not Qwen3.6-35B-A3B MoE. Reverted to MTP K=3. Revisit when:
+                # (a) vLLM adds Eagle3Qwen3_5MoeForCausalLM class, OR
+                # (b) drafter is republished with an arch name vLLM supports.
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}'
                 "--trust-remote-code"
             )
@@ -920,6 +954,17 @@ run_thor_vllm_container() {
     # Mount host mods directory so new/updated mods are available without rebuild
     if [[ -d "${THOR_MODS_HOST_DIR}" ]]; then
         docker_mount_args+=(-v "${THOR_MODS_HOST_DIR}:/workspace/mods:ro")
+    fi
+
+    # Mount Thor-specific fused-MoE configs to suppress the "Using default MoE
+    # config. Performance might be sub-optimal" warning on Qwen3.6-35B-A3B
+    # (E=256, N=512). Adapted from NVIDIA_H100_80GB_HBM3's tuned config as a
+    # starting point; benchmark_moe.py --tune deadlocks at config ~98 on Thor
+    # (Triton autotune sharing-mem / TMEM layout issue) so we can't generate
+    # an actually-tuned Thor config until the upstream tuner is fixed.
+    local moe_cfg_dir="${THOR_MOE_CONFIGS_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/docker/moe-configs" 2>/dev/null && pwd)}"
+    if [[ -d "${moe_cfg_dir}" ]] && ls "${moe_cfg_dir}"/*.json >/dev/null 2>&1; then
+        docker_mount_args+=(-v "${moe_cfg_dir}:/opt/nemoclaw-thor/moe-configs:ro")
     fi
 
     local docker_rm_args=(--rm)
