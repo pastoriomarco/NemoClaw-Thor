@@ -1,7 +1,7 @@
-build_date: 2026-05-30T11:09:46Z
-script_commit: c40e4fa2d29993651da939c1dda0108092f91eb6
-vllm_ref: v0.22.0
-vllm_commit: 0b3ba88f165976e77ca5e6a7a3f5bba4562b80af
+build_date: 2026-05-30T21:52:25Z
+script_commit: 35ee03984d94df3bed9d992aef1a4984f42d25c6
+vllm_ref: 3fd9d2d35714e80b4cb3fcd3c408a0398fa2525f
+vllm_commit: 3fd9d2d35714e80b4cb3fcd3c408a0398fa2525f
 flashinfer_ref: v0.6.12
 flashinfer_commit: d768c14e7cf5dd5df45a8a1de78ae815879f108a
 gpu_arch: 11.0a
