@@ -509,7 +509,13 @@ def build_agent_prompt(
             "having tried it is forbidden — every tool listed in "
             "`allowedTools` and every tool whose schema appears in "
             "your callable interface is available. If you don't know "
-            "which tool, ask one specific question; do not refuse.",
+            "which tool, ask one specific question; do not refuse. "
+            "NEVER reply with the literal string `NO_REPLY` when the "
+            "user's prompt contains an action verb — `NO_REPLY` is "
+            "reserved for genuinely empty contexts (silence, "
+            "continuation prompts), NOT for action requests. If the "
+            "request is action-shaped, either emit a tool call or "
+            "ask a clarifying question with real text content.",
             "11a. **Missing-WHERE rule.** A prompt is ambiguous if it "
             "names the operation and node kind but NOT where to place "
             "the result (parent / position / target sibling). For these, "

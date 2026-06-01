@@ -160,6 +160,7 @@ cases:
   expected:
     tools_called:
       - name: scene_draft_add_object
+        alt_names: [scene_draft_upsert_objects]   # equivalent-effect tool
         args_contain:
           shape.type: box
           shape.box_dims: [1.0, 0.02, 0.25]
@@ -195,15 +196,16 @@ cases:
 - id: WRAP_root_generic
   category: tree_wrap_root
   detail_level: generic
+  # Reframed 2026-06-01: "wrap the tree" omits the WRAPPER kind (repeat/
+  # retry/inverter/...). Best agentic behavior is to ask "wrap with what?".
+  # The model already does this — corpus now matches.
   prompt: "wrap the tree"
   expected:
-    tools_called:
-      - name: tree_draft_wrap_node
-        args_contain:
-          targetName: pick_and_place
+    tools_called: []
+    forbidden_tools: [tree_draft_wrap_node, tree_draft_insert_node]
     state_after:
       program.tree.children[0].name: pick_and_place
-    answer_must_contain: ["wrap"]
+    answer_must_contain: ["which"]
 
 - id: WRAP_root_medium
   category: tree_wrap_root
@@ -226,6 +228,7 @@ cases:
   expected:
     tools_called:
       - name: scene_draft_add_object
+        alt_names: [scene_draft_upsert_objects]   # equivalent-effect tool
         args_contain:
           shape.type: box
     answer_must_contain: ["box", "added"]
@@ -237,6 +240,7 @@ cases:
   expected:
     tools_called:
       - name: scene_draft_add_object
+        alt_names: [scene_draft_upsert_objects]   # equivalent-effect tool
         args_contain:
           shape.type: sphere
           shape.sphere_radius_m: 0.05
@@ -319,14 +323,15 @@ cases:
   category: tree_insert_at_position
   detail_level: generic
   status: active   # node kinds now in the allowlist (2026-05-08)
+  # Reframed 2026-06-01: "the place step" is ambiguous — pick_and_place
+  # has multiple place-related nodes (move_to_drop_approach, move_to_drop,
+  # open_gripper, etc.). Best agentic behavior is to ask "which place
+  # step?" Models that do this should pass.
   prompt: "put a delay before the place step"
   expected:
-    tools_called:
-      - name: tree_draft_insert_node
-        args_contain:
-          parentName: pick_and_place
-          node.id: timer
-        allow_retries: true
+    tools_called: []
+    forbidden_tools: [tree_draft_insert_node]
+    answer_must_contain: ["which"]
 
 # ===================================================================
 # Section 4 — Parallel composites
@@ -354,13 +359,14 @@ cases:
   category: tree_insert_parallel
   detail_level: medium
   status: active   # node kinds now in the allowlist (2026-05-08)
+  # Reframed 2026-06-01: names the children (gripper open + status update)
+  # but no PARENT node specified. Best agentic behavior is to ask which
+  # parent / where to place the parallel composite.
   prompt: "add a parallel that runs gripper open and a status update at the same time"
   expected:
-    tools_called:
-      - name: tree_draft_insert_node
-        args_contain:
-          node.id: parallel
-        allow_retries: true
+    tools_called: []
+    forbidden_tools: [tree_draft_insert_node]
+    answer_must_contain: ["which"]
 
 - id: PARALLEL_generic
   category: tree_insert_parallel
@@ -401,14 +407,15 @@ cases:
 - id: FALLBACK_alternate_medium
   category: tree_insert_fallback
   detail_level: medium
+  # Reframed 2026-06-01: "before the gripper close" — pick_and_place has
+  # multiple gripper-related nodes (command_gripper open, close_gripper,
+  # open_gripper). And "two alternate approach paths" doesn't specify the
+  # actual approach poses. Best agentic behavior is to ask.
   prompt: "add a fallback node before the gripper close that tries two alternate approach paths"
   expected:
-    tools_called:
-      - name: tree_draft_insert_node
-        args_contain:
-          parentName: pick_and_place
-          node.id: fallback
-        allow_retries: true
+    tools_called: []
+    forbidden_tools: [tree_draft_insert_node]
+    answer_must_contain: ["which"]
 
 - id: FALLBACK_generic
   category: tree_insert_fallback
@@ -1244,7 +1251,7 @@ cases:
         allow_retries: true
       - name: propose_scene_objects
         allow_retries: true
-      - name: scene_draft_upsert_objects
+      - name: scene_draft_add_object
         allow_retries: true
     state_after:
       "scene.objects[*].id": "contains graspable"

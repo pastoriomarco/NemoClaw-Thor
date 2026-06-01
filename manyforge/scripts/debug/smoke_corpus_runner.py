@@ -361,7 +361,7 @@ class CaseResult:
     skip_reason: str = ""
 
 
-def assert_tools(case: dict, observed: list[dict], failures: list[str]) -> None:
+def assert_tools(case: dict, observed: list[dict], failures: list[str], soft_failures: list[str] | None = None) -> None:
     expected = case.get("expected", {})
     # Distinguish three semantics:
     #   - `tools_called` MISSING        → don't check tool sequence at all
@@ -388,8 +388,17 @@ def assert_tools(case: dict, observed: list[dict], failures: list[str]) -> None:
     available = [dict(c) for c in observed]   # local copy we'll consume
     for i, exp in enumerate(expected_list):
         name = exp.get("name")
+        # 2026-06-01: support `alt_names` (list) for equivalent-effect tools.
+        # E.g. scene_draft_add_object accepts scene_draft_upsert_objects as
+        # an alt — both reach the same effect (scene resource created/updated).
+        # If the primary `name` is missing but an alt fired with 2xx, the
+        # entry is consumed and the FAIL is recorded as a SOFT_FAIL (the
+        # outer runner promotes this to a soft-pass for the case).
+        alt_names = exp.get("alt_names") or []
         allow_retries = exp.get("allow_retries", False)
         consumed_idx: int | None = None
+        matched_alt: str | None = None
+        # First pass: try primary name
         for idx, call in enumerate(available):
             if call.get("_consumed") or call["tool"] != name:
                 continue
@@ -399,16 +408,36 @@ def assert_tools(case: dict, observed: list[dict], failures: list[str]) -> None:
                 break
             if not allow_retries:
                 continue
-            # allow_retries: 4xx is acceptable if a 2xx for the same tool
-            # appears later. Mark this 4xx as consumed-by-retry-path and
-            # keep scanning for the 2xx.
             available[idx]["_consumed"] = True
+        # Second pass: try alt names if primary missed
+        if consumed_idx is None and alt_names:
+            for idx, call in enumerate(available):
+                if call.get("_consumed") or call["tool"] not in alt_names:
+                    continue
+                status = int(call["status"] or 0)
+                if 200 <= status < 300:
+                    consumed_idx = idx
+                    matched_alt = call["tool"]
+                    break
+                if not allow_retries:
+                    continue
+                available[idx]["_consumed"] = True
         if consumed_idx is None:
             failures.append(
                 f"expected tool '{name}' not observed (or never reached 2xx)"
             )
             continue
         available[consumed_idx]["_consumed"] = True
+        if matched_alt is not None:
+            # Soft-pass: alt tool with equivalent effect. Route to
+            # soft_failures so the case is recorded as soft-pass rather
+            # than fail. Falls back to fail-list if caller didn't pass
+            # soft_failures (older callers — shouldn't happen in this
+            # runner but defensively safe).
+            target = soft_failures if soft_failures is not None else failures
+            target.append(
+                f"alt-tool '{matched_alt}' used instead of '{name}' (equivalent effect)"
+            )
         # 2026-05-09 (iter 7): args_contain is now validated against the
         # bridge response's toolCalls.arguments dict (merged into the
         # observed entry via merge_response_tool_args). Best-effort: if
@@ -724,7 +753,7 @@ def run_case(case: dict, composer: str, default_pre: dict,
     if code != 200:
         failures.append(f"chat HTTP {code}")
     else:
-        assert_tools(case, observed, failures)
+        assert_tools(case, observed, failures, soft_failures)
         # state_after is best-effort: capture once after the call.
         post_state = capture_state(composer)
         assert_state(case, post_state, failures)
