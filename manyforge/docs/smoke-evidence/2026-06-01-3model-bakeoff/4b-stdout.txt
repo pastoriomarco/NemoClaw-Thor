@@ -1,0 +1,140 @@
+Running 74 cases against http://127.0.0.1:9000
+  catalogHash: 9436f6951adeef0b...
+
+  ❌ P1_wrap_root_specific                                 8.3s  status=fail
+      fail: ["expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)", "state_after[program.tree.id] expected 'repeat', got 'sequence'", "state_after[program.tree.children[0].name] expected 'pick_and_place', got 'command_gripper'"]
+      soft: ["answer_must_contain: 'repeat' not found", "answer_must_contain: 'root' not found"]
+  ❌ P2_scene_add_specific                                50.8s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)", "state_after[scene.objects[*].shape.box_dims] expected 'contains [1.0, 0.02, 0.25]', got []"]
+      soft: ["answer_must_contain: 'added' not found"]
+  ❌ P3_tree_insert_runtime_obj_specific                  23.8s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  🟡 WRAP_root_generic                                     8.3s  status=soft-pass
+      soft: ["answer_must_contain: 'which' not found"]
+  ✅ WRAP_root_medium                                     29.9s  status=pass
+  ❌ SCENE_add_generic                                     8.6s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+      soft: ["answer_must_contain: 'added' not found"]
+  ❌ SCENE_add_medium                                      8.3s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+      soft: ["answer_must_contain: 'sphere' not found"]
+  ✅ TREE_insert_runtime_generic                           8.3s  status=pass
+  ❌ TREE_insert_runtime_medium                            8.4s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ INSERT_position_first_specific                        8.4s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)", "state_after[program.tree.children[0].id] expected 'wait_for_signal_bool', got 'command_gripper'"]
+  ❌ INSERT_position_after_named_medium                    8.3s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+      soft: ["answer_must_contain: 'timer' not found"]
+  ✅ INSERT_position_before_named_generic                  8.3s  status=pass
+  [SKIP] PARALLEL_safety_specific                            status=future (use --include-future to run)
+  ✅ PARALLEL_concurrent_medium                            8.2s  status=pass
+  🟡 PARALLEL_generic                                      8.5s  status=soft-pass
+      soft: ["answer_must_contain: 'where' not found"]
+  ❌ FALLBACK_retry_specific                               8.3s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+      soft: ["answer_must_contain: 'fallback' not found"]
+  ✅ FALLBACK_alternate_medium                             8.4s  status=pass
+  🟡 FALLBACK_generic                                      8.6s  status=soft-pass
+      soft: ["answer_must_contain: 'where' not found"]
+  ✅ UPDATE_params_specific                               26.1s  status=pass
+  ✅ UPDATE_params_medium                                 22.4s  status=pass
+  ✅ UPDATE_params_generic                                 7.4s  status=pass
+  🟡 DELETE_named_specific                                20.3s  status=soft-pass
+      soft: ["answer_must_contain: 'delete' not found"]
+  ✅ DELETE_kind_medium                                   20.2s  status=pass
+  ❌ DELETE_generic                                        7.8s  status=fail
+      fail: ["expected tool 'tree_draft_delete_node' not observed (or never reached 2xx)"]
+  ✅ MOVE_swap_specific                                   21.4s  status=pass
+  ❌ MOVE_reorder_medium                                   7.4s  status=fail
+      fail: ["expected tool 'tree_draft_move_node' not observed (or never reached 2xx)"]
+  🟡 MOVE_generic                                          7.3s  status=soft-pass
+      soft: ["answer_must_contain: 'step' not found"]
+  ❌ REPLACE_subtree_specific                             22.7s  status=fail
+      fail: ["expected tool 'tree_draft_replace_subtree' not observed (or never reached 2xx)"]
+  ❌ REPLACE_simple_medium                                23.4s  status=fail
+      fail: ["expected tool 'tree_draft_replace_subtree' not observed (or never reached 2xx)"]
+  ❌ SCENE_update_pose_specific                            7.3s  status=fail
+      fail: ["expected tool 'scene_draft_update_object' not observed (or never reached 2xx)", "state_after[scene.objects[object_id=graspable].pose_in_universe.position_m] expected [0.5, 0.1, 0.05], got '<MISSING>'"]
+  ❌ SCENE_update_size_medium                              7.1s  status=fail
+      fail: ["expected tool 'scene_draft_update_object' not observed (or never reached 2xx)"]
+  ❌ SCENE_remove_specific                                 7.1s  status=fail
+      fail: ["expected tool 'scene_draft_remove_objects' not observed (or never reached 2xx)"]
+  ✅ SCENE_remove_generic                                  7.5s  status=pass
+  ✅ PARAM_add_specific                                   21.6s  status=pass
+  ✅ PARAM_modify_medium                                  21.1s  status=pass
+  ✅ PARAM_delete_specific                                19.3s  status=pass
+  ✅ BB_add_specific                                      15.0s  status=pass
+  ✅ BB_modify_medium                                     21.5s  status=pass
+  ✅ BB_delete_specific                                   14.6s  status=pass
+  ❌ PnP_01_scene_ground                                  10.1s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+  ❌ PnP_02_scene_graspable                               10.5s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+  ❌ PnP_03_scene_pick_pad                                31.8s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+  ❌ PnP_04_scene_place_pad                               22.4s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+  ❌ PnP_05_tree_root                                     32.5s  status=fail
+      fail: ["expected tool 'program_read' not observed (or never reached 2xx)"]
+  ❌ PnP_06_approach                                      11.4s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_07_descend                                       23.9s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_08_close_gripper                                 13.6s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_09_attach                                        30.4s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_10_lift                                          16.2s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_11_transport                                     46.3s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_12_place_descend                                 12.2s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_13_detach                                        27.4s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_14_upsert                                        16.6s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_15_open_gripper                                  30.7s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_16_retract                                       42.7s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_17_home                                          23.7s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_18_repeat_root                                   14.8s  status=fail
+      fail: ["expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)", "state_after[program.tree.id] expected 'repeat', got 'sequence'", "state_after[program.tree.params.num_cycles] expected -1, got '<MISSING>'"]
+  [SKIP] PnP_19_safety_parallel                              status=future (use --include-future to run)
+  ❌ PnP_20_grip_force                                    28.4s  status=fail
+      fail: ["expected tool 'tree_draft_update_node_params' not observed (or never reached 2xx)"]
+  ❌ CUR_wrap_existing_motion_with_retry                  59.7s  status=fail
+      fail: ["expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)", "state_after[program.tree.children[*].id] expected 'contains retry', got [{'id': 'command_gripper', 'name': 'command_gripper', 'params': {'gripper_id': 'primary', 'position': 0.0, 'max_effort': 40.0, 'duration_s': 1.0, 'timeout_s': 0.0}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'move_manipulator_action', 'name': 'move_to_pick_approach', 'params': {'move_id': 'pick_approach', 'motion_type': 'relative_move', 'relative_move': {'target_reference': {'type': 'object', 'id': 'graspable'}, 'offset': {'position_m': [0, 0, 0.1], 'orientation_rpy_deg': [180, 0, -180]}}, 'velocity_scale': '${param:velocity_scale}', 'planning_timeout_s': 10, 'execution_timeout_s': 30}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'move_manipulator_action', 'name': 'move_to_pick', 'params': {'execution_timeout_s': 30, 'motion_type': 'relative_move', 'move_id': 'move_001', 'planning_timeout_s': 10, 'relative_move': {'target_reference': {'type': 'object', 'id': 'graspable'}, 'offset': {'position_m': [0, 0, 0.025], 'orientation_rpy_deg': [180, 0, -180]}}, 'velocity_scale': 0.5, 'attempts': 2, 'max_attempts': 2}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'command_gripper', 'name': 'close_gripper', 'params': {'gripper_id': 'primary', 'position': 0.66, 'max_effort': 40.0, 'duration_s': 1.0, 'timeout_s': 0.0}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'attach_object_to_link', 'name': 'attach_graspable', 'params': {'object_id': 'graspable', 'link_frame': 'grasp_frame', 'gripper_id': 'primary'}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'move_manipulator_action', 'name': 'pick_retreat', 'params': {'move_id': 'pick_retreat', 'motion_type': 'relative_move', 'relative_move': {'target_reference': {'type': 'robot_link', 'id': 'grasp_frame'}, 'offset': {'position_m': [0, 0, -0.1], 'orientation_rpy_deg': [0, 0, 0]}}, 'velocity_scale': '${param:velocity_scale}', 'planning_timeout_s': 10, 'execution_timeout_s': 30}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'move_manipulator_action', 'name': 'move_to_drop_approach', 'params': {'move_id': 'drop_approach', 'motion_type': 'relative_move', 'relative_move': {'target_reference': {'type': 'pose', 'pose': {'position_m': [0.3, 0.3, 0.05], 'orientation_rpy_deg': [180, 0, -180]}}, 'offset': {'position_m': [0, 0, 0.1], 'orientation_rpy_deg': [180, 0, -180]}, 'offset_reference': {'type': 'frame', 'id': 'base_link'}}, 'velocity_scale': '${param:velocity_scale}', 'planning_timeout_s': 10, 'execution_timeout_s': 30}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'move_manipulator_action', 'name': 'move_to_drop', 'params': {'move_id': 'drop_down', 'motion_type': 'pose_goal', 'pose_goal': {'position_m': [0.3, 0.3, 0.05], 'orientation_rpy_deg': [180, 0, -180]}, 'velocity_scale': '${param:velocity_scale}', 'planning_timeout_s': 10, 'execution_timeout_s': 30, 'joint_position_tol_rad': 0.05}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'command_gripper', 'name': 'open_gripper', 'params': {'gripper_id': 'primary', 'position': 0.0, 'max_effort': 40.0, 'duration_s': 1.0, 'timeout_s': 0.0}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'detach_object_from_link', 'name': 'detach_graspable', 'params': {'object_id': 'graspable', 'link_frame': 'grasp_frame'}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'move_manipulator_action', 'name': 'drop_retreat', 'params': {'move_id': 'drop_retreat', 'motion_type': 'relative_move', 'relative_move': {'target_reference': {'type': 'pose', 'pose': {'position_m': [0.3, 0.3, 0.05], 'orientation_rpy_deg': [180, 0, -180]}}, 'offset': {'position_m': [0, 0, 0.1], 'orientation_rpy_deg': [180, 0, -180]}, 'offset_reference': {'type': 'frame', 'id': 'base_link'}}, 'velocity_scale': '${param:velocity_scale}', 'planning_timeout_s': 10, 'execution_timeout_s': 30}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}, {'id': 'move_manipulator_action', 'name': 'return_rest', 'params': {'move_id': 'return_rest', 'motion_type': 'joint_goal', 'joint_goal_names': ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'], 'joint_goal_positions_rad': [0, -1.57, 1.57, -1.57, -1.57, 0], 'velocity_scale': '${param:velocity_scale}', 'planning_timeout_s': 10, 'execution_timeout_s': 30}, 'modificationPolicy': {}, 'recoveryPolicy': {}, 'children': []}]"]
+  ✅ CUR_update_existing_motion_speed                     22.6s  status=pass
+  ❌ CUR_scene_add_static_fixture_not_runtime              7.3s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+      soft: ["answer_must_contain: 'wall' not found"]
+  ❌ CUR_scene_update_graspable_pose                       7.3s  status=fail
+      fail: ["expected tool 'scene_draft_update_object' not observed (or never reached 2xx)", "state_after[scene.objects[object_id=graspable].pose_in_universe.position_m] expected [0.35, -0.25, 0.15], got '<MISSING>'"]
+  ❌ CUR_runtime_remove_then_restore_graspable            19.3s  status=fail
+      fail: ["expected tool 'scene_inspect' not observed (or never reached 2xx)", "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)", "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ CUR_runtime_update_graspable_pose_each_cycle          7.9s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+      soft: ["answer_must_contain: 'runtime' not found", "answer_must_contain: 'pose' not found"]
+  ✅ CLARIFY_scene_remove_pronoun                          7.4s  status=pass
+  ✅ CLARIFY_tree_wrap_pronoun                            28.0s  status=pass
+  🟡 CLARIFY_motion_generic                                7.3s  status=soft-pass
+      soft: ["answer_must_contain: 'where' not found"]
+  [SKIP] ISAAC_import_floor_and_graspable                    status=future (use --include-future to run)
+  [SKIP] ISAAC_reject_all_scene_import                       status=future (use --include-future to run)
+  [SKIP] ISAAC_runtime_colliders_from_selection              status=future (use --include-future to run)
+  [SKIP] FUTURE_deployment_set_robot_and_gripper_from_isaac  status=future (use --include-future to run)
+  [SKIP] FUTURE_apply_pick_place_skill_from_scene            status=future (use --include-future to run)
+  [SKIP] FUTURE_preview_plan_before_mutating                 status=future (use --include-future to run)
+
+==============================================================================
+  total cases:      74
+  attempted:        66  (20 pass, 0 recovered, 6 soft-pass, 40 fail)
+  skipped:          8
+  first-try rate:   20/66  (30.3%)
+  effective rate:   26/66  (39.4%)
+
+  full report: /tmp/full-smoke/4b/report.json

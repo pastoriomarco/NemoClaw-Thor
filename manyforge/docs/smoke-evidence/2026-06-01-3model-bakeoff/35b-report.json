@@ -1,0 +1,1372 @@
+{
+  "corpus": "/home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus.yaml",
+  "composer": "http://127.0.0.1:9000",
+  "runtime_flags": [],
+  "results": [
+    {
+      "case_id": "P1_wrap_root_specific",
+      "status": "pass",
+      "elapsed_s": 42.7,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_wrap_node",
+          "status": 200,
+          "duration_ms": 1155.1,
+          "ts": "2026-06-01 18:02:51,462"
+        }
+      ],
+      "answer": "Repeat decorator added as root:\n\n- **Root**: `repeat_sequence` (kind: `repeat`) wrapping the existing `sequence` node (`pick_and_place`)\n- The full pick-and-place sequence remains as the repeat's sing",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "P2_scene_add_specific",
+      "status": "pass",
+      "elapsed_s": 37.0,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 832.8,
+          "ts": "2026-06-01 18:03:30,941"
+        }
+      ],
+      "answer": "Box added to scene draft:\n\n- **objectId**: `box_001`\n- **shape**: box `[1.0 \u00d7 0.02 \u00d7 0.25]` m\n- **pose**: `[0.0, -0.15, 0.125]` m, frame `world` (normalized to `universe`)",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "P3_tree_insert_runtime_obj_specific",
+      "status": "pass",
+      "elapsed_s": 63.7,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.6,
+          "ts": "2026-06-01 18:04:03,311"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1055.9,
+          "ts": "2026-06-01 18:04:27,604"
+        }
+      ],
+      "answer": "Inserted `upsert_graspable` (kind: `upsert_collision_object`) at index 12 of the `pick_and_place` sequence. Parameters:\n\n- **object_id**: `graspable`\n- **shape_type**: `box`\n- **box_dimensions_m**: `[",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "WRAP_root_generic",
+      "status": "pass",
+      "elapsed_s": 28.8,
+      "tool_calls": [],
+      "answer": "The\nroot node is `pick_and_place` (a sequence). Before I wrap it, which decorator kind should I use?\n\n- **repeat** \u2014 repeat the entire sequence a fixed number of times (or forever with -1)\n- **retry**",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "WRAP_root_medium",
+      "status": "pass",
+      "elapsed_s": 33.3,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_wrap_node",
+          "status": 200,
+          "duration_ms": 1028.5,
+          "ts": "2026-06-01 18:05:40,765"
+        }
+      ],
+      "answer": "The root node (`pick_and_place`, a `sequence`) has been wrapped with a `retry` decorator.\n\n- **New root**: `retry_pick_and_place` (kind: `retry`)\n- **Child**: `pick_and_place` (kind: `sequence`) \u2014 unc",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_add_generic",
+      "status": "fail",
+      "elapsed_s": 31.4,
+      "tool_calls": [],
+      "answer": "Where should I place the box? I need:\n\n1. **Position** in meters (e.g., `[0.3, 0.2, 0.05]`)\n2. **Box dimensions** (e.g., `[0.05, 0.05, 0.05]` for a 5 cm cube)\n\nIf you'd like me to pick reasonable defa",
+      "failures": [
+        "expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'added' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_add_medium",
+      "status": "pass",
+      "elapsed_s": 43.2,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 1028.1,
+          "ts": "2026-06-01 18:07:00,049"
+        }
+      ],
+      "answer": "Added a static sphere to the scene:\n\n- **Object ID**: `pick_target`\n- **Shape**: sphere, radius 0.05 m\n- **Pose**: frame `universe`, position [0.4, 0.3, 0.05] m",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "TREE_insert_runtime_generic",
+      "status": "pass",
+      "elapsed_s": 25.1,
+      "tool_calls": [],
+      "answer": "\"\nAdd a node that places graspable somewhere\" doesn't specify where in the tree. Which parent node should it be inserted under (e.g. `pick_and_place`), and at what position (at the end, after a specif",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "TREE_insert_runtime_medium",
+      "status": "pass",
+      "elapsed_s": 192.3,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 4.3,
+          "ts": "2026-06-01 18:08:27,685"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 3.7,
+          "ts": "2026-06-01 18:08:38,128"
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-01 18:08:54,333"
+        },
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-01 18:09:14,633"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1168.1,
+          "ts": "2026-06-01 18:10:43,704"
+        }
+      ],
+      "answer": "Added `re_place_graspable` (move_manipulator_action) to the end of the `pick_and_place` sequence at index 12.\n\n- **Pose target**: [0.3, -0.3, 0.15] m, orientation [0, 0, -45]\u00b0 RPY (the original graspa",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "INSERT_position_first_specific",
+      "status": "fail",
+      "elapsed_s": 225.1,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.4,
+          "ts": "2026-06-01 18:11:13,732"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 3.5,
+          "ts": "2026-06-01 18:11:24,113"
+        },
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.6,
+          "ts": "2026-06-01 18:11:33,505"
+        },
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 850.2,
+          "ts": "2026-06-01 18:11:43,949"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 3.8,
+          "ts": "2026-06-01 18:12:00,619"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 3.7,
+          "ts": "2026-06-01 18:12:22,673"
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 1.6,
+          "ts": "2026-06-01 18:12:34,536"
+        },
+        {
+          "tool": "blackboard_draft_upsert_namespaces",
+          "status": 200,
+          "duration_ms": 861.4,
+          "ts": "2026-06-01 18:13:01,599"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 2.7,
+          "ts": "2026-06-01 18:13:17,633"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 3.8,
+          "ts": "2026-06-01 18:13:46,692"
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-01 18:14:12,895"
+        }
+      ],
+      "answer": "<error TimeoutError: timed out>",
+      "failures": [
+        "chat HTTP -1"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "INSERT_position_after_named_medium",
+      "status": "pass",
+      "elapsed_s": 54.0,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.4,
+          "ts": "2026-06-01 18:15:08,021"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 1.7,
+          "ts": "2026-06-01 18:15:17,280"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 852.8,
+          "ts": "2026-06-01 18:15:23,710"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 3.8,
+          "ts": "2026-06-01 18:15:29,558"
+        }
+      ],
+      "answer": "Inserted `timer` node `pick_approach_timer` (2 s duration) as the 3rd child of sequence `pick_and_place`, immediately after `move_to_pick_approach`. No other changes to the tree.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "INSERT_position_before_named_generic",
+      "status": "soft-pass",
+      "elapsed_s": 30.4,
+      "tool_calls": [],
+      "answer": "To\ninsert a timer (delay) node, I need two clarifications:\n\n1. **Duration** \u2014 what delay duration (seconds)?\n2. **Exact placement** \u2014 the program's \"place\" behavior spans `move_to_drop_approach` \u2192 `mo",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARALLEL_safety_specific",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "PARALLEL_concurrent_medium",
+      "status": "soft-pass",
+      "elapsed_s": 39.4,
+      "tool_calls": [],
+      "answer": "This\nrequest is ambiguous in two ways \u2014 I need clarification before making any tool call:\n\n1. **Where should the parallel be placed?** You said \"add a parallel\" but didn't name a parent or position. S",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARALLEL_generic",
+      "status": "soft-pass",
+      "elapsed_s": 15.1,
+      "tool_calls": [],
+      "answer": "Which\nparent should I add the `parallel` under, and at which position in its children? (e.g., \"add a parallel under `pick_and_place` at index 0\")",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'where' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "FALLBACK_retry_specific",
+      "status": "pass",
+      "elapsed_s": 116.9,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 2.2,
+          "ts": "2026-06-01 18:18:14,098"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 3.3,
+          "ts": "2026-06-01 18:18:22,455"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 4.1,
+          "ts": "2026-06-01 18:18:33,180"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1025.4,
+          "ts": "2026-06-01 18:18:51,009"
+        }
+      ],
+      "answer": "Done. Inserted `fallback_pick_attempt` as the second child of `pick_and_place` at index 1, containing:\n\n- **primary_pick** (`move_manipulator_action`) \u2014 relative move toward the graspable with a 0.1 m",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "FALLBACK_alternate_medium",
+      "status": "fail",
+      "elapsed_s": 128.0,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.8,
+          "ts": "2026-06-01 18:20:03,724"
+        },
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-01 18:20:03,742"
+        },
+        {
+          "tool": "tree_draft_wrap_node",
+          "status": 200,
+          "duration_ms": 1057.2,
+          "ts": "2026-06-01 18:20:26,143"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 890.9,
+          "ts": "2026-06-01 18:20:46,126"
+        }
+      ],
+      "answer": "Done\n. The draft tree now has:\n\n- **`pick_approach_fallback`** (fallback) inserted at position 1 in the root sequence\n  - Child 0: **`move_to_pick_approach`** \u2014 primary approach (`relative_move`, offs",
+      "failures": [
+        "expected NO tool calls; observed ['catalog_read', 'program_read', 'tree_draft_wrap_node', 'tree_draft_insert_node']"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "FALLBACK_generic",
+      "status": "soft-pass",
+      "elapsed_s": 10.0,
+      "tool_calls": [],
+      "answer": "Which parent should I add the fallback under, and at which position in its children?",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'where' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "UPDATE_params_specific",
+      "status": "pass",
+      "elapsed_s": 22.8,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_update_node_params",
+          "status": 200,
+          "duration_ms": 895.6,
+          "ts": "2026-06-01 18:21:48,521"
+        }
+      ],
+      "answer": "Set `move_to_pick_approach` velocity_scale to 0.3.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "UPDATE_params_medium",
+      "status": "pass",
+      "elapsed_s": 37.6,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.6,
+          "ts": "2026-06-01 18:22:12,254"
+        },
+        {
+          "tool": "tree_draft_update_node_params",
+          "status": 200,
+          "duration_ms": 890.5,
+          "ts": "2026-06-01 18:22:29,583"
+        }
+      ],
+      "answer": "Updated\n`move_to_pick_approach` in the sequence: `velocity_scale` set from `${param:velocity_scale}` \u2192 `0.5` (half speed).",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "UPDATE_params_generic",
+      "status": "pass",
+      "elapsed_s": 27.3,
+      "tool_calls": [],
+      "answer": "There\nare seven move nodes in the program tree. Which ones should be slowed down?\n\n1. `move_to_pick_approach`\n2. `move_to_pick`\n3. `pick_retreat`\n4. `move_to_drop_approach`\n5. `move_to_drop`\n6. `drop_",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "DELETE_named_specific",
+      "status": "pass",
+      "elapsed_s": 30.1,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_delete_node",
+          "status": 200,
+          "duration_ms": 1032.6,
+          "ts": "2026-06-01 18:23:24,277"
+        }
+      ],
+      "answer": "Deleted node `move_to_pick_approach` (kind `move_manipulator_action`, move_id `pick_approach`) from the `pick_and_place` sequence. The sequence now has 12 children: `command_gripper` \u2192 `move_to_pick` ",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "DELETE_kind_medium",
+      "status": "pass",
+      "elapsed_s": 35.2,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_delete_node",
+          "status": 200,
+          "duration_ms": 785.2,
+          "ts": "2026-06-01 18:24:00,864"
+        }
+      ],
+      "answer": "`close_gripper` deleted. The pick-and-place sequence now has 11 steps \u2014 the gripper-close command (position 0.66, gripper `primary`) is removed. Remaining flow: open gripper \u2192 approach pick \u2192 pick dow",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "DELETE_generic",
+      "status": "pass",
+      "elapsed_s": 25.6,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_delete_node",
+          "status": 200,
+          "duration_ms": 1104.0,
+          "ts": "2026-06-01 18:24:32,891"
+        }
+      ],
+      "answer": "Deleted node `return_rest` (move_manipulator_action) from the sequence. The pick-and-place tree now ends at `drop_retreat`.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "MOVE_swap_specific",
+      "status": "pass",
+      "elapsed_s": 32.5,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_move_node",
+          "status": 200,
+          "duration_ms": 949.5,
+          "ts": "2026-06-01 18:25:04,025"
+        }
+      ],
+      "answer": "`pick_retreat` moved to index 1 (second child) of `pick_and_place`.\n\nNew order under `pick_and_place`:\n1. command_gripper\n2. **pick_retreat** \u2190 moved here\n3. move_to_pick_approach\n4. move_to_pick\n5. c",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "MOVE_reorder_medium",
+      "status": "pass",
+      "elapsed_s": 36.3,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_move_node",
+          "status": 200,
+          "duration_ms": 947.0,
+          "ts": "2026-06-01 18:25:40,042"
+        }
+      ],
+      "answer": "Swapped `pick_retreat` and `move_to_drop_approach` under the root sequence `pick_and_place`. New order:\n\n- `pick_retreat` moved from index 6 \u2192 7\n- `move_to_drop_approach` moved from index 7 \u2192 6",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "MOVE_generic",
+      "status": "pass",
+      "elapsed_s": 20.3,
+      "tool_calls": [],
+      "answer": "\"that step\" and \"earlier\" are both vague. The program has 12 steps in the `pick_and_place` sequence \u2014 which node do you want to move, and where exactly should it go (e.g., \"move close_gripper to index",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "REPLACE_subtree_specific",
+      "status": "fail",
+      "elapsed_s": 223.1,
+      "tool_calls": [],
+      "answer": "\u26a0\ufe0f Agent couldn't generate a response. Please try again.",
+      "failures": [
+        "expected tool 'tree_draft_replace_subtree' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'replace' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "REPLACE_simple_medium",
+      "status": "fail",
+      "elapsed_s": 253.4,
+      "tool_calls": [],
+      "answer": "The model did not produce a response before the LLM idle timeout. Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable).",
+      "failures": [
+        "expected tool 'tree_draft_replace_subtree' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_update_pose_specific",
+      "status": "fail",
+      "elapsed_s": 46.2,
+      "tool_calls": [],
+      "answer": "I can insert an `update_collision_object_pose` node to move the graspable object, but I need to know where in the behavior tree:\n\n- Which parent node should receive it (e.g., `pick_and_place` sequence",
+      "failures": [
+        "expected tool 'scene_draft_update_object' not observed (or never reached 2xx)",
+        "state_after[scene.objects[object_id=graspable].pose_in_universe.position_m] expected [0.5, 0.1, 0.05], got '<MISSING>'"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_update_size_medium",
+      "status": "fail",
+      "elapsed_s": 20.4,
+      "tool_calls": [],
+      "answer": "The current scene is empty \u2014 there are no scene objects in `object_ids`. Can you clarify which object you mean by \"the graspable\"? Is it:\n- An object that should exist in the scene but doesn't yet, or",
+      "failures": [
+        "expected tool 'scene_draft_update_object' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_remove_specific",
+      "status": "fail",
+      "elapsed_s": 18.3,
+      "tool_calls": [],
+      "answer": "The scene is currently empty \u2014 there are no scene objects present. Nothing to remove.\n\n`object_ids: []` (confirmed from scene snapshot).",
+      "failures": [
+        "expected tool 'scene_draft_remove_objects' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_remove_generic",
+      "status": "soft-pass",
+      "elapsed_s": 43.4,
+      "tool_calls": [
+        {
+          "tool": "scene_inspect",
+          "status": 200,
+          "duration_ms": 4.6,
+          "ts": "2026-06-01 18:36:18,742"
+        }
+      ],
+      "answer": "Scene\nis already clear \u2014 zero static objects, zero collision objects. Nothing to remove.",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARAM_add_specific",
+      "status": "pass",
+      "elapsed_s": 20.4,
+      "tool_calls": [
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 1002.4,
+          "ts": "2026-06-01 18:36:49,541"
+        }
+      ],
+      "answer": "Parameter added to the program draft:\n\n- **name:** `max_velocity`\n- **type:** `float`\n- **default:** `0.5`",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARAM_modify_medium",
+      "status": "pass",
+      "elapsed_s": 41.3,
+      "tool_calls": [
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.6,
+          "ts": "2026-06-01 18:37:18,798"
+        },
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 1075.7,
+          "ts": "2026-06-01 18:37:30,756"
+        }
+      ],
+      "answer": "`\nvelocity_scale` default changed from 0.5 \u2192 0.25. Type (float), constraints (0 < v \u2264 1), and description preserved. All 6 `move_manipulator_action` nodes reference `${param:velocity_scale}` and will ",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARAM_delete_specific",
+      "status": "pass",
+      "elapsed_s": 18.7,
+      "tool_calls": [
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 873.8,
+          "ts": "2026-06-01 18:37:44,030"
+        },
+        {
+          "tool": "program_draft_remove_parameters",
+          "status": 200,
+          "duration_ms": 1121.5,
+          "ts": "2026-06-01 18:37:54,421"
+        }
+      ],
+      "answer": "Parameter `legacy_offset` removed. Remaining program parameters: `velocity_scale` (float, default 0.5).",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "BB_add_specific",
+      "status": "pass",
+      "elapsed_s": 31.4,
+      "tool_calls": [
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 1045.6,
+          "ts": "2026-06-01 18:38:27,343"
+        }
+      ],
+      "answer": "Added blackboard key `target_pose` (type: pose) to the draft.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "BB_modify_medium",
+      "status": "pass",
+      "elapsed_s": 44.2,
+      "tool_calls": [
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 876.1,
+          "ts": "2026-06-01 18:38:39,187"
+        },
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-01 18:39:03,968"
+        },
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 1023.5,
+          "ts": "2026-06-01 18:39:14,588"
+        }
+      ],
+      "answer": "Done. Blackboard key `grip_force` changed from `int` \u2192 `float`.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "BB_delete_specific",
+      "status": "pass",
+      "elapsed_s": 23.5,
+      "tool_calls": [
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 867.5,
+          "ts": "2026-06-01 18:39:26,615"
+        },
+        {
+          "tool": "blackboard_draft_remove_keys",
+          "status": 200,
+          "duration_ms": 904.1,
+          "ts": "2026-06-01 18:39:41,460"
+        }
+      ],
+      "answer": "Black\nboard key `scratch_value` removed from the draft. The blackboard keys list is now empty.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_01_scene_ground",
+      "status": "pass",
+      "elapsed_s": 29.2,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 1021.8,
+          "ts": "2026-06-01 18:40:13,986"
+        }
+      ],
+      "answer": "Ground plane added to the scene draft:\n- **objectId:** `ground_plane`\n- **Shape:** box, 2.0 \u00d7 2.0 \u00d7 0.01 m\n- **Pose:** origin [0, 0, 0] in world frame (Z=0 surface, 10 mm thick)",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_02_scene_graspable",
+      "status": "pass",
+      "elapsed_s": 26.4,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 847.7,
+          "ts": "2026-06-01 18:40:40,601"
+        }
+      ],
+      "answer": "Graspable cube added to the scene draft:\n- **objectId:** `graspable`\n- **Shape:** box, 0.05 \u00d7 0.05 \u00d7 0.05 m\n- **Pose:** [0.4, 0.0, 0.05] m in world frame (5 cm above ground plane)",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_03_scene_pick_pad",
+      "status": "pass",
+      "elapsed_s": 42.9,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 1011.9,
+          "ts": "2026-06-01 18:41:24,988"
+        }
+      ],
+      "answer": "Pick pad added to the scene draft:\n- **objectId:** `pick_pad`\n- **Shape:** box, 0.2 \u00d7 0.2 \u00d7 0.025 m\n- **Pose:** [0.4, 0.0, 0.012] m in world frame (25 mm thick, top surface at z\u22480.025 m, directly bene",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_04_scene_place_pad",
+      "status": "pass",
+      "elapsed_s": 27.7,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 907.4,
+          "ts": "2026-06-01 18:41:52,218"
+        }
+      ],
+      "answer": "Place pad added to the scene draft:\n- **objectId:** `place_pad`\n- **Shape:** box, 0.2 \u00d7 0.2 \u00d7 0.025 m\n- **Pose:** [0.0, 0.4, 0.012] m in world frame (25 mm thick, same height as the pick pad)",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_05_tree_root",
+      "status": "pass",
+      "elapsed_s": 33.6,
+      "tool_calls": [
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.3,
+          "ts": "2026-06-01 18:42:23,471"
+        }
+      ],
+      "answer": "Current program state:\n\n- **Root node:** `pick_and_place` (kind: `sequence`)\n- **Children under root:** 1 node \u2014 `scaffold_open` (`command_gripper`, gripper open)\n- **Scene objects:** ground_plane, gr",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_06_approach",
+      "status": "pass",
+      "elapsed_s": 144.2,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-01 18:43:20,430"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 2.2,
+          "ts": "2026-06-01 18:44:22,122"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1134.1,
+          "ts": "2026-06-01 18:44:33,634"
+        },
+        {
+          "tool": "tree_draft_move_node",
+          "status": 200,
+          "duration_ms": 1030.5,
+          "ts": "2026-06-01 18:44:47,004"
+        }
+      ],
+      "answer": "Move-to-pose node added as the first child of the root sequence `pick_and_place`:\n\n- **Node name:** `pick_approach`\n- **Kind:** `move_manipulator_action` (pose_goal)\n- **Pose target:** [0.4, 0.0, 0.2]",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_07_descend",
+      "status": "pass",
+      "elapsed_s": 50.3,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 950.0,
+          "ts": "2026-06-01 18:45:35,411"
+        }
+      ],
+      "answer": "Grasp descend move added after `pick_approach` in the root sequence:\n\n- **Node name:** `grasp_descend`\n- **Kind:** `move_manipulator_action` (pose_goal)\n- **Pose target:** [0.4, 0.0, 0.07] m, orientat",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_08_close_gripper",
+      "status": "pass",
+      "elapsed_s": 74.7,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1084.3,
+          "ts": "2026-06-01 18:46:50,541"
+        }
+      ],
+      "answer": "Gripper close command added after `grasp_descend`:\n\n- **Node name:** `grasp_close`\n- **Kind:** `command_gripper`\n- **Params:** gripper `primary`, position `80` (command-space close), 1 s duration, 40 ",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_09_attach",
+      "status": "pass",
+      "elapsed_s": 57.3,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 2.9,
+          "ts": "2026-06-01 18:47:41,284"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 983.4,
+          "ts": "2026-06-01 18:47:53,485"
+        }
+      ],
+      "answer": "Graspable attachment node added after `grasp_close`:\n\n- **Node name:** `attach_graspable`\n- **Kind:** `attach_object_to_link`\n- **Params:** `object_id` = `graspable`, `link_frame` = `grasp_frame`\n- **",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_10_lift",
+      "status": "pass",
+      "elapsed_s": 35.9,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1187.6,
+          "ts": "2026-06-01 18:48:29,646"
+        }
+      ],
+      "answer": "Lift move added after `attach_graspable`:\n\n- **Node name:** `lift_up`\n- **Kind:** `move_manipulator_action` (pose_goal)\n- **Pose target:** [0.4, 0.0, 0.2] m, orientation identity (lifts the attached g",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_11_transport",
+      "status": "pass",
+      "elapsed_s": 82.8,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 2.4,
+          "ts": "2026-06-01 18:49:22,348"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1124.4,
+          "ts": "2026-06-01 18:49:51,659"
+        }
+      ],
+      "answer": "Transport move added after `lift_up`:\n\n- **Node name:** `transport_to_place`\n- **Kind:** `move_manipulator_action` (pose_goal)\n- **Pose target:** [0.0, 0.4, 0.2] m, orientation identity (carries the a",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_12_place_descend",
+      "status": "pass",
+      "elapsed_s": 39.6,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 926.6,
+          "ts": "2026-06-01 18:50:31,511"
+        }
+      ],
+      "answer": "Descend-to-place move added after `transport_to_place`:\n\n- **Node name:** `descend_to_place`\n- **Kind:** `move_manipulator_action` (pose_goal)\n- **Pose target:** [0.0, 0.4, 0.07] m, orientation identi",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_13_detach",
+      "status": "pass",
+      "elapsed_s": 49.5,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1142.5,
+          "ts": "2026-06-01 18:51:22,641"
+        }
+      ],
+      "answer": "Graspable detach node added after `descend_to_place`:\n\n- **Node name:** `detach_graspable`\n- **Kind:** `detach_object_from_link`\n- **Params:** `object_id` = `graspable`, `link_frame` = `grasp_frame`\n-",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_14_upsert",
+      "status": "pass",
+      "elapsed_s": 69.0,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 3.4,
+          "ts": "2026-06-01 18:52:11,365"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 928.8,
+          "ts": "2026-06-01 18:52:28,209"
+        }
+      ],
+      "answer": "Graspable upsert node added after `detach_graspable`:\n\n- **Node name:** `place_graspable`\n- **Kind:** `upsert_collision_object`\n- **Params:** `object_id` = `graspable`, shape = box 0.05\u00b3 m, pose = [0.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_15_open_gripper",
+      "status": "pass",
+      "elapsed_s": 60.5,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1102.6,
+          "ts": "2026-06-01 18:53:29,241"
+        }
+      ],
+      "answer": "Gripper open command added after `place_graspable`:\n\n- **Node name:** `gripper_open_after_place`\n- **Kind:** `command_gripper`\n- **Params:** gripper `primary`, position `0` (open), 1 s duration, 40 ma",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_16_retract",
+      "status": "pass",
+      "elapsed_s": 53.9,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 981.9,
+          "ts": "2026-06-01 18:54:20,853"
+        }
+      ],
+      "answer": "Retract move added after `gripper_open_after_place`:\n\n- **Node name:** `retract_after_place`\n- **Kind:** `move_manipulator_action` (pose_goal)\n- **Pose target:** [0.0, 0.4, 0.2] m, orientation identit",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_17_home",
+      "status": "fail",
+      "elapsed_s": 61.3,
+      "tool_calls": [],
+      "answer": "I need the home pose to add the return-home move. What are the target coordinates for the home position? (e.g. [x, y, z] in meters, orientation?)",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_18_repeat_root",
+      "status": "pass",
+      "elapsed_s": 57.2,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_wrap_node",
+          "status": 200,
+          "duration_ms": 888.7,
+          "ts": "2026-06-01 18:56:18,541"
+        }
+      ],
+      "answer": "Repeat\ndecorator added as the new tree root, wrapping the entire pick-and-place sequence:\n\n- **New root:** `repeat_pick_and_place` (kind: `repeat`, `num_cycles` = -1, runs forever)\n- **Child:** `pick_",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_19_safety_parallel",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "PnP_20_grip_force",
+      "status": "pass",
+      "elapsed_s": 82.5,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_update_node_params",
+          "status": 200,
+          "duration_ms": 931.5,
+          "ts": "2026-06-01 18:57:46,828"
+        }
+      ],
+      "answer": "`\ngrasp_close` node already has `max_effort` set to 40. No change needed \u2014 the gripper-close grip force is 40 N.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_wrap_existing_motion_with_retry",
+      "status": "pass",
+      "elapsed_s": 55.6,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 1.9,
+          "ts": "2026-06-01 18:58:42,979"
+        },
+        {
+          "tool": "tree_draft_wrap_node",
+          "status": 200,
+          "duration_ms": 1119.4,
+          "ts": "2026-06-01 18:58:50,280"
+        }
+      ],
+      "answer": "Wrapped `move_to_pick` with a retry decorator (num_attempts=3). The tree now reads:\n\n- **pick_and_place** (sequence)\n  - command_gripper\n  - move_to_pick_approach\n  - **retry_move_to_pick** (retry, 3 ",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_update_existing_motion_speed",
+      "status": "pass",
+      "elapsed_s": 63.1,
+      "tool_calls": [
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 4.2,
+          "ts": "2026-06-01 18:59:43,079"
+        },
+        {
+          "tool": "tree_draft_update_node_params",
+          "status": 200,
+          "duration_ms": 907.1,
+          "ts": "2026-06-01 18:59:59,291"
+        }
+      ],
+      "answer": "Updated `move_to_pick_approach` velocity_scale from `${param:velocity_scale}` \u2192 **0.25**. All other params preserved (move_id=pick_approach, motion_type=relative_move, planning_timeout_s=10, execution",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_scene_add_static_fixture_not_runtime",
+      "status": "pass",
+      "elapsed_s": 26.7,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 978.3,
+          "ts": "2026-06-01 19:00:30,514"
+        }
+      ],
+      "answer": "Safety wall added to the draft scene resource:\n\n- **objectId**: `safety_wall`\n- **shape**: box, 0.4 \u00d7 0.02 \u00d7 0.2 m\n- **pose**: [0.2, \u22120.45, 0.1] m, identity orientation, world frame",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_scene_update_graspable_pose",
+      "status": "pass",
+      "elapsed_s": 32.6,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_update_object",
+          "status": 200,
+          "duration_ms": 913.9,
+          "ts": "2026-06-01 19:01:03,250"
+        }
+      ],
+      "answer": "Static scene object `graspable` updated to pose:\n- Position: `[0.35, -0.25, 0.15]` m (universe frame)\n- Orientation: unchanged `[0, 0, -0.3827, 0.9239]` (xyzw)\n- Shape: unchanged box `[0.1, 0.01, 0.01",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_runtime_remove_then_restore_graspable",
+      "status": "fail",
+      "elapsed_s": 67.3,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1116.6,
+          "ts": "2026-06-01 19:01:45,649"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 400,
+          "duration_ms": 2.2,
+          "ts": "2026-06-01 19:01:45,680"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 898.4,
+          "ts": "2026-06-01 19:02:05,081"
+        }
+      ],
+      "answer": "Done. Two nodes appended to the `pick_and_place` sequence (indices 12\u201313):\n\n- **remove_graspable** (`remove_collision_object`) \u2014 removes the `graspable` collision object from the runtime planning scen",
+      "failures": [
+        "expected tool 'scene_inspect' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_runtime_update_graspable_pose_each_cycle",
+      "status": "pass",
+      "elapsed_s": 84.2,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-01 19:02:58,749"
+        },
+        {
+          "tool": "scene_inspect",
+          "status": 200,
+          "duration_ms": 5.1,
+          "ts": "2026-06-01 19:02:58,771"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1154.1,
+          "ts": "2026-06-01 19:03:38,038"
+        }
+      ],
+      "answer": "Inserted `reset_graspable_pose` (`update_collision_object_pose`) at the end of the `pick_and_place` sequence. On each cycle, after `return_rest` completes, the graspable's runtime pose is set to `[0.3",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CLARIFY_scene_remove_pronoun",
+      "status": "soft-pass",
+      "elapsed_s": 11.3,
+      "tool_calls": [],
+      "answer": "The scene currently has no objects. What would you like me to remove? (Note: there are no scene objects or collision objects currently in the program.)",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CLARIFY_tree_wrap_pronoun",
+      "status": "pass",
+      "elapsed_s": 22.2,
+      "tool_calls": [],
+      "answer": "Which step do you want to wrap in a retry? The `pick_and_place` sequence contains:\n\n1. `command_gripper`\n2. `move_to_pick_approach`\n3. `move_to_pick`\n4. `close_gripper`\n5. `attach_graspable`\n6. `pick_",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CLARIFY_motion_generic",
+      "status": "pass",
+      "elapsed_s": 23.1,
+      "tool_calls": [],
+      "answer": "\"Over there\" is ambiguous \u2014 I need more detail to act on this:\n\n1. **Where should the robot move to?** \u2014 No pose, position, or target location is specified. What are the coordinates (or describe the t",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "ISAAC_import_floor_and_graspable",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "ISAAC_reject_all_scene_import",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "ISAAC_runtime_colliders_from_selection",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "FUTURE_deployment_set_robot_and_gripper_from_isaac",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "FUTURE_apply_pick_place_skill_from_scene",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "FUTURE_preview_plan_before_mutating",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    }
+  ]
+}

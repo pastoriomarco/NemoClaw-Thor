@@ -1,0 +1,104 @@
+Running 74 cases against http://127.0.0.1:9000
+  catalogHash: 9436f6951adeef0b...
+
+  ✅ P1_wrap_root_specific                                42.7s  status=pass
+  ✅ P2_scene_add_specific                                37.0s  status=pass
+  ✅ P3_tree_insert_runtime_obj_specific                  63.7s  status=pass
+  ✅ WRAP_root_generic                                    28.8s  status=pass
+  ✅ WRAP_root_medium                                     33.3s  status=pass
+  ❌ SCENE_add_generic                                    31.4s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+      soft: ["answer_must_contain: 'added' not found"]
+  ✅ SCENE_add_medium                                     43.2s  status=pass
+  ✅ TREE_insert_runtime_generic                          25.1s  status=pass
+  ✅ TREE_insert_runtime_medium                          192.3s  status=pass
+  ❌ INSERT_position_first_specific                      225.1s  status=fail
+      fail: ['chat HTTP -1']
+  ✅ INSERT_position_after_named_medium                   54.0s  status=pass
+  🟡 INSERT_position_before_named_generic                 30.4s  status=soft-pass
+      soft: ["answer_must_contain: 'which' not found"]
+  [SKIP] PARALLEL_safety_specific                            status=future (use --include-future to run)
+  🟡 PARALLEL_concurrent_medium                           39.4s  status=soft-pass
+      soft: ["answer_must_contain: 'which' not found"]
+  🟡 PARALLEL_generic                                     15.1s  status=soft-pass
+      soft: ["answer_must_contain: 'where' not found"]
+  ✅ FALLBACK_retry_specific                             116.9s  status=pass
+  ❌ FALLBACK_alternate_medium                           128.0s  status=fail
+      fail: ["expected NO tool calls; observed ['catalog_read', 'program_read', 'tree_draft_wrap_node', 'tree_draft_insert_node']"]
+  🟡 FALLBACK_generic                                     10.0s  status=soft-pass
+      soft: ["answer_must_contain: 'where' not found"]
+  ✅ UPDATE_params_specific                               22.8s  status=pass
+  ✅ UPDATE_params_medium                                 37.6s  status=pass
+  ✅ UPDATE_params_generic                                27.3s  status=pass
+  ✅ DELETE_named_specific                                30.1s  status=pass
+  ✅ DELETE_kind_medium                                   35.2s  status=pass
+  ✅ DELETE_generic                                       25.6s  status=pass
+  ✅ MOVE_swap_specific                                   32.5s  status=pass
+  ✅ MOVE_reorder_medium                                  36.3s  status=pass
+  ✅ MOVE_generic                                         20.3s  status=pass
+  ❌ REPLACE_subtree_specific                            223.1s  status=fail
+      fail: ["expected tool 'tree_draft_replace_subtree' not observed (or never reached 2xx)"]
+      soft: ["answer_must_contain: 'replace' not found"]
+  ❌ REPLACE_simple_medium                               253.4s  status=fail
+      fail: ["expected tool 'tree_draft_replace_subtree' not observed (or never reached 2xx)"]
+  ❌ SCENE_update_pose_specific                           46.2s  status=fail
+      fail: ["expected tool 'scene_draft_update_object' not observed (or never reached 2xx)", "state_after[scene.objects[object_id=graspable].pose_in_universe.position_m] expected [0.5, 0.1, 0.05], got '<MISSING>'"]
+  ❌ SCENE_update_size_medium                             20.4s  status=fail
+      fail: ["expected tool 'scene_draft_update_object' not observed (or never reached 2xx)"]
+  ❌ SCENE_remove_specific                                18.3s  status=fail
+      fail: ["expected tool 'scene_draft_remove_objects' not observed (or never reached 2xx)"]
+  🟡 SCENE_remove_generic                                 43.4s  status=soft-pass
+      soft: ["answer_must_contain: 'which' not found"]
+  ✅ PARAM_add_specific                                   20.4s  status=pass
+  ✅ PARAM_modify_medium                                  41.3s  status=pass
+  ✅ PARAM_delete_specific                                18.7s  status=pass
+  ✅ BB_add_specific                                      31.4s  status=pass
+  ✅ BB_modify_medium                                     44.2s  status=pass
+  ✅ BB_delete_specific                                   23.5s  status=pass
+  ✅ PnP_01_scene_ground                                  29.2s  status=pass
+  ✅ PnP_02_scene_graspable                               26.4s  status=pass
+  ✅ PnP_03_scene_pick_pad                                42.9s  status=pass
+  ✅ PnP_04_scene_place_pad                               27.7s  status=pass
+  ✅ PnP_05_tree_root                                     33.6s  status=pass
+  ✅ PnP_06_approach                                     144.2s  status=pass
+  ✅ PnP_07_descend                                       50.3s  status=pass
+  ✅ PnP_08_close_gripper                                 74.7s  status=pass
+  ✅ PnP_09_attach                                        57.3s  status=pass
+  ✅ PnP_10_lift                                          35.9s  status=pass
+  ✅ PnP_11_transport                                     82.8s  status=pass
+  ✅ PnP_12_place_descend                                 39.6s  status=pass
+  ✅ PnP_13_detach                                        49.5s  status=pass
+  ✅ PnP_14_upsert                                        69.0s  status=pass
+  ✅ PnP_15_open_gripper                                  60.5s  status=pass
+  ✅ PnP_16_retract                                       53.9s  status=pass
+  ❌ PnP_17_home                                          61.3s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ✅ PnP_18_repeat_root                                   57.2s  status=pass
+  [SKIP] PnP_19_safety_parallel                              status=future (use --include-future to run)
+  ✅ PnP_20_grip_force                                    82.5s  status=pass
+  ✅ CUR_wrap_existing_motion_with_retry                  55.6s  status=pass
+  ✅ CUR_update_existing_motion_speed                     63.1s  status=pass
+  ✅ CUR_scene_add_static_fixture_not_runtime             26.7s  status=pass
+  ✅ CUR_scene_update_graspable_pose                      32.6s  status=pass
+  ❌ CUR_runtime_remove_then_restore_graspable            67.3s  status=fail
+      fail: ["expected tool 'scene_inspect' not observed (or never reached 2xx)"]
+  ✅ CUR_runtime_update_graspable_pose_each_cycle         84.2s  status=pass
+  🟡 CLARIFY_scene_remove_pronoun                         11.3s  status=soft-pass
+      soft: ["answer_must_contain: 'which' not found"]
+  ✅ CLARIFY_tree_wrap_pronoun                            22.2s  status=pass
+  ✅ CLARIFY_motion_generic                               23.1s  status=pass
+  [SKIP] ISAAC_import_floor_and_graspable                    status=future (use --include-future to run)
+  [SKIP] ISAAC_reject_all_scene_import                       status=future (use --include-future to run)
+  [SKIP] ISAAC_runtime_colliders_from_selection              status=future (use --include-future to run)
+  [SKIP] FUTURE_deployment_set_robot_and_gripper_from_isaac  status=future (use --include-future to run)
+  [SKIP] FUTURE_apply_pick_place_skill_from_scene            status=future (use --include-future to run)
+  [SKIP] FUTURE_preview_plan_before_mutating                 status=future (use --include-future to run)
+
+==============================================================================
+  total cases:      74
+  attempted:        66  (50 pass, 0 recovered, 6 soft-pass, 10 fail)
+  skipped:          8
+  first-try rate:   50/66  (75.8%)
+  effective rate:   56/66  (84.8%)
+
+  full report: /tmp/full-smoke/35b/report.json
