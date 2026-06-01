@@ -198,13 +198,12 @@ cases:
   detail_level: generic
   # Reframed 2026-06-01: "wrap the tree" omits the WRAPPER kind (repeat/
   # retry/inverter/...). Best agentic behavior is to ask "wrap with what?".
-  # The model already does this — corpus now matches.
+  # The model already does this — corpus now matches. State_after dropped
+  # because no mutation should happen on the ASK path.
   prompt: "wrap the tree"
   expected:
     tools_called: []
     forbidden_tools: [tree_draft_wrap_node, tree_draft_insert_node]
-    state_after:
-      program.tree.children[0].name: pick_and_place
     answer_must_contain: ["which"]
 
 - id: WRAP_root_medium
