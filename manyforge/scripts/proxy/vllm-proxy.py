@@ -275,6 +275,21 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
                     "mode": _FORCE_ENABLE_THINKING,
                     "asst_count": asst_count_thinking,
                 }
+            # 2026-05-31: composers like manyforge-composer also send a
+            # top-level `enable_thinking` field. vLLM treats that as the
+            # source of truth and IGNORES chat_template_kwargs when both
+            # are present (observed empirically on cosmos-reason2-8b
+            # 2026-05-31: chat_template_kwargs.enable_thinking=True +
+            # top-level enable_thinking=False → reasoning field stays
+            # empty). Mirror the chat_template_kwargs decision to the
+            # top-level field so the model actually engages thinking.
+            top_before = parsed.get("enable_thinking")
+            if top_before != target_value:
+                parsed["enable_thinking"] = target_value
+                changes["enable_thinking_top"] = {
+                    "before": top_before,
+                    "after": target_value,
+                }
 
     # Append a generic suffix to the LAST user message in `messages`.
     # Cross-cutting, not per-prompt — same wording fires every request.
@@ -344,6 +359,135 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
     return new_body, {"mutations": changes}
 
 
+# Round 10 (2026-06-01): cascading loop-break
+#   reflect_at  = inject reflection user message into messages[] when
+#                 same tool reaches this count (default 4)
+#   stop_at     = hard-stop with synthetic SSE when count reaches this
+#                 (default 8 — gives the model one shot after reflection)
+# Old single-threshold env (LOOP_TOOL_THRESHOLD) maps to stop_at if set.
+_REFLECT_AT = int(os.environ.get("OPENCLAW_PROXY_LOOP_REFLECT_AT", "4") or "4")
+_STOP_AT = int(os.environ.get("OPENCLAW_PROXY_LOOP_STOP_AT", "8") or "8")
+_LEGACY_THRESHOLD = int(os.environ.get("OPENCLAW_PROXY_LOOP_TOOL_THRESHOLD", "0") or "0")
+if _LEGACY_THRESHOLD > 0:
+    _STOP_AT = _LEGACY_THRESHOLD
+    # If only legacy is set, disable reflection (preserve old behavior)
+    if "OPENCLAW_PROXY_LOOP_REFLECT_AT" not in os.environ:
+        _REFLECT_AT = 0
+
+_REFLECTION_MARKER = "[loop-reflection]"  # marker so we never inject twice
+
+
+def _check_loop_short_circuit(path: str, body: bytes) -> tuple[bytes | None, bytes | None]:
+    """Inspect /v1/chat/completions request for runaway same-tool loops.
+    Returns (synthetic_sse_response, mutated_body):
+      - both None: forward as-is
+      - synthetic_sse_response set: short-circuit (do not forward)
+      - mutated_body set: forward the mutated body (reflection injected)
+    Designed to break the openclaw per-turn retry-loop where the model
+    keeps calling the same tool with the same args after the validator
+    fails repeatedly with the same error.
+    """
+    if _STOP_AT <= 0 and _REFLECT_AT <= 0:
+        return None, None
+    if not path.endswith("/v1/chat/completions"):
+        return None, None
+    try:
+        parsed = json.loads(body.decode("utf-8", errors="replace"))
+    except (ValueError, UnicodeDecodeError):
+        return None, None
+    if not isinstance(parsed, dict):
+        return None, None
+    msgs = parsed.get("messages") or []
+    if not isinstance(msgs, list):
+        return None, None
+    # Count tool_call names emitted by the assistant across the whole convo
+    from collections import Counter as _Counter
+    names: list[str] = []
+    for m in msgs:
+        if not isinstance(m, dict): continue
+        if m.get("role") != "assistant": continue
+        for tc in (m.get("tool_calls") or []):
+            if isinstance(tc, dict):
+                fn = tc.get("function") or {}
+                nm = fn.get("name") or tc.get("name")
+                if nm: names.append(nm)
+    if not names:
+        return None, None
+    top_name, top_count = _Counter(names).most_common(1)[0]
+
+    # ----- HARD STOP at _STOP_AT -----
+    if _STOP_AT > 0 and top_count >= _STOP_AT:
+        model = parsed.get("model") or "unknown"
+        stop_msg = (
+            f"[loop-break] I have called `{top_name}` {top_count} times in this "
+            f"conversation. Repeated retries hit the same validator error. "
+            f"Stopping to avoid runaway. Please refine the request with the "
+            f"specific missing field, pick a different tool, or restate the goal."
+        )
+        chatcmpl_id = "chatcmpl-loopbreak"
+        chunk1 = {
+            "id": chatcmpl_id, "object": "chat.completion.chunk", "model": model,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": stop_msg}, "finish_reason": None}],
+        }
+        chunk2 = {
+            "id": chatcmpl_id, "object": "chat.completion.chunk", "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        sse = (
+            f"data: {json.dumps(chunk1)}\n\n"
+            f"data: {json.dumps(chunk2)}\n\n"
+            f"data: [DONE]\n\n"
+        )
+        return sse.encode("utf-8"), None
+
+    # ----- REFLECTION INJECTION at _REFLECT_AT -----
+    if _REFLECT_AT > 0 and top_count >= _REFLECT_AT:
+        # Skip if reflection already injected for this convo (any user
+        # message containing the marker)
+        already = any(
+            isinstance(m, dict) and m.get("role") == "user"
+            and isinstance(m.get("content"), str) and _REFLECTION_MARKER in m["content"]
+            for m in msgs
+        )
+        if already:
+            return None, None
+        # Extract the most recent tool error to feed back to the model
+        last_err = ""
+        for m in reversed(msgs):
+            if isinstance(m, dict) and m.get("role") == "tool":
+                c = m.get("content") or ""
+                if isinstance(c, str):
+                    last_err = c[:400]
+                break
+        reflect_msg = (
+            f"{_REFLECTION_MARKER} STOP. You have called `{top_name}` "
+            f"{top_count} times with the same arguments and got the same "
+            f"error each time. Last error snippet: {last_err!r}. "
+            f"Do NOT retry the same call. Choose ONE of: "
+            f"(a) call a DIFFERENT tool, "
+            f"(b) change the specific failing argument named in the error "
+            f"(not other arguments), or "
+            f"(c) emit a short clarifying question for the user. "
+            f"Reply now with your next action — but do not repeat the "
+            f"failing call."
+        )
+        # Inject as a user message AFTER the last tool result
+        new_msgs = list(msgs)
+        # Find the index of the last tool message; insert after it
+        last_tool_idx = -1
+        for i, m in enumerate(new_msgs):
+            if isinstance(m, dict) and m.get("role") == "tool":
+                last_tool_idx = i
+        insert_idx = (last_tool_idx + 1) if last_tool_idx >= 0 else len(new_msgs)
+        new_msgs.insert(insert_idx, {"role": "user", "content": reflect_msg})
+        parsed["messages"] = new_msgs
+        mutated = json.dumps(parsed).encode("utf-8")
+        return None, mutated
+
+    return None, None
+    return sse.encode("utf-8")
+
+
 def _try_parse_json(blob: bytes) -> tuple[object | None, str]:
     """Return (parsed, raw_text). parsed is None when not valid JSON."""
     try:
@@ -403,6 +547,44 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # Optional mutation pass — must run BEFORE Content-Length is set.
         mutated_body, mutation_record = _maybe_mutate_request(path, body)
         body = mutated_body  # forwarded body == possibly mutated body
+
+        # 2026-06-01 (round 10 — cascading loop break):
+        # Two-stage defense against same-tool-same-error runaway:
+        #   1. At _REFLECT_AT same-tool calls: INJECT a synthetic user
+        #      message into messages[] urging the model to change
+        #      tactics, then forward. Model gets a fresh chance.
+        #   2. At _STOP_AT same-tool calls: HARD-STOP with synthetic
+        #      SSE assistant response saying "stuck", no further GPU
+        #      spend. OpenClaw exits its agent loop cleanly.
+        # Both stages are bounded so the model can't escape indefinitely.
+        # Configured via OPENCLAW_PROXY_LOOP_REFLECT_AT (default 4) and
+        # OPENCLAW_PROXY_LOOP_STOP_AT (default 8). Legacy single-knob
+        # OPENCLAW_PROXY_LOOP_TOOL_THRESHOLD still honored.
+        loop_sse, loop_mutated_body = _check_loop_short_circuit(path, body)
+        if loop_sse is not None:
+            # Hard stop — synthesize SSE and return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(loop_sse)))
+            self.end_headers()
+            self.wfile.write(loop_sse)
+            self.wfile.flush()
+            _append_log({
+                "ts": int(time.time() * 1000),
+                "event": "proxy_loop_hard_stop",
+                "path": path,
+            })
+            return
+        if loop_mutated_body is not None:
+            # Reflection injected — forward the mutated body
+            body = loop_mutated_body
+            _append_log({
+                "ts": int(time.time() * 1000),
+                "event": "proxy_loop_reflection_injected",
+                "path": path,
+            })
+
         forward_headers["Content-Length"] = str(len(body))
 
         ts_in = time.time()

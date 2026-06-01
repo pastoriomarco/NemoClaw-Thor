@@ -1,636 +1,888 @@
-# Composer Assistant — Architecture Map for Refinement Work
+# ManyForge AI Assistant — Architecture Reference (Thor)
 
-Companion document to [`SMOKE-CORPUS.md`](./SMOKE-CORPUS.md). Captures the
-end-to-end runtime that the smoke corpus exercises, where each piece of the
-tool surface lives, and what changes when. Written 2026-05-10 to support the
-post-iter-20 refinement plan (Pattern A/B/C/E from the failure analysis).
+Canonical reference for the **ManyForge AI assistant pipeline running on Jetson
+AGX Thor**. Target audience: a human operator or LLM agent that has never seen
+this stack but needs to operate, debug, and tune it. This is the entry point
+for architectural questions; runbooks, lane comparisons, and MCP integration
+notes are referenced from here.
+
+Cross-references:
+- Operational gates + per-symptom debugging: [COMPOSER-ASSISTANT-RUNBOOK.md](./COMPOSER-ASSISTANT-RUNBOOK.md)
+- Smoke corpus mechanics + per-iter history: [SMOKE-CORPUS.md](./SMOKE-CORPUS.md)
+- Cold-start order of operations: [SMOKE-ITER-RUNBOOK.md](./SMOKE-ITER-RUNBOOK.md)
+- Lane-parity benchmark (why OpenClaw + Cosmos-8B is the default): [LANE-COMPARISON-direct-vs-openclaw.md](./LANE-COMPARISON-direct-vs-openclaw.md)
+- MCP integration deep-dive: [MANYFORGE-MCP-INTEGRATION.md](./MANYFORGE-MCP-INTEGRATION.md)
+- Profile calibration methodology: [MANYFORGE-PROFILE-CALIBRATION.md](./MANYFORGE-PROFILE-CALIBRATION.md)
+- Deployment plan: [MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](./MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md)
 
 ---
 
 ## TL;DR
 
-- **Composer** (the user-facing FastAPI + React UI) sends a `manyforge.assistant.provider_request.v0`
-  envelope over HTTP to a *bridge*. The bridge runs the multi-turn LLM loop
-  and dispatches tool calls back into Composer's state.
-- **Two bridges** can implement the bridge endpoint. They listen on different
-  ports and use the same wire protocol; the deployment YAML's
-  `model_endpoints.assistant_model.base_url` selects which one Composer hits:
-  - `manyforge_assistant_bridge` (port 8100) — direct lane.
-  - `openclaw_assistant_bridge` (port 8200) — OpenClaw lane (production default).
-- **`vllm-proxy`** is independent of either bridge. It sits between
-  whatever client makes chat-completion calls and vLLM, and is the only
-  component that sees per-turn agent-loop traffic when the OpenClaw lane is
-  active (because OpenClaw runs the agent loop server-side, not in the bridge).
-- **Tool schemas** (the JSON-schemas for `tree_draft_insert_node`, etc.)
-  live in `manyforge_composer/backend/assistant_tool_schemas.py`. They are
-  served by Composer's `/api/assistant/bridge/tools` endpoint and reach the
-  model through the bridge → vLLM `tools[]` array.
-- **Node catalog** (the per-node descriptions that appear in the prompt's
-  `nodeCatalog`, e.g. `upsert_collision_object`'s description) lives in
-  `manyforge_behavior/resources/node_catalog.yaml`.
-- **Smoke corpus** drives Composer's `/api/assistant/chat` endpoint with 74
-  cases and grades each as pass / recovered-pass / clarified-pass / soft-pass / fail. **Production recipe (iter 32)**: Cosmos-Reason2-8B with thinking-on, proxy
-  with `max_tokens=2048` injected, no `tool_choice` mutation, bridge-fired
-  `/compact` every 2nd request (`OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2`),
-  chain-session ON. **51/66 effective (77.3 %), 47/66 first-try (71.2 %).**
-- **`request_clarification` tool + `[NEEDS-CLARIFY]` marker + bridge auto-retry**
-  was tried in iter 33-34 and **fully reverted**. The tool was registered, the
-  bridge had marker detection + auto-retry, and the proxy could force tool
-  selection via `OPENCLAW_PROXY_FORCE_TOOL_CHOICE=required`. Cosmos-Reason2-8B
-  did not invoke the tool on the Pattern A cases that needed it (iter 33), and
-  forcing tool selection every turn made the agent loop unable to terminate
-  naturally (iter 34, halted after 3 cases / 14 min). See SMOKE-CORPUS.md
-  "Iter 33 + 34 negative result" for the full analysis. The proxy still
-  supports the `FORCE_TOOL_CHOICE` knob if a future iter wants to test the
-  `required-first` mode (force only turn 1).
+- A user message in **Composer** (FastAPI + React UI on `:9000`) traverses
+  five hops on the way to vLLM and back: **Composer → bridge → OpenClaw
+  gateway → vllm-proxy → vLLM**. Each hop is a separate process; each can
+  inject, strip, or mutate fields independently.
+- **Two assistant lanes** exist; selection is one env var
+  (`ASSISTANT_PROVIDER=openclaw|nemoclaw`) and the deployment YAML's
+  `base_url`. **OpenClaw is the production default since 2026-05-07**
+  ([`LANE-COMPARISON-direct-vs-openclaw.md` §8](./LANE-COMPARISON-direct-vs-openclaw.md)).
+- The **vllm-proxy** sits in front of vLLM as a logger/mutator. Even with
+  zero mutation env vars set, it logs every request/response to JSONL; with
+  env vars set, it injects caps, budgets, tool_choice, user-suffixes, and a
+  cascading **same-tool-loop defense** (reflection at 4 calls, hard stop
+  at 8).
+- The **production knobs that matter most**, ranked:
+  1. `--default-chat-template-kwargs '{"enable_thinking":…}'` per profile in
+     `serving/launch.sh` (and the proxy's top-level mirror — see §C).
+  2. `OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048` (load-bearing — without it,
+     thinking-on generations are unbounded).
+  3. `OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512` (caps the `<think>`
+     envelope; Qwen3-VL sweet-spot).
+  4. `OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2` (bridge-fired `/compact` keeps
+     chain-on sessions from overflowing).
+  5. `OPENCLAW_PROXY_LOOP_REFLECT_AT=4` / `OPENCLAW_PROXY_LOOP_STOP_AT=8`
+     (round-10 cascading loop defense, 2026-06-01).
+- **Production default**: `cosmos-reason2-8b` (8B Qwen3-VL VLM, FP8 KV,
+  hermes tool parser, qwen3 reasoning parser, thinking-on, 256K ctx).
 
 ---
 
-## Repository layout
+## A. End-to-end request flow
 
-Two source trees are live in this work:
-
-| Path | Role |
-|------|------|
-| `/home/tndlux/workspaces/dev_ws/src/manyforge` | **Manyforge core dev workspace** — Composer backend, bridges, behavior catalog, MCP wrapper. Mounted into the `manyforge-e2e-composer` container as `/workspace`. **Most refinement edits land here.** |
-| `/home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor` | **NemoClaw-Thor session repo** — model serving (vLLM launchers), the OpenClaw bridge variant, smoke runner, this doc. |
-
-The two are *separate repos* checked out side-by-side. Composer reads from
-`dev_ws/src/manyforge`; the smoke runner and `vllm-proxy` live in
-`NemoClaw-Thor/manyforge/scripts/debug/`.
-
----
-
-## Component map (iter-32 production setup)
+### A.1 The hops, named
 
 ```
-                             host machine (Thor)
-┌────────────────────────────────────────────────────────────────────────────┐
+                                  ┌─────────────────────────────┐
+                                  │ User in Composer UI         │
+                                  │ (React, browser)            │
+                                  └────────┬────────────────────┘
+                                           │ HTTP POST /api/assistant/chat
+                                           ▼
+┌─────────────────────────────── Thor host ─────────────────────────────────┐
 │                                                                            │
-│  ┌───────────────────────┐                                                 │
-│  │ smoke_corpus_runner   │  (HTTP)                                         │
-│  │ NemoClaw-Thor/.../    │ ───────────► http://127.0.0.1:9000              │
-│  │ scripts/debug/        │              /api/assistant/chat                │
-│  └───────────────────────┘                      │                          │
-│                                                  ▼                         │
-│   ┌──────────────────────────── manyforge-e2e-composer container ──────┐  │
-│   │ Composer (React + FastAPI)                                          │  │
-│   │ /workspace = /home/tndlux/workspaces/dev_ws/src/manyforge           │  │
-│   │ Backend: manyforge_composer/backend/{routes_assistant.py,           │  │
-│   │   assistant_provider.py, assistant_tool_schemas.py}                 │  │
-│   │ Catalog: manyforge_behavior/resources/node_catalog.yaml             │  │
-│   └─────────────┬───────────────────────────────────────────────────────┘  │
-│                 │  manyforge.assistant.provider_request.v0 (HTTP POST)     │
-│                 │  base_url from deployment YAML                           │
-│                 ▼                                                          │
-│   ┌──────── openclaw_assistant_bridge (host:8200) ─────────┐               │
-│   │ NemoClaw-Thor/manyforge/openclaw_assistant_bridge/      │               │
-│   │ adapter.py + service.py                                 │               │
-│   │ Translates envelope → OpenClaw agent invocation         │               │
-│   └─────────────┬───────────────────────────────────────────┘               │
-│                 │  HTTP (gateway mode) over SSH tunnel host:18789           │
-│                 ▼                                                          │
-│   ┌──────── OpenClaw gateway (sandbox / cluster pod) ──────┐               │
-│   │ Runs the agent loop with up to 3 concurrent subagents.  │               │
-│   │ Holds the manyforge MCP wrapper (tools/list).           │               │
-│   └─────────────┬───────────────────────────────────────────┘               │
-│                 │  OpenAI-compatible chat-completions with tools[]          │
-│                 ▼                                                          │
-│   ┌──────── vllm-proxy (host:8000) ────────────────┐               │
-│   │ NemoClaw-Thor/manyforge/scripts/debug/                  │               │
-│   │ vllm-proxy.py                                   │               │
-│   │ Logs every request/response as JSONL.                   │               │
-│   │ Mutates outbound requests (max_tokens, enable_thinking, │               │
-│   │ tool_choice, user-message suffix, …) when env vars set. │               │
-│   └─────────────┬───────────────────────────────────────────┘               │
-│                 │  forwards to upstream                                      │
-│                 ▼                                                          │
-│   ┌──────── vLLM (manyforge-e2e-vllm container, host:8050) ──┐             │
-│   │ Cosmos-Reason2-8B (or other model) served as             │             │
-│   │ `cosmos-reason2-8b`.                                      │             │
-│   │ NemoClaw-Thor/serving/{launch.sh,start-model.sh}          │             │
-│   └───────────────────────────────────────────────────────────┘             │
+│  ┌────────────────────────────── Hop 1 ──────────────────────────────┐    │
+│  │  manyforge-e2e-composer (Docker container, :9000)                  │    │
+│  │  routes_assistant.chat → builds manyforge.assistant.provider_      │    │
+│  │  request.v0 envelope (catalog snapshot, scene snapshot, tools,     │    │
+│  │  mode allowlist, session key, top-level enable_thinking=false)     │    │
+│  └──────────────────┬─────────────────────────────────────────────────┘    │
+│                     │ HTTP POST  base_url from deployment YAML              │
+│                     │ openclaw lane → http://127.0.0.1:8200/v1/manyforge/…  │
+│                     │ direct  lane → http://127.0.0.1:8100/v1/manyforge/…  │
+│                     ▼                                                       │
+│  ┌────────────────────────── Hop 2 (lane-specific) ──────────────────┐    │
+│  │  openclaw_assistant_bridge :8200  (FastAPI, this repo)             │    │
+│  │  ─ short-circuits "add a <kind>" with synthetic clarif (round 7)   │    │
+│  │  ─ detects 5+ same-tool calls across turns → synthetic stop (r 8)  │    │
+│  │  ─ fires /compact every Nth user prompt on this session key        │    │
+│  │  ─ builds OpenClaw agent invocation (gateway mode = HTTP)          │    │
+│  │  ─ derives session key = conversationId + catalogHash + progRev    │    │
+│  │  ─                                                                 │    │
+│  │  manyforge_assistant_bridge :8100  (FastAPI, sibling manyforge)    │    │
+│  │  ─ runs its OWN agent loop in-process (no OpenClaw)                │    │
+│  │  ─ tool_choice pin, inline-snapshot context for compound prompts   │    │
+│  └──────────────────┬─────────────────────────────────────────────────┘    │
+│                     │ HTTP POST to in-sandbox OpenClaw gateway              │
+│                     │ host:18789 (port-forward → SSH netns inside pod)     │
+│                     ▼                                                       │
+│  ┌────────────────────────────── Hop 3 ──────────────────────────────┐    │
+│  │  OpenClaw gateway (in `my-assistant` sandbox, SSH netns, :18789)   │    │
+│  │  ─ runs the multi-turn LLM agent loop server-side                  │    │
+│  │  ─ up to 3 concurrent subagents (per `agents.defaults.maxConcurr…`)│    │
+│  │  ─ MCP wrapper subprocess registered at gateway boot, holds        │    │
+│  │    the manyforge tool catalog (tools/list)                         │    │
+│  │  ─ each turn emits an OpenAI-compatible /v1/chat/completions       │    │
+│  │  ─ forwards `x-openclaw-session-key` so server-side cache hits     │    │
+│  └──────────────────┬─────────────────────────────────────────────────┘    │
+│                     │ HTTP POST /v1/chat/completions                        │
+│                     │ → host.openshell.internal:8000                        │
+│                     ▼                                                       │
+│  ┌────────────────────────────── Hop 4 ──────────────────────────────┐    │
+│  │  vllm-proxy :8000  (single-process Python HTTP reverse proxy)      │    │
+│  │  ─ LOGS every req/resp to JSONL (always-on, never disabled)        │    │
+│  │  ─ injects max_tokens, thinking_token_budget, enable_thinking…     │    │
+│  │  ─ mirrors top-level enable_thinking to chat_template_kwargs (r10) │    │
+│  │  ─ cascading loop defense (round 10, 2026-06-01):                  │    │
+│  │      4 same-tool calls   → injects reflection user message         │    │
+│  │      8 same-tool calls   → synthesizes SSE assistant stop          │    │
+│  │  ─ 200s per-request socket timeout (fails before smoke's 244s)     │    │
+│  └──────────────────┬─────────────────────────────────────────────────┘    │
+│                     │ forward to upstream                                   │
+│                     ▼                                                       │
+│  ┌────────────────────────────── Hop 5 ──────────────────────────────┐    │
+│  │  vLLM container :8050  (`manyforge-e2e-vllm`, served via Docker)   │    │
+│  │  ─ runs the model (cosmos-reason2-8b by default)                   │    │
+│  │  ─ flags from `serving/launch.sh` per-profile case branch          │    │
+│  │  ─ per-profile: tool-call parser, reasoning parser, kv dtype,      │    │
+│  │    moe backend, default chat_template_kwargs, quantization, …     │    │
+│  │  ─ exposes /v1/chat/completions, /v1/models, /metrics              │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
 └────────────────────────────────────────────────────────────────────────────┘
+
+                       ⇡ Tool-call return path (Hops 6-10) ⇡
+
+      vLLM → gateway: response with `tool_calls[]`
+      gateway → MCP wrapper subprocess: stdio JSON-RPC tools/call
+      MCP wrapper → HTTP through OpenShell egress proxy (10.200.0.1:3128)
+      egress proxy → Composer /api/assistant/bridge/tools/<toolId>
+      Composer runs the actual ManyForge tool, returns the result
+      result back through reverse path, next vLLM turn …
+      final assistant message → bridge → Composer → UI
 ```
 
-Key port assignments in iter-32 production setup:
+### A.2 What each hop modifies vs strips vs preserves
 
-| Port | Process |
-|------|---------|
-| 9000 | Composer (frontend + backend, in `manyforge-e2e-composer` container) |
-| 8200 | `openclaw_assistant_bridge` |
-| 18789 | SSH tunnel to OpenClaw gateway in cluster sandbox |
-| 8000 | `vllm-proxy` (the mutator/logger) |
-| 8050 | vLLM serving the model |
+| Hop | Owns | Always modifies | Strips | Never touches |
+|-----|------|-----------------|--------|----------------|
+| **1. Composer backend** | request shape | adds `nodeCatalog`, `programSnapshot`, `sceneSnapshot`, mode allowlist, principal binding | request body parts not in envelope | per-request sampling fields (always omitted; vLLM owns them) |
+| **2. Bridge (openclaw)** | session key + compaction + loop short-circuits | adds `prompt` preamble that mirrors gateway-internal MCP catalog | per-request `tool_choice`, `temperature`, `top_k`, `top_p` (None → omit) | top-level `enable_thinking` (passed through if Composer sets it) |
+| **2. Bridge (direct)** | agent loop in-process | adds `tools[]`, `tool_choice`, inline scene snapshot | nothing of note | nothing |
+| **3. OpenClaw gateway** | per-turn LLM loop, MCP dispatch, subagent fan-out | adds `x-openclaw-session-key`, `tools[]`, transformed history | empty CoT envelopes (depending on parser) | streaming SSE shape |
+| **4. vllm-proxy** | logging + opt-in mutation | injects `max_tokens`, `thinking_token_budget`, etc. when env set; reflection user message at 4 same-tool calls | nothing (proxy preserves all headers) | `messages[]` ordering, system prompt |
+| **5. vLLM** | inference | applies chat template + parsers; emits `reasoning` / `content` / `tool_calls` | nothing (it's the producer) | n/a |
 
----
+**Key gotchas** to keep in mind when reading the code:
 
-## The two assistant lanes
-
-Composer's deployment YAML
-([`assistant_modes_scene_authoring.deployment.yaml`](/home/tndlux/workspaces/dev_ws/src/manyforge/examples/assistant_modes_scene_authoring.deployment.yaml))
-points at one bridge:
-
-```yaml
-model_endpoints:
-  assistant_model:
-    base_url: http://127.0.0.1:8100/v1/manyforge/assistant   # direct lane
-    # or
-    base_url: http://127.0.0.1:8200/v1/manyforge/assistant   # OpenClaw lane
-```
-
-Both bridges expose the same routes:
-
-- `GET  /healthz`
-- `POST /v1/manyforge/assistant`              (the provider request)
-- `POST /v1/manyforge/assistant/{rid}/cancel` (mid-flight cancel)
-
-But what they do internally is very different.
-
-### Direct lane — `manyforge_assistant_bridge`
-
-Source: `/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_assistant_bridge/bridge.py`.
-
-- The bridge runs the **multi-turn LLM loop locally**: it sends chat-completion
-  requests to the upstream model, reads the response, dispatches tool calls
-  by calling back into Composer (`POST /api/assistant/bridge/tools/...`),
-  and feeds the tool result back to the model.
-- The bridge sees every turn. The smoke runner's per-prompt request maps to
-  N (≈ 1–6) bridge → upstream chat-completion calls.
-- Upstream is configured via `BRIDGE_UPSTREAM_BASE_URL` env (default
-  `http://127.0.0.1:8000/v1`).
-- Tool-call format conversion (manyforge schema → OpenAI tools[] → back) is
-  done here.
-
-### OpenClaw lane — `openclaw_assistant_bridge`
-
-Source: `/home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge/{adapter.py,service.py}`.
-
-- The bridge **does NOT run the LLM loop**. It translates the
-  `manyforge.assistant.provider_request.v0` envelope into a single OpenClaw
-  agent invocation.
-- OpenClaw runs its own agent loop server-side (with up to 3 concurrent
-  subagents) and emits its own chat-completion calls to vLLM.
-- The bridge sees ONE call per smoke-runner prompt. The per-turn
-  agentic traffic is invisible to the bridge — it's between OpenClaw and vLLM.
-- Two execution modes:
-  - **Gateway mode** (`OPENCLAW_USE_GATEWAY=true`): persistent OpenClaw
-    process holds the MCP wrapper; bridge POSTs to the gateway URL over the
-    SSH tunnel. **This is the production default.**
-  - **CLI mode**: bridge launches a fresh OpenClaw subprocess per request.
-    Used for ad-hoc debugging.
-
-#### Bridge-side periodic `/compact` (iter 32)
-
-The bridge tracks a per-process counter keyed by gateway session-key
-(`derive_gateway_session_key(payload)` = `conversationId + catalogHash + programRevision`).
-When `OPENCLAW_ASSISTANT_COMPACT_EVERY_N=N` is set in the environment,
-the bridge fires a `/compact` slash command to the gateway BEFORE
-forwarding every Nth user prompt on that session-key (skipping #1).
-Sequential — bridge waits for the compaction call to return before
-forwarding the actual user message.
-
-Rationale: OpenClaw's built-in auto-compaction (triggered by
-`agents.defaults.contextTokens` overflow precheck) hits an
-`already_compacted_recently` cooldown after the first overflow and
-stops working. Spacing compactions at known boundaries from the bridge
-sidesteps the cooldown entirely. Verified iter 32: 9 successive
-compactions, all succeeded, no cooldown blocks. The compaction model
-is configured via `agents.defaults.compaction.model` in
-`/sandbox/.openclaw/openclaw.json` — set to `inference/cosmos-reason2-8b`
-to route compaction through the local Cosmos model rather than the
-unreachable default `gpt-5.5`.
-
-Tunables:
-
-- `OPENCLAW_ASSISTANT_COMPACT_EVERY_N` (int, default 0 = off): bridge
-  fires `/compact` on session-counts `N+1, 2N+1, 3N+1, …`. The first
-  request on a session-key never compacts (nothing to compact yet).
-- `OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S` (float, default 120): timeout
-  for the compact call itself. If exceeded the failure is logged and
-  the user request still goes through.
-
-Telemetry (`_log_event` JSONL on bridge stdout):
-
-- `openclaw_compact_fire_started` — when the compact call is dispatched
-- `openclaw_compact_fire_succeeded` — when the compact call returns
-- `openclaw_compact_fire_failed` — when the compact call raises (with
-  the exception class + message)
-
-### Production default = OpenClaw lane
-
-Per memory `project_lane_parity_cosmos8b.md` (2026-05-07): OpenClaw lane
-beats the direct lane 9/9 vs 1/9 on the lane-parity probe with Cosmos-8B.
-The smoke corpus best result (iter 32, 51/66 = 77.3 % under chain-session-on
-with bridge-fired periodic `/compact`) was measured on the OpenClaw lane.
+- The **direct lane** runs the agent loop in the bridge (`manyforge_assistant_bridge/bridge.py`) and emits N chat-completions per Composer prompt — every per-turn call passes through hop 4 (vllm-proxy).
+- The **OpenClaw lane** runs the agent loop **server-side in OpenClaw**. The bridge sees one call per Composer prompt; the per-turn traffic between gateway and vLLM is invisible to the bridge but still passes through the vllm-proxy.
+- **Composer always sends top-level `enable_thinking: False`** in its provider envelope (see `manyforge_composer/backend/assistant_provider.py`), regardless of the model's chat template. vLLM treats the top-level field as the source of truth and ignores `chat_template_kwargs.enable_thinking` when both are present. The proxy mirrors the chat_template_kwargs decision back to the top level when `OPENCLAW_PROXY_FORCE_ENABLE_THINKING` is set — without that mirror, thinking-on profiles silently revert to thinking-off (observed empirically on cosmos-reason2-8b 2026-05-31).
+- The bridge's **session key** is `derive_gateway_session_key(payload)` = `conversationId + catalogHash + programRevision`. All bridge-side counters (compact counter, loop detector) are keyed by this. Catalog rotation = new session = counters reset.
 
 ---
 
-## The vllm-proxy (logger + mutator)
+## B. Configurable knobs, by impact
 
-Source: `/home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/scripts/proxy/vllm-proxy.py`.
-(Was `scripts/proxy/vllm-proxy.py` before iter 21 — renamed +
-relocated when its role grew from pure logging into the load-bearing
-mutator that ships max_tokens injection in the production recipe.)
+Knobs are grouped by **owning component**. Within each group they are listed in **rough order of operational impact** for the current production stack.
 
-A single-process Python HTTP reverse proxy that sits between *any*
-chat-completions caller and vLLM. It's not a bridge — it doesn't understand
-the manyforge envelope or run an agent loop. It just forwards HTTP requests
-to vLLM, with two responsibilities:
+### B.1 vLLM launch flags (per-profile in `serving/launch.sh`)
 
-1. **Logging (always on).** Every chat-completion request and response is
-   appended to a JSONL file with the full bodies (parsed when JSON, raw
-   excerpt otherwise), mutation diffs, response status and headers, and
-   per-call wall-clock latency. The smoke runner and ad-hoc debugging
-   workflows both read this file by byte-offset diff per request to scope
-   the per-call view. **Logging is the proxy's original purpose and is
-   never disabled.**
-2. **Mutation (opt-in via env vars).** When configured, the proxy rewrites
-   the outbound request body before forwarding to vLLM. The single
-   load-bearing mutation in the production recipe is `max_tokens=2048`
-   injection — without it, OpenClaw → vLLM traffic carries no bound and
-   thinking-on generations run for many minutes per turn. Other knobs
-   (thinking_token_budget, tool_choice, user-message suffix, …) are used
-   for ad-hoc experiments without rebuilding any stack component.
+Each profile is a case branch in `serving/launch.sh`. Adding a profile requires
+matching edits to `serving/config.sh` (sizing) AND `serving/launch.sh` (vLLM
+args). The slug must be identical between the two files; it is also the
+`served-model-name` advertised by vLLM.
 
-### What it observes
+| Flag | Default for cosmos-reason2-8b | What it controls | When to change |
+|------|-------------------------------|------------------|---------------|
+| `--tool-call-parser` | `hermes` | Parser that extracts `tool_calls[]` from raw decode output. Must match the chat-template's tool emission format. | Switch to `qwen3_coder` for Qwen3.6-family or Nemotron-Omni (XML tool calls); `qwen3_xml` for stock Qwen3.6 template; `gemma4` for Gemma-4. Wrong choice → tool_calls always empty → infinite agent loop. |
+| `--reasoning-parser` | `qwen3` | Parser that extracts the `<think>…</think>` envelope into the `reasoning` field. | Match to the model family. Empty (no flag) lets thinking bleed into `content`. **The bridges only consume `choices[0].message.content`** — if you use a reasoning parser, thinking is hidden from the bridge. Often that is what you want (clean tool-call extraction); for the omni instruct profile we explicitly drop the parser so content carries everything. |
+| `--default-chat-template-kwargs` | `{"enable_thinking":true}` | Default value of `chat_template_kwargs.enable_thinking` when the caller omits it. | This is the **server-side default** — clients override per-request. See §C for the full thinking subsystem. |
+| `--override-generation-config` | `{"temperature":0.2,"top_p":0.95}` | Server-wide sampling defaults. Caller-supplied values still win. | Match to the model card's vendor recipe; the historical regression cases for omni and 35B were caused by greedy (`top_k=1` / `temperature=0`) sampling on thinking-off, which produces null-arg tool-call loops. |
+| `--moe-backend` | _(unset, default oracle)_ | MoE kernel selection. On SM110 NVFP4 the oracle picks `FLASHINFER_TRTLLM` or `FLASHINFER_CUTEDSL`; `triton` and `flashinfer_cutlass` are rejected (verified 2026-06-01). For NVIDIA W4A16 quant we force `marlin` because CUTEDSL requires full-NVFP4 activations. | Only override when a profile comment explicitly says so. **SM110 has limited support** — verify with vLLM oracle logs before relying on a hand-picked backend. |
+| `--kv-cache-dtype` | `fp8` | KV-cache precision. `fp8` halves footprint vs `auto` (bf16) at a small quality cost; `auto` for highest fidelity. | Stay on `fp8` for all production profiles on Thor (KV pool is the binding constraint). Bump to `auto` only on a sizing experiment. |
+| `--quantization` | _(unset, weights are pre-quantized)_ | Forces a specific quant scheme for runtime. `modelopt` for NVIDIA ModelOpt-quantized weights; `nvfp4` is implied by file format on most quants. | Set when the model card requires it (e.g. NVIDIA Qwen3.6-35B-A3B-NVFP4 needs `modelopt`). |
+| `--enable-prefix-caching` | _(on by default for 35B / Gemma / Nemotron, off for Cosmos 2B/8B)_ | Server-side prefix-cache for shared turn prefixes. | Leave alone unless you measure a regression — turning it on for chat workloads is nearly free. |
+| `--enable-chunked-prefill` | _(varies)_ | Splits prefill across decode steps. | Required for some MoE profiles (35B) to avoid scheduler stalls. Profile comments call this out. |
+| `--enforce-eager` | _(on for cosmos profiles + 35B)_ | Disables CUDA graphs. Costs 10-20% throughput in steady state but bounds first-token latency. | Default on for VLM profiles where the ViT path doesn't graph cleanly. Turn off only after measuring a clean CUDA-graphs run. |
+| `--mamba_ssm_cache_dtype` | _(required `float32` for Nemotron-H hybrids)_ | SSM cache precision for Mamba layers. | **Mandatory** for `nemotron3-nano-*-bf16` profiles — wrong dtype crashes the SSM kernel at boot. |
+| `--attention-backend` | `flashinfer` | Attention kernel selection. SM110 requires FlashInfer for FP8 KV regardless of head_dim. | Stay on `flashinfer`. `flash_attn` works only at head_dim=128 in BF16 KV mode; crashes on FP8. |
+| `--speculative-config` | `{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}` for 35B | Speculative decoding params. MTP heads are baked into the weights for Qwen3.6 35B and Qwen3.6 27B-FP8; absent for Nemotron Nano family (see memory `project_nemotron3_mtp_availability.md`). | Match to model card. K=3 is NVIDIA's Spark recommendation; K=2 has historically been TEB-cleaner on FP8 KV. |
+| Env: `VLLM_USE_FLASHINFER_MOE_FP4` | `0` for 35B-NVIDIA | Toggles FlashInfer NVFP4 MoE backends. NVIDIA W4A16 needs `=0` so the oracle picks Marlin. | Profile comments are the ground truth — don't flip without reading the rationale. |
+| Env: `VLLM_USE_FLASHINFER_MOE_FP16` | `0` for omni + 35B-NVIDIA | Routes unquantized BF16 MoE through Triton (dodges SM100-only CUTLASS tile crash on SM110). | Always 0 on Thor for these profiles. |
+| Env: `VLLM_FP8_MOE_BACKEND` | `flashinfer_cutlass` for 35B-NVIDIA | FP8 MoE kernel selection. | NVIDIA Spark recipe. Leave alone unless explicitly probing alternatives. |
+| Env: `VLLM_NVFP4_GEMM_BACKEND` | `flashinfer-cutlass` for 35B-NVIDIA | NVFP4 GEMM kernel. SM110-compatible path. | Stay on `flashinfer-cutlass` for SM110 NVFP4. |
+| Env: `CUTE_DSL_ARCH` | `sm_110a` for 35B-NVIDIA | Override CUTE-DSL arch detection. JetPack reports the GPU arch inconsistently; this pins it. | Set to `sm_110a` for any FlashInfer CUTEDSL path on Thor. |
+| Env: `FLASHINFER_DISABLE_VERSION_CHECK` | `1` for 35B-NVIDIA | Bypasses FlashInfer's version sanity check (which trips on Thor's bundled libs). | Leave on for SM110 profiles using CUTEDSL. |
 
-| Lane | Proxy sees per smoke-prompt |
-|------|------------------------------|
-| Direct (manyforge_assistant_bridge) | every per-turn chat-completion call (the bridge runs the loop and proxies through this proxy if `BRIDGE_UPSTREAM_BASE_URL=http://127.0.0.1:8000/v1`) |
-| OpenClaw | every per-turn chat-completion call from the OpenClaw agent loop. The bridge isn't involved per-turn. |
+### B.2 Proxy mutations (`manyforge/scripts/proxy/vllm-proxy.py`)
 
-In iter 20's setup, the proxy logs **183–286 chat-completions per 66-case
-run** (avg 3-4 turns per case, depending on agent-loop depth).
+All proxy mutations are **opt-in**. With every env var unset, the proxy is a
+pure logger. Most production stacks set 2-3 of the knobs below; the iter-32
+production recipe sets `OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048` and
+`OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512` only.
 
-### Mutation knobs (env vars)
+| Env var | Default | What it controls | When to use it |
+|---------|---------|------------------|----------------|
+| `OPENCLAW_PROXY_LISTEN_PORT` | `18790` (prod sets `8000`) | Listen port. | Override to bind on the same port your gateway/bridge dial. |
+| `OPENCLAW_PROXY_BIND` | `127.0.0.1` (prod sets `0.0.0.0`) | Listen address. **Must be `0.0.0.0` if anything in a Docker container (e.g. Composer) needs to reach it via `host.openshell.internal`**. | Always `0.0.0.0` in production. |
+| `OPENCLAW_PROXY_UPSTREAM` | `http://127.0.0.1:18789` (prod sets `http://127.0.0.1:8050`) | URL where vLLM (or another proxy) is listening. | Point at the vLLM container's port. |
+| `OPENCLAW_PROXY_LOG_PATH` | `/tmp/openclaw_proxy.jsonl` | JSONL audit log path. Truncated on proxy start. | Set a per-iter path so you can compare runs side-by-side. |
+| `OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=N` | unset | Rewrite **or inject** `max_tokens` / `max_completion_tokens` to N on every chat-completions request. The **injection** path is load-bearing: OpenClaw → vLLM omits the field, so without injection vLLM defaults to the model's full context window and runs unbounded under thinking-on (one turn ≈ tens of minutes). | **Always set in production**, value 2048. Bump to 4096 only if measuring a model that truncates answers; reducing below 1024 cuts off legitimate tool-call payloads. |
+| `OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=N` | unset | Inject `chat_template_kwargs.thinking_token_budget=N` on every call. Soft cap on the `<think>…</think>` envelope when the chat template honors it (Qwen3-VL, Cosmos, Gemma-4 honor it; Nemotron does not). | **Set to 512 in production** (Qwen3-VL technical report sweet spot for 8B-class robotics tool calls — ~95% accuracy, ~half the latency of unbounded; 256 drops ~6 pts accuracy; 1024 is overkill). |
+| `OPENCLAW_PROXY_FORCE_ENABLE_THINKING` | unset | Inject `chat_template_kwargs.enable_thinking` AND top-level `enable_thinking` (mirror added 2026-05-31). Modes: `on`, `off`, `alternating-off-on-even` (don't mutate odd turns / leave vLLM default; force false on even turns). | **Off by default.** Use `on` to force thinking everywhere (override Composer's top-level `enable_thinking:False`); use `off` to silence a thinking-on profile during a tool-call sweep; use the alternating mode only for `thinking-on→tool-emit` patterns. |
+| `OPENCLAW_PROXY_FORCE_TOOL_CHOICE` | unset | Override `tool_choice` per call. Modes: `required` (always inject `required`), `auto` (always inject `auto`), `required-first` (only on turn 1 of a conversation, then pass through — lets the loop exit), `alternating` (odd turns), `alternating-on-even` (even turns). | Use `required` only during iter-experiments — the iter-34 negative result showed `required` every turn prevents the agent from ever exiting. `required-first` is the safer A/B. |
+| `OPENCLAW_PROXY_OVERRIDE_TEMPERATURE` | unset | Overwrite `temperature` on every call. | Set to 0 to force determinism while debugging a flaky case; leave unset in production (vLLM owns the default). |
+| `OPENCLAW_PROXY_OVERRIDE_TOP_P` | unset | Overwrite `top_p` on every call. | Same as above — debug only. |
+| `OPENCLAW_PROXY_USER_MESSAGE_SUFFIX="…"` | unset | Append a fixed string to the LAST user message on every call. Idempotent (skips appending if the suffix is already there). | Used in iter 16 ("read first" hint) to inject a cross-cutting plan-then-execute nudge. Today it is deprecated in favour of in-prompt rule blocks; keep it available for one-shot A/B probes. |
+| `OPENCLAW_PROXY_USER_SUFFIX_FIRST_TURN_ONLY` | unset | When set to `1` / `true`, only inject the user-suffix on the first turn of a conversation (no prior assistant messages). | Pair with `_USER_MESSAGE_SUFFIX` when chains are long enough that a per-turn nudge is overkill. |
+| `OPENCLAW_PROXY_LOOP_REFLECT_AT` | `4` | When the same tool name has been called this many times across the conversation, **inject** a reflection user message after the last tool result: "STOP. You called X N times… choose (a) different tool, (b) change the failing arg, or (c) clarifying question." Marked with `[loop-reflection]` so it never injects twice. **Round 10, 2026-06-01.** | Lower (e.g. 3) for faster intervention; raise to disable (`0`). Threshold counts ALL turns in `messages[]`, so chain-on sessions accumulate quickly. |
+| `OPENCLAW_PROXY_LOOP_STOP_AT` | `8` | When the same tool name has been called this many times across the conversation, **hard-stop** the agent loop: synthesize an SSE assistant response with content "I have called X N times… stopping to avoid runaway." OpenClaw treats this as a normal text completion and exits the loop. | Lower to fail-faster (smoke triages); raise (`0` to disable). Round 10's two-stage design: reflection at 4 gives the model one chance after fresh advice; hard stop at 8 caps total GPU spend. |
+| `OPENCLAW_PROXY_LOOP_TOOL_THRESHOLD` | `0` (legacy) | **Legacy single-threshold env**, still honored. If set to N, maps to `_STOP_AT=N` and disables reflection (preserves pre-round-10 behavior). | Only set in a back-compat test harness. New deployments use the two-knob form. |
 
-Active per request when set; pure pass-through when unset.
+**Per-request socket timeout** is hard-coded to 200 s in
+[`vllm-proxy.py:619`](../scripts/proxy/vllm-proxy.py). The smoke runner's
+case timeout is 244 s; the proxy's 200 s ensures it fails first and releases
+the upstream KV slot. Don't raise either without raising both.
 
-| Env var | Effect |
-|---------|--------|
-| `OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=N` | Inject or rewrite `max_tokens` (or `max_completion_tokens`) to N. **Inject is load-bearing**: OpenClaw → vLLM omits the field, so without injection vLLM defaults to model max context (32K) and runs unbounded. |
-| `OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=N` | Inject `chat_template_kwargs.thinking_token_budget=N`. Soft cap on internal CoT length when the chat template honors it. |
-| `OPENCLAW_PROXY_FORCE_ENABLE_THINKING=on\|off\|alternating-…` | Inject `chat_template_kwargs.enable_thinking`. Alternating modes use turn parity (counted from `messages[]` assistant-role count). |
-| `OPENCLAW_PROXY_FORCE_TOOL_CHOICE=required\|auto\|required-first\|alternating[-on-even]` | Override `tool_choice` per call. Turn-aware modes count assistant messages. |
-| `OPENCLAW_PROXY_USER_MESSAGE_SUFFIX="…"` | Append text to the last user message. Iter-16's "read-first" hint was injected this way. |
-| `OPENCLAW_PROXY_OVERRIDE_TEMPERATURE`, `_TOP_P`, `_USER_SUFFIX_FIRST_TURN_ONLY` | Misc overrides. |
+### B.3 Bridge config (`manyforge/openclaw_assistant_bridge/`)
 
-### Infrastructure fixes (shipped iter 18b)
+Loaded in `service.py::_config_from_env()` and (for cluster identifiers) at
+module import. Bridge restart required after env changes; Composer + gateway
+unchanged.
 
-- `_OVERRIDE_MAX_TOKENS` was rewrite-only before iter 18b — silently no-op
-  against OpenClaw's missing-field requests. Now injects with `"injected": true`
-  in the audit record.
-- Per-request socket timeout is 200 s (was 600 s). Smoke runner's case timeout
-  is 244 s; the proxy's 200 s ensures it fails first and releases the upstream
-  KV slot before the runner gives up. Prevents zombie-thread accumulation.
+| Env var | Default | What it controls | When to use it |
+|---------|---------|------------------|----------------|
+| `OPENCLAW_ASSISTANT_BRIDGE_HOST` | `127.0.0.1` | Bind address. | `0.0.0.0` if Composer is in a remote container and dialing across the bridge. |
+| `OPENCLAW_ASSISTANT_BRIDGE_PORT` | `8200` | Listen port for the provider HTTP contract. | Always `8200` in production. |
+| `OPENCLAW_ASSISTANT_USE_GATEWAY` | `false` | When `true`, dispatch via the in-sandbox **persistent gateway** (HTTP at `:18789`). When `false`, shell-out to `openclaw` CLI per request. | **Always `true` in production.** CLI mode is a debugging fallback. |
+| `OPENCLAW_ASSISTANT_AGENT` | `main` | OpenClaw agent profile name (the agent ID in `openclaw.json`). | Always `manyforge-composer` in production. |
+| `OPENCLAW_ASSISTANT_TIMEOUT_S` | `120` | End-to-end timeout for the OpenClaw agent invocation. | `300` in production — legitimate runs can hit 100-200 s under thinking-on. |
+| `OPENCLAW_ASSISTANT_GATEWAY_PORT` | `18789` | Port inside the sandbox where the gateway listens (forwarded to host by SSH netns). | Leave alone. |
+| `OPENCLAW_ASSISTANT_GATEWAY_MAX_TOKENS` | `4096` | `max_tokens` value forwarded to the gateway request envelope. Note: this is **a different field** than the proxy's `_OVERRIDE_MAX_TOKENS`; the proxy still rewrites/injects on the chat-completions hop. | Leave alone — `4096` here is the bridge → gateway hint; the proxy's `2048` is what reaches vLLM. |
+| `OPENCLAW_ASSISTANT_GATEWAY_TEMPERATURE` | unset | Optional per-request `temperature` for the gateway envelope. Default None → not added. | Probe-only. The bridge intentionally omits sampling fields so vLLM's `--override-generation-config` owns them. |
+| `OPENCLAW_ASSISTANT_GATEWAY_TOP_K`, `_TOP_P` | unset | Same as above. | Probe-only. |
+| `OPENCLAW_ASSISTANT_GATEWAY_ENABLE_THINKING` | unset | Optional boolean. If set, added to `chat_template_kwargs` in the gateway envelope. Note: **the proxy's mirror is the proven path** — this flag exists as an alternative but is less tested. | Use the **proxy's** `OPENCLAW_PROXY_FORCE_ENABLE_THINKING` for production toggles. This bridge-side var is here for symmetry. |
+| `OPENCLAW_ASSISTANT_COMPACT_EVERY_N` | `0` (disabled) | When set to N>0, the bridge POSTs `/compact` to the gateway **before** every Nth user prompt on this session key (skipping #1). Counter resets on bridge restart. **Iter-32 production setting.** | `2` in production — keeps chain-on sessions from overflowing the 256K context. Disable only if measuring an isolated baseline. |
+| `OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S` | `120` | Timeout for the `/compact` call itself. If exceeded the failure is logged and the user request still goes through. | Leave alone — compaction normally completes in 10-30 s. |
+| `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` | `5` | Bridge-side **cross-turn loop detector** (round 8, 2026-05-31). When the request's `messages[]` history has 5+ assistant turns calling the same tool, the bridge short-circuits with a synthetic stop response (status 200, message "I have called X N times… stopping to prevent a runaway loop.", `warnings: ["loop_detected_stopped: …"]`). | This catches loops the proxy's per-conversation threshold would miss when Composer restarts conversations indefinitely. Leave at 5; raise to `0` to disable. |
+| `OPENCLAW_ASSISTANT_SANDBOX` | `my-assistant` | NemoClaw sandbox name. | Match the actual sandbox; default is the one the provisioner installs. |
+| `OPENCLAW_ASSISTANT_NAMESPACE` | `openshell` | K8s namespace inside the cluster gateway container. | Leave alone. |
+| `OPENCLAW_ASSISTANT_CONTAINER` | `agent` | K8s container name. | Leave alone. |
+| `OPENCLAW_ASSISTANT_CLUSTER_CONTAINER` | `openshell-cluster-nemoclaw` | Docker container hosting the k3s cluster + gateway runtime. | Leave alone unless you renamed it. |
+| `OPENCLAW_ASSISTANT_SANDBOX_USER` | `sandbox` | Linux user for `kubectl exec` shell. | Leave alone. |
+| `OPENCLAW_ASSISTANT_BIN` | `openclaw` | Path to the `openclaw` binary on the host (CLI fallback). | Override when testing a non-default install. |
+| `OPENCLAW_ASSISTANT_LOCAL` | `false` | When `true`, run the agent locally instead of via cluster `kubectl exec`. | Debug-only — bypasses the sandbox's Landlock + seccomp + egress policy. |
+| `OPENCLAW_ASSISTANT_THINKING` | `off` | Adapter-side hint for OpenClaw's `--thinking` CLI flag. **Only used in CLI mode.** | Gateway mode ignores this. |
+| `OPENCLAW_ASSISTANT_AUTO_TOOL_WINDOW` | `true` | When `true` in CLI mode, the bridge narrows the per-request allowlist by inferring tools the prompt needs. | Leave on for CLI mode. Gateway mode does not narrow (incompatible with the persistent MCP wrapper). |
+| `OPENCLAW_ASSISTANT_ALLOWED_TOOLS_FILE` | `/tmp/manyforge-openclaw-allowed-tools.txt` | Where the CLI-mode allowlist is written for the MCP wrapper to read. | Leave alone. Stale entries cause the symptom in the runbook §3 ("not exposed by this request's tool window"). |
+| `OPENCLAW_ASSISTANT_COMPOSER_BASE` | `http://127.0.0.1:9000` | Composer URL for principal-binding registration (live tool-call streaming). | Override when Composer runs on a non-default port. |
+| `OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_ENABLED` | `false` | Opt-in: after N consecutive failures, fail fast with 503 instead of dispatching to a sick gateway. | Enable in production reliability runs; leave off for development. |
+| `OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_THRESHOLD` | `5` | Consecutive failures before opening. | Tune by environment. |
+| `OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_COOLDOWN_S` | `30` | Half-open probe interval. | Tune by environment. |
+| `OPENCLAW_ASSISTANT_METRICS_ENABLED` | `false` | When `true`, mount `/metrics` Prometheus endpoint on the bridge port. | Enable for production observability. |
+| `OPENCLAW_ASSISTANT_LOG_LEVEL` | `info` | Uvicorn log level. | `debug` for new-incident triage. |
 
-### Log file
+**Bridge-side synthetic-clarification short-circuit** (`service.py:355-411`,
+round 7, 2026-05-31): pattern-matches `add a <kind>` / `insert a <kind>` /
+`wrap with <kind>` (kind ∈ parallel, fallback, sequence, repeat, retry,
+inverter; word count ≤ 4); returns a canned "Which parent? Which position?"
+clarification without ever invoking OpenClaw. No env var to disable today — it
+is hard-coded and intentionally narrow. To suppress: edit the `cf_kinds`
+tuple in `service.py` or the `starts_add_verb` gate.
 
-JSONL at `/tmp/<custom>_proxy.jsonl` (set with `OPENCLAW_PROXY_LOG_PATH`).
-Each entry has `request.{method,path,headers,body,mutation}` and
-`response.{status,headers,body,duration_ms}`. The mutation block lists what
-the proxy changed and the before/after values, so each run is auditable.
+### B.4 Composer config (sibling `dev_ws/src/manyforge/`)
+
+Composer is owned by the manyforge repo; only the parts that interact with
+this pipeline are documented here. Production runs use the
+`scripts/lib/assistant.sh` launcher.
+
+| Env var / setting | Default | What it controls |
+|-------------------|---------|------------------|
+| `ASSISTANT_PROVIDER` | `openclaw` | Selects which bridge Composer hits. Values: `openclaw` (production, `:8200`) or `nemoclaw` (direct lane, `:8100`). |
+| `MODEL_PROFILE` | `cosmos-reason2-8b` | Profile slug for `serving/start-model.sh` and `configure-local-provider.sh`. The `served-model-name` advertised by vLLM equals this slug. |
+| `START_VLLM_PROXY` | `true` | Whether the launcher starts the vllm-proxy mutator. When `false`, the proxy is assumed externally managed. |
+| `OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS` | `2048` | Forwarded to the proxy. **Load-bearing.** See §B.2. |
+| `OPENCLAW_PROXY_THINKING_TOKEN_BUDGET` | `512` | Forwarded to the proxy. See §B.2. |
+| `OPENCLAW_ASSISTANT_COMPACT_EVERY_N` | `2` | Forwarded to the bridge. See §B.3. |
+| `OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S` | `120` | Forwarded to the bridge. |
+| `OPENCLAW_ASSISTANT_METRICS_ENABLED` | `false` | Forwarded to the bridge. |
+| `ASSISTANT_TIMEOUT_S` | `300` | End-to-end UI timeout (Composer-side). After this Composer surfaces "NemoClaw assistant timed out after 300.000s". |
+| `ASSISTANT_MAX_TURNS` | `16` | Direct-lane only: maximum agent loop turns. |
+| `DROP_CACHES` | `true` | Whether `drop_caches` runs after stop (Thor unified-memory hygiene). |
+| `PROVISION_OPENCLAW_SANDBOX` | `true` | Whether the launcher re-runs the provisioner before bringing up the bridge. |
+| `VLLM_CONTAINER` | `manyforge-e2e-vllm` | Docker container name for vLLM. |
+| `VLLM_MODEL_READY_TIMEOUT_S` | `900` | First-launch grace (15 min); first-time NVFP4 JIT compile can take 60+ min on a fresh image (see memory `project_v81_first_launch_timing.md`). |
+
+**Composer's `enable_thinking` invariant** (load-bearing gotcha): Composer's
+`NemoClawAssistantProvider` always sends `enable_thinking: false` at the
+**top level** of the provider envelope, regardless of the model's chat
+template. This is a deliberate design decision (Composer treats thinking
+as opt-in). vLLM treats the top-level field as the source of truth and
+**ignores** `chat_template_kwargs.enable_thinking` when both are present.
+The proxy's `_FORCE_ENABLE_THINKING` mode mirrors its chat_template_kwargs
+decision to the top level (`vllm-proxy.py:285-292`); without that mirror,
+thinking-on profiles silently revert to thinking-off when Composer is the
+client.
+
+### B.5 Smoke corpus knobs (`manyforge/scripts/debug/smoke_corpus_runner.py`)
+
+| Flag | Default | What it controls |
+|------|---------|------------------|
+| `--corpus` | `scripts/debug/smoke_corpus.yaml` | Path to the corpus YAML. |
+| `--composer` | `http://127.0.0.1:9000` | Composer base URL. |
+| `--filter <regex>` | unset | Only run cases whose `id` matches the regex. Used to scope to a single failure pattern. |
+| `--include-future` | off | Include cases marked `future:` true in the corpus (P3+, future-feature cases). |
+| `--runtime-flags <csv>` | empty | Enable specific runtime tier names for per-case gating. |
+| `--skip-fixture-cases` | off | Skip cases marked as fixture probes. |
+| `--report <path>` | unset | Write JSON report to this path (pass/fail per case + aggregates). |
+| `--verbose` | off | Print per-case detail to stdout. |
+| `--enable-recovery-turn` | off (default-on in production runbook) | When a case fails AND chat returned 200, send one generic follow-up. Cases that pass on the recovery turn are scored `recovered-pass` ([SMOKE-ITER-RUNBOOK.md `--enable-recovery-turn` section](./SMOKE-ITER-RUNBOOK.md)). Iter 33 measured +10 cases salvaged this way. |
+| `--no-chain-session` | off | Give each chain step its own `conversationId`. Without this, PnP_01..PnP_20 share a session and one early failure can cascade. **Iter 32 + bridge compaction made chain-on viable**; only use `--no-chain-session` for chain-off baseline comparison. |
+
+The runner reconfigures stdout to line-buffered at import (`smoke_corpus_runner.py:48`) so `tail -f /tmp/iterN_runner.log` streams verdicts realtime — see [SMOKE-ITER-RUNBOOK.md §4](./SMOKE-ITER-RUNBOOK.md) for the rationale.
 
 ---
 
-## Tool surface — where each piece lives
+## C. The "thinking" subsystem
 
-### 1. Tool schema (what the model sees as a JSON Schema)
+The single most important behavior the operator can break by accident.
+Behavior depends on the interaction of **four** layers:
 
-`/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_tool_schemas.py`
+1. **Model chat template** — owns the `<think>…</think>` envelope shape.
+2. **vLLM server-side default** — `--default-chat-template-kwargs '{"enable_thinking":…}'`.
+3. **Per-request mutation in the proxy** — `OPENCLAW_PROXY_FORCE_ENABLE_THINKING`.
+4. **Caller-supplied top-level `enable_thinking`** in the request body (Composer always sets `false`).
 
-Defines `_TREE_DRAFT_INSERT_NODE_SCHEMA`,
-`_TREE_DRAFT_CHANGE_NODE_KIND_SCHEMA`, `_SCENE_DRAFT_*_SCHEMA`, etc.
-Each is a Python dict with a `description` field that the model reads
-as the OpenAI tool description.
+### C.1 vLLM precedence rules (verified 2026-05-31 on cosmos-reason2-8b)
 
-The **registry** (line ~1148) maps tool ids to schemas:
+When the request body contains BOTH `chat_template_kwargs.enable_thinking` AND
+a top-level `enable_thinking`, **vLLM uses the top-level value**. The
+chat_template_kwargs path is honored only when top-level is absent. This is
+why Composer's `enable_thinking:false` at the top level cancels a profile's
+thinking-on default unless the proxy mirrors a `true` to the top level too.
+
+The 2026-05-31 patch (`vllm-proxy.py:285-292`) handles this by writing both
+fields together when `_FORCE_ENABLE_THINKING` is set:
 
 ```python
-TOOL_SCHEMAS = {
-    "tree_draft_insert_node":      _TREE_DRAFT_INSERT_NODE_SCHEMA,
-    "tree_draft_change_node_kind": _TREE_DRAFT_CHANGE_NODE_KIND_SCHEMA,
-    ...
-}
+ctk["enable_thinking"] = target_value          # chat_template_kwargs (legacy path)
+parsed["enable_thinking"] = target_value       # top-level (vLLM honors this)
 ```
 
-`enrich_assistant_tool_descriptor()` (line ~1172) merges these schemas onto
-the per-mode tool list before serving them to the bridge.
+If you only mutate one, you get silent thinking-off on a thinking-on profile.
 
-### 2. Tool handlers (what runs when the model calls a tool)
+### C.2 `reasoning_parser` vs `reasoning_effort`
 
-`/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/routes_assistant.py`
+- `--reasoning-parser` is a **vLLM server flag**. It tells vLLM how to split
+  the model's output into `reasoning` and `content`. Set per profile in
+  `serving/launch.sh`. Available parsers: `qwen3`, `nano_v3`, `nemotron_v3`,
+  `deepseek_r1`, `gemma4`.
+- `reasoning_effort` is a **per-request field** (OpenAI-style). **Not plumbed
+  through this stack** today — Composer and the bridges never set it. If you
+  need per-request reasoning control, use `chat_template_kwargs.enable_thinking`
+  / `thinking_token_budget` instead.
 
-Each tool has an `_apply_<tool_id>` function, e.g. `_apply_tree_draft_insert_node`
-(line 2333). The dispatcher at line ~1299 routes tool ids to handlers.
+### C.3 `thinking_token_budget`
 
-Helpers:
+Soft cap on the `<think>…</think>` envelope. Honored by:
 
-- `_find_tree_node_ref(tree, name)` — returns `(node, parent, sibling_index)`
-  for any name in the tree. Will be reused for `afterName`/`beforeName`.
-- `_resolve_node_name_alias("@root", tree)` — root-name shortcut.
-- `_collect_tree_node_names(tree)` — for 4xx response hints.
-- `_insert_index(arguments, child_count)` — bounds-checks a passed `index`.
+- Qwen3-VL family chat template (Cosmos 2B/8B, Qwen3.5/3.6, …)
+- Gemma-4 chat template
+- Some Nemotron templates (verify per profile)
 
-### 3. Tool recovery (4xx response shaping)
+**Not** honored by:
 
-`/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_recovery.py`
+- Nemotron-3-Nano-Omni (the template doesn't gate on this kwarg)
+- Stock OpenAI / Llama templates
 
-When a tool call fails with a structural error, recovery hints get attached
-to the error response so the model can self-correct on the next turn.
-Existing recovery classes: `arity_insufficient`, `unknown_parent_name`,
-`unknown_node_kind`, …. **Adding the "X-is-not-a-parent → use afterName" hint
-plugs in here.**
+Production value: **512** for 8B-class robotics tool calls (Qwen3-VL tech
+report sweet spot — ~95% accuracy, ~half the latency of unbounded).
 
-### 4. Node catalog (the runtime BT primitives)
+### C.4 Per-profile thinking defaults (current)
 
-`/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_behavior/resources/node_catalog.yaml`
+| Profile | `--default-chat-template-kwargs` | Reasoning parser | Notes |
+|---------|--------------------------------|------------------|-------|
+| `cosmos-reason2-2b` | _(unset)_ | _(none)_ | Template defaults apply; thinking opt-in. |
+| `cosmos-reason2-8b` | `{"enable_thinking":true}` | `qwen3` | **Thinking-on** since iter 17 (2026-05-09). Matches post-training distribution. Production default. |
+| `nemotron3-nano-4b-bf16` | `{"enable_thinking":false}` | _(none)_ | Tool-call regime per HF card. |
+| `nemotron3-nano-omni-30b-a3b-nvfp4` | `{"enable_thinking":false}` | _(none, dropped 2026-05-06)_ | Bridges consume `content`; reasoning parser would route output into `reasoning` and the lane would return empty. |
+| `nemotron3-nano-omni-30b-a3b-nvfp4-reasoning` | `{"enable_thinking":true}` | `nemotron_v3` | Reasoning variant; consumers must read `reasoning` not `content`. Today the bridges do not. |
+| `qwen3.6-35b-a3b-nvfp4-nvidia` | `{"enable_thinking":true}` | `qwen3` | Iter-32 production sampling recipe + MTP K=3. |
+| `gemma4-31b-it-nvfp4` / `gemma4-26b-a4b-it` / `gemma4-e4b-it` | _(template defaults)_ | `gemma4` | Tool-call parser `gemma4`. |
+| `qwen3.5-9b-claude-distilled-nvfp4` | _(unset)_ | _(none)_ | No-think variant of the template. |
+| `qwen3.6-27b-fp8-mtp-kvfp8` | _(template defaults)_ | _(none)_ | EXPERIMENTAL; MTP K=1. |
 
-YAML list of behavior-tree node kinds. Each entry has `id`, `name`, `category`,
-`description`, `parameters`, etc. The 6 runtime collision-object kinds we
-need to retag:
+### C.5 Session learnings on thinking (2026-05-31)
 
-| Line | id |
-|------|-----|
-| 447 | `add_collision_object` |
-| 517 | `upsert_collision_object` |
-| 589 | `remove_collision_object` |
-| 624 | `update_collision_object_pose` |
-| 669 | `attach_object_to_link` |
-| 723 | `detach_object_from_link` |
-
-The `description` field of each entry is what surfaces in the prompt's
-`nodeCatalog` array (id + kind + description only — `category`,
-`tags`, `parameters` etc. are stripped before reaching the model).
-
-### 5. Mode allowlist (which tools/node-kinds are exposed per mode)
-
-`/home/tndlux/workspaces/dev_ws/src/manyforge/examples/assistant_modes_scene_authoring.deployment.yaml`
-
-Each `assistant_modes.<mode>.catalog.{tools,nodes}` is the soft allowlist
-the bridge sends to the model. **Tool renames here flow through to all
-downstream lists.**
+- **Cosmos-Reason2-8B** needs thinking-on per iter 17. Running thinking-off is
+  OOD for the model and produces narration-mode collapse on action prompts.
+  The qwen3 reasoning parser was added 2026-05-31 to extract `<think>` blocks
+  before hermes parses content — without it, thinking bled into `content` and
+  produced ~30% narration / ~47% nodeName-dropped failures on v9.
+- **Nemotron-3-Nano-Omni instruct** (non-reasoning) profile uses thinking-OFF
+  deliberately: the bridges consume `content`, and the `nemotron_v3` reasoning
+  parser would otherwise route output into `reasoning`, leaving messages
+  empty.
+- **35B-NVIDIA** benefits from thinking-on + MTP K=3 + Marlin MoE. The
+  Spark recipe is the source of truth.
+- **Gemma-4 family** uses `gemma4` parsers for both tool calls and reasoning;
+  template-driven thinking is the default.
 
 ---
 
-## Smoke corpus mechanics
+## D. Loop detection / reflection injection (round 10, 2026-06-01)
 
-Source:
-`/home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus_runner.py`
-+ `smoke_corpus.yaml`.
+The **cascading defense** sits at two layers because the symptom appears at
+two layers:
 
-### Per-case loop
+1. **Within an OpenClaw agent loop** (one Composer prompt → many vLLM turns):
+   OpenClaw enforces a `per-turn 15-cap` budget, but the cap is per Composer
+   prompt. The model can still spend 15 turns re-trying the same tool with
+   the same args inside one prompt.
+2. **Across Composer prompts** (chain-on smoke / real-user multi-turn UI):
+   each Composer prompt is a fresh OpenClaw budget. The smoke runner / a
+   patient user can extend a same-tool-same-error loop indefinitely.
 
-For each case in `smoke_corpus.yaml`:
+The proxy and the bridge each defend one layer.
 
-1. Optionally reset Composer state (`/api/program/load forceDiscardOverrides:true`).
-2. POST `{message: <user_prompt>}` to `<composer>/api/assistant/chat` with
-   a per-case session key derived from
-   `conversationId + catalogHash + programRevision`.
-3. Parse the response: extract `toolCalls[].tool` and any answer text.
-4. Run the case's `expected.tools_called` / `expected.forbidden_tools`
-   / `expected.answer_must_contain` / `expected.state_after` rubrics.
-5. Record one of:
-   - `pass` — all expected tools fired with right args; no forbidden tools;
-     state_after matches; required answer-text substrings present.
-   - `recovered-pass` (`🛟`) — passed only after a recovery turn was injected.
-   - `soft-pass` (`🟡`) — answer-text rubric matched but tool-call rubric
-     didn't (used for clarification cases that emitted prose without firing
-     tools).
-   - `fail` (`❌`) — anything else.
-6. Emit one log line: `<emoji> <case_id>  <wall_s>s  status=<…>  fail: [...]`.
+### D.1 Proxy defense (within one chat-completions call)
 
-### `--no-chain-session` flag
+`vllm-proxy.py:362-487`. Counts the most common assistant tool name in
+`messages[]`, considering **all** turns in the request envelope (which under
+chain-on smoke includes prior Composer prompts' history too).
 
-Default behavior is **chain-session ON**: PnP_01 → PnP_02 → … all share the
-same `conversationId`, so OpenClaw's session memory persists across chain
-steps. In iter 19/29, a failure in PnP_06 left broken state in the session
-and the remaining PnP_07–PnP_20 cascade-failed (cases dropped to 4/19 in
-PnP).
+| Trigger | Action |
+|---------|--------|
+| `top_count >= OPENCLAW_PROXY_LOOP_REFLECT_AT` (default 4) | **Inject** a `[loop-reflection]`-marked user message right after the last tool result, urging the model to (a) call a different tool, (b) change the failing argument, or (c) ask the user. Forward the mutated body. Marker prevents double-injection. |
+| `top_count >= OPENCLAW_PROXY_LOOP_STOP_AT` (default 8) | **Hard-stop**: synthesize an SSE `chat.completion.chunk` with finish_reason=stop and content "I have called X N times… stopping to avoid runaway. Please refine the request…". OpenClaw treats this as a normal text completion and exits the loop. |
 
-`--no-chain-session` overrides this: every chain step gets a fresh
-conversationId. Failures stay independent. This was iter 16/20's escape
-hatch — the chain-off win.
+Telemetry events appended to the proxy JSONL:
 
-**Iter 32 made chain-session-ON viable** without `--no-chain-session` by
-firing bridge-side `/compact` every 2nd request on the same session-key.
-Chain memory is preserved across steps, but accumulated context is
-periodically rolled up so it never overflows. PnP suite went 4/19 (iter 29
-chain-on no-compact) → 15/19 (iter 32 chain-on + compact). Real users
-chain prompts; iter 32 made the realistic production setup work, so we
-no longer pass `--no-chain-session` in the production recipe. The flag
-is still available for chain-off baseline comparisons.
+- `proxy_loop_reflection_injected` — round 4 fired, mutated body forwarded
+- `proxy_loop_hard_stop` — round 8 fired, synthetic SSE returned, no GPU spend
 
-### `--enable-recovery-turn` flag
+Why **both** triggers exist instead of one: a single hard stop at low N
+denies the model a chance to recover after seeing fresh advice. The two-stage
+design (reflect → wait one turn → stop) means the model gets exactly one shot
+at the reflection prompt before being cut off, capping total GPU spend
+predictably at `STOP_AT` turns per case.
 
-When a case fails its initial asserts AND the chat returned 200, the runner
-sends ONE generic follow-up message in the same conversation:
-- *Path A — 4xx recovery*: if any tool call hit a 4xx, send "the previous
-  call failed: `<err>`. Re-read the structured recovery fields and retry
-  with corrected arguments."
-- *Path B — no-tool-fired*: if zero successful tools fired but the case
-  expected one, send "the previous turn produced no tool call. Please call
-  the appropriate tool now."
+### D.2 Bridge defense (across multiple Composer prompts)
 
-Then re-asserts on the combined first+second turn observed log. Cases that
-pass on retry become `recovered-pass`. Same wording for every case; no
-per-case content. Iter 33 measured **+10 cases salvaged**, mostly PnP
-chain steps that had first-turn malformed args. Default-on from iter 33
-onward.
+`service.py:412-473`. Same counter logic, but in the bridge — fires
+**before** OpenClaw is invoked at all. Returns status 200 with a
+`warnings: ["loop_detected_stopped: …"]` payload that Composer renders as a
+normal model message and the smoke runner scores as a fail.
 
-### Effective rate vs first-try rate
+| Trigger | Action |
+|---------|--------|
+| `top_count >= OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` (default 5) | Synthesize a 200 response with a canned "I have called X N times… stopping to prevent a runaway loop. Please refine the request…" message. No OpenClaw invocation. `bridge_synthetic_loop_break` telemetry event. |
 
-```
-first-try = pass / total
-effective = (pass + recovered-pass + clarified-pass + soft-pass) / total
-```
+### D.3 Why this matters
 
-- Iter 20: 45/66 first-try (68.2 %), 49/66 effective (74.2 %) — chain-off, no recovery turn.
-- Iter 32: 47/66 first-try (71.2 %), 51/66 effective (77.3 %) — chain-on, no recovery turn.
-- Iter 33: 38/66 first-try (57.6 %), 48/66 effective (72.7 %) — chain-on, recovery turn (negative net result due to 7-case rubric tightening on Pattern A; +10 recovered, -13 from tightening).
+- OpenClaw's built-in per-turn 15-cap was insufficient because real
+  conversations span many turns.
+- Without these defenses a single bad smoke case could spend 25-28 turns
+  in OpenClaw at 6-10 s each (observed on cosmos-8b 2026-05-31), exhausting
+  the case's 275 s budget AND blocking the next case via stale KV.
+- The two-stage proxy design + bridge cross-turn floor reliably bound
+  total time-per-case at ~60-80 s even in the worst loop.
+
+### D.4 Bridge synthetic-clarification short-circuit (round 7, 2026-05-31)
+
+Different pattern from the loop detector, same purpose: bypass OpenClaw for
+prompts where the model has been observed to ignore in-prompt clarification
+guidance. Hard-coded narrow gate:
+
+- `add a <kind>` / `insert a <kind>` / `wrap with <kind>`
+- `<kind>` ∈ {parallel, fallback, sequence, repeat, retry, inverter}
+- Total word count ≤ 4
+
+Returns a canned "Which parent node? Which position? For example: 'as the
+first child of pick_and_place', 'after gripper_close', or 'as a new root
+wrapping the existing tree'." answer. Smoke's `answer_must_contain` rubric
+checks for "which" and "where" tokens; the synthetic answer contains both.
+
+Added 2026-05-31 (round 7) after rounds 1-6 confirmed both in-prompt rule
+text and proxy USER_MESSAGE_SUFFIX nudges were ignored on first-turn action
+prompts. Not gated by an env var — to disable, edit the pattern gate in
+`service.py:373-380`.
 
 ---
 
-## Iter-32 production recipe (51/66 = 77.3 %, chain-session ON)
+## E. Profile catalog (`serving/config.sh` + `serving/launch.sh`)
 
-End-to-end commands to reproduce. Stop any conflicting containers/processes
-first (`docker rm -f manyforge-e2e-vllm`, `pkill -f vllm-proxy`,
-`pkill -f openclaw_assistant_bridge.service`).
+Adding or modifying a profile requires matching edits to **both** files using
+the same case-statement label.
 
-> Operational note: the SMOKE-ITER-RUNBOOK is the procedural source of truth
-> for the cold-start sequence (which container to bounce in which order
-> when you change what). This section gives the iter-32 specific env vars
-> that the runbook reads as parameters.
+| Slug | Model source | Quant | Footprint | Ctx | Tool parser | Reasoning parser | Default thinking | BFCL / smoke | Recommended use |
+|------|-------------|-------|-----------|-----|-------------|-----------------|------------------|---------------|-----------------|
+| **`cosmos-reason2-8b`** | `nvidia/Cosmos-Reason2-8B` (Qwen3-VL-8B base) | _(none, BF16)_ | ~16 GB weights + FP8 KV pool | 262 144 | `hermes` | `qwen3` | on | smoke 9/9 OpenClaw lane | **Production default (2026-05-07).** VLM, physical-AI reasoner, agentic. |
+| `cosmos-reason2-2b` | `nvidia/Cosmos-Reason2-2B` (Qwen3-VL-2B base) | _(none, BF16)_ | ~4.3 GB weights | 32 768 | `hermes` | _(none)_ | template default | _(not benched)_ | VLM small-footprint, low concurrency. Co-serve candidate with 8B for fan-out. |
+| `nemotron3-nano-4b-bf16` | `nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16` | _(none, BF16)_ | ~8 GB weights | 65 536 (conservative; native 262K) | `qwen3_coder` | _(none, intentional)_ | off | BFCL v3 = 61.1 | NVIDIA's explicit Jetson Thor agentic default. Hybrid Mamba+attn. Tool-call-trained. Edge-class. |
+| `nemotron3-nano-omni-30b-a3b-nvfp4` | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` | NVFP4 | 20.9 GB on disk | 262 144 | `qwen3_coder` | _(none, dropped 2026-05-06)_ | off | TEB 80/100 ★★★★ Good, IFEval 87.7% (vendor regime) | Multimodal (vision+audio+video), MoE, instruct mode. Lane parity hit 0/9 vs cosmos 9/9 — use cosmos for production. |
+| `nemotron3-nano-omni-30b-a3b-nvfp4-reasoning` | same weights | NVFP4 | 20.9 GB | 262 144 | `qwen3_coder` | `nemotron_v3` | on | _(not benched on assistant pipeline)_ | Reasoning variant; **bridges would need to read `reasoning` field — they don't today**. Don't route Composer through this without a bridge change. |
+| `qwen3.6-35b-a3b-nvfp4-nvidia` | `nvidia/Qwen3.6-35B-A3B-NVFP4` | NVFP4 (W4A16, ModelOpt) + Marlin MoE | ~18 GB weights | 262 144 | `qwen3_coder` | `qwen3` | on | NVIDIA card: τ²-Bench Telecom 94.7 NVFP4 vs 95.5 BF16. Smoke: 56/66 (2026-05-31, head-to-head Task 4) | EXPERIMENTAL. Heavier model with MoE 3B active. MTP K=3 + Marlin. Use when 8B quality isn't enough and 65 min wall-clock per smoke is acceptable. |
+| `qwen3.6-27b-fp8-mtp-kvfp8` | `Qwen/Qwen3.6-27B-FP8` | FP8 | ~27 GB weights | 262 144 | _(profile default)_ | _(none)_ | template default | _(not benched on assistant pipeline)_ | EXPERIMENTAL dense hybrid; preserves MTP heads (NVFP4 toolchains strip them on this model). Slower than 8B. |
+| `qwen3.5-9b-claude-distilled-nvfp4` | _(Claude 4.6-distilled VLM)_ | NVFP4 + FP8 KV | ~9 GB | 131 072 | _(profile default)_ | _(none)_ | off (no-think template) | _(internal eval)_ | Fast-control / no-think VLM; vision + text + tools. |
+| `gemma4-e4b-it` | _(Gemma-4 E4B IT)_ | _(none)_ | ~4 GB | 131 072 | `gemma4` | `gemma4` | template default | _(not benched on assistant pipeline)_ | Small Gemma-4 edge profile. |
+| `gemma4-31b-it-nvfp4` | _(Gemma-4 31B IT NVFP4)_ | NVFP4 (modelopt) | ~16 GB | 262 144 | `gemma4` | `gemma4` | template default | _(not benched)_ | Medium Gemma-4 quantized. |
+| `gemma4-26b-a4b-it` | _(Gemma-4 26B A4B IT)_ | _(none)_ | ~26 GB | 262 144 | `gemma4` | `gemma4` | template default | _(not benched)_ | Gemma-4 MoE variant. |
+
+**Removed profiles** (kept as historical comments in `config.sh` / `launch.sh`
+with rationale): `minimax-m2.7-139b-a10b-nvfp4`, `qwen3.5-122b-a10b-nvfp4`,
+several Qwen3.6 35B sub-variants (mtp-fp8kv, n4, tq-mtp, tq-mtp-2,
+dflash{,-vl}, fp8-mtp-fp8kv, fp8-turboquant, prismaquant-dflash),
+`qwen3.5-35b-a3b-nvfp4`, `nemotron3-nano-30b-a3b-nvfp4` (text-only superseded
+by omni), `cosmos-reason2-8b-reasoning` (broken tuning). Look in
+[`serving/docs/`](../../serving/docs/) for the dated investigations behind
+the removals.
+
+---
+
+## F. Common workflows (cookbook)
+
+### F.1 Boot a new model and run targeted-9 smoke
 
 ```bash
-# 1. vLLM with thinking-on default
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
-THOR_DETACH=1 \
-THOR_CONTAINER_NAME=manyforge-e2e-vllm \
-THOR_VLLM_PORT=8050 \
-  ./serving/start-model.sh cosmos-reason2-8b
-# (waits ~2-3 min for first-time model load; subsequent restarts ~30 s)
+cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
 
-# 2. Mutator proxy with cap and thinking budget injected
-OPENCLAW_PROXY_LISTEN_PORT=8000 \
+# 1. Stop any existing vLLM container (assumes detached run)
+docker rm -f manyforge-e2e-vllm 2>/dev/null
+
+# 2. Start the new profile
+THOR_DETACH=1 THOR_CONTAINER_NAME=manyforge-e2e-vllm THOR_VLLM_PORT=8050 \
+  ./serving/start-model.sh <profile-slug>
+
+# 3. Wait for first-launch (NVFP4 JIT can take 60+ min on a fresh image — see
+#    project_v81_first_launch_timing.md). Watch the log:
+docker logs -f manyforge-e2e-vllm | head -200
+
+# 4. Start the proxy with production caps:
 OPENCLAW_PROXY_BIND=0.0.0.0 \
+OPENCLAW_PROXY_LISTEN_PORT=8000 \
 OPENCLAW_PROXY_UPSTREAM=http://127.0.0.1:8050 \
-OPENCLAW_PROXY_LOG_PATH=/tmp/iterN_proxy.jsonl \
-OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 \
+OPENCLAW_PROXY_LOG_PATH=/tmp/probe_proxy.jsonl \
 OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048 \
+OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 \
   nohup python3 manyforge/scripts/proxy/vllm-proxy.py \
-    >> /tmp/iterN_proxy_stdout.log 2>&1 &
+    >> /tmp/probe_proxy_stdout.log 2>&1 &
 
-# 3. OpenClaw assistant bridge (iter 32 production env, + iter-33 retained)
-OPENCLAW_ASSISTANT_USE_GATEWAY=true \
-OPENCLAW_ASSISTANT_BRIDGE_HOST=127.0.0.1 \
-OPENCLAW_ASSISTANT_BRIDGE_PORT=8200 \
-OPENCLAW_ASSISTANT_AGENT=manyforge-composer \
-OPENCLAW_ASSISTANT_TIMEOUT_S=300 \
-OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2 \
-OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S=120 \
-  nohup manyforge/openclaw_assistant_bridge/.venv/bin/python \
-    -m openclaw_assistant_bridge.service \
-    > /tmp/iterN_bridge.log 2>&1 &
+# 5. Run targeted-9 (subset filter on the corpus):
+cd manyforge
+nohup python3 scripts/debug/smoke_corpus_runner.py \
+  --corpus scripts/debug/smoke_corpus.yaml \
+  --filter '^(P[123]_|TREE_|WRAP_|PARALLEL_|FALLBACK_|REPEAT_)' \
+  --enable-recovery-turn \
+  --report /tmp/probe_targeted9.json \
+  > /tmp/probe_targeted9.log 2>&1 &
 
-# 4. Smoke runner (chain-session ON by default; --enable-recovery-turn is default-on)
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge
+# 6. Watch verdicts stream live (runner is line-buffered):
+tail -f /tmp/probe_targeted9.log
+```
+
+### F.2 Swap models without losing in-flight runs
+
+The cleanest path is to stop the smoke, restart vLLM with the new profile,
+restart bridge/gateway, then resume:
+
+```bash
+# Halt anything still running
+pkill -f smoke_corpus_runner.py
+pkill -f vllm-proxy
+pkill -f openclaw_assistant_bridge.service
+
+# Stop vLLM container, drop caches (Thor unified memory hygiene)
+docker rm -f manyforge-e2e-vllm
+sync && sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
+
+# Restart with the new profile via the production launcher
+cd ~/workspaces/dev_ws/src/manyforge
+MODEL_PROFILE=<new-slug> ./scripts/demo-assistant-known-good.sh restart
+```
+
+In-flight Composer UI sessions will see "assistant timed out" on their last
+request; new prompts work as soon as the bridge `/healthz` returns ok.
+
+### F.3 A/B test a proxy knob (e.g., reflection threshold)
+
+```bash
+# Baseline run — keep the production defaults:
+OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048 \
+OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 \
+OPENCLAW_PROXY_LOG_PATH=/tmp/iterA_proxy.jsonl \
+  python3 manyforge/scripts/proxy/vllm-proxy.py … &
+# (smoke run, save report)
+
+# Treatment run — lower reflect_at to 3, keep stop_at at 8:
+pkill -f vllm-proxy
+OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048 \
+OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 \
+OPENCLAW_PROXY_LOOP_REFLECT_AT=3 \
+OPENCLAW_PROXY_LOOP_STOP_AT=8 \
+OPENCLAW_PROXY_LOG_PATH=/tmp/iterB_proxy.jsonl \
+  python3 manyforge/scripts/proxy/vllm-proxy.py … &
+# (smoke run, save report)
+
+# Compare reports
+python3 -c "
+import json
+a = json.load(open('/tmp/iterA_report.json'))
+b = json.load(open('/tmp/iterB_report.json'))
+print('A pass:', sum(c['status']=='pass' for c in a['cases']))
+print('B pass:', sum(c['status']=='pass' for c in b['cases']))
+"
+
+# And cross-check the per-case loop-break events:
+grep -E '(proxy_loop_reflection_injected|proxy_loop_hard_stop)' \
+  /tmp/iterB_proxy.jsonl | jq -c '.event, .path' | sort | uniq -c
+```
+
+Change ONE knob at a time. The corpus is sensitive enough that two
+simultaneous changes interact unpredictably (see `SMOKE-CORPUS.md` iter
+33 negative result).
+
+### F.4 Diagnose a runaway retry loop from proxy log
+
+```bash
+# Symptom: case timed out at 275 s with "chat HTTP -1" or "Tool failed" loop
+LOG=/tmp/iterN_proxy.jsonl
+
+# 1. Did the proxy short-circuit anything?
+grep -E '(proxy_loop_reflection_injected|proxy_loop_hard_stop|proxy_upstream_error)' "$LOG" | jq .
+
+# 2. What tools were being called repeatedly?
+jq -c 'select(.request.path == "/v1/chat/completions") |
+       [.request.body.messages[] | select(.role == "assistant") | .tool_calls // [] | .[].function.name]' "$LOG" \
+  | sort | uniq -c | sort -rn | head
+
+# 3. What was the last tool error before the loop?
+jq -c 'select(.request.path == "/v1/chat/completions") |
+       .request.body.messages | reverse | map(select(.role == "tool")) | .[0].content // empty' "$LOG" \
+  | head -1
+
+# 4. Did max_tokens get injected?
+jq -c 'select(.request.mutation) | .request.mutation' "$LOG" | head
+```
+
+If the loop happens **before** the reflection-injection fires (count < 4),
+either the threshold is too high for this corpus or the model is varying
+tool names enough that the counter never accumulates. Lower
+`OPENCLAW_PROXY_LOOP_REFLECT_AT` to 3 and re-run.
+
+If the loop happens **across** Composer prompts (each prompt's history
+shows the same tool but the per-conversation counter resets at proxy
+level), the bridge's `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` is the
+right defense — confirm it's `5` (default) and that
+`bridge_synthetic_loop_break` events fire in the bridge log.
+
+### F.5 Add a new model profile
+
+Two files, same case label:
+
+1. `serving/config.sh` — add a new `case` branch with `THOR_MODEL_PROFILE`,
+   `THOR_MODEL_ID_DEFAULT`, `THOR_TARGET_MAX_MODEL_LEN`,
+   `THOR_TARGET_KV_CACHE_DTYPE`, `THOR_TARGET_MAX_NUM_SEQS`,
+   `THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT`,
+   `THOR_TARGET_MODEL_REASONING`, `THOR_TARGET_MAX_TOKENS`,
+   `THOR_TARGET_TOOL_CALL_PARSER` (if non-default),
+   `THOR_TARGET_QUANTIZATION`. Read [MANYFORGE-PROFILE-CALIBRATION.md](./MANYFORGE-PROFILE-CALIBRATION.md)
+   for the sizing methodology.
+
+2. `serving/launch.sh` — add the matching `case` branch with the actual
+   vLLM args: `THOR_LAUNCH_MODEL_SOURCE`,
+   `THOR_LAUNCH_GPU_MEMORY_UTILIZATION`, then a `THOR_VLLM_ARGS+=(…)`
+   block with `--tool-call-parser`, `--reasoning-parser` (or omit),
+   `--default-chat-template-kwargs`, `--override-generation-config`,
+   `--enable-auto-tool-choice`, plus any model-specific flags.
+   Don't forget `THOR_DOCKER_ENV_ARGS+=(…)` for env vars
+   (`VLLM_USE_FLASHINFER_MOE_FP4`, etc.) if your weights need them.
+
+3. Validate:
+   ```bash
+   ./serving/start-model.sh <new-slug>           # boots vLLM
+   curl -s http://127.0.0.1:8000/v1/models | jq -r '.data[].id'   # → new-slug
+   curl -s http://127.0.0.1:8000/v1/chat/completions \
+        -H 'content-type: application/json' \
+        -d '{"model":"<new-slug>","messages":[{"role":"user","content":"hi"}],"max_tokens":16}' \
+     | jq -r '.choices[0].message.content'
+   ```
+
+4. Then drive a targeted-9 smoke (recipe F.1) to verify before adding to
+   any benchmark sweep.
+
+The slug must be identical in both files; `serving/start-model.sh`
+errors out with `Unsupported model profile` if `config.sh` doesn't
+recognize it. The `served-model-name` advertised by vLLM equals the
+slug.
+
+### F.6 Bake fixes into a new vLLM image
+
+`serving/docker/` holds the Thor-specific build context. Active patches are
+in `Dockerfile.thor*` and the bundled `mods/` overlay. Workflow:
+
+1. Identify the upstream PR / commit that fixes your blocker (e.g.
+   `sm110a-fp4-dsl-unlock` for the SM110 NVFP4 oracle gate).
+2. Update `Dockerfile.thor*` to pull the fixed vLLM commit (or apply a
+   patch overlay under `mods/`).
+3. Build: `docker build -f serving/docker/Dockerfile.thor* serving/docker/`
+4. Tag and update `VERSIONS.md` (single source of truth).
+5. Smoke-run the production recipe (recipe F.7) before declaring done.
+6. Update `serving/docs/PERFORMANCE-V*.md` with the dated outcome.
+
+Half-day rebuilds are normal when a vLLM minor version ships
+(see memory `project_trt_edge_llm_roadmap.md`).
+
+### F.7 Run the full smoke corpus + interpret the report
+
+```bash
+# Stand up the production-default stack (Cosmos-8B + OpenClaw lane)
+cd ~/workspaces/dev_ws/src/manyforge
+./scripts/demo-assistant-known-good.sh start
+./scripts/demo-assistant-known-good.sh smoke   # blocks on /healthz
+
+# Run the corpus
+cd ~/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge
 nohup python3 scripts/debug/smoke_corpus_runner.py \
   --corpus scripts/debug/smoke_corpus.yaml \
   --enable-recovery-turn \
-  --report /tmp/smoke_corpus_iterN.json \
-  > /tmp/iterN_runner.log 2>&1 &
+  --report /tmp/iter_full.json \
+  > /tmp/iter_full.log 2>&1 &
+
+# Wall-clock: ~41 min chain-off, ~75 min chain-on with COMPACT_EVERY_N=2.
+# Stream verdicts:
+tail -f /tmp/iter_full.log
 ```
 
-Composer (`manyforge-e2e-composer` container, host:9000) and
-`openclaw_assistant_bridge` (host:8200) are assumed to be already running
-from earlier session bring-up. The runner's `<composer>/api/assistant/chat`
-calls into Composer; Composer dispatches to whichever bridge is configured
-in the deployment YAML.
+Interpreting the report (`/tmp/iter_full.json`):
 
-Wall-clock: ~41 minutes for the full 66-case corpus.
+```python
+import json
+r = json.load(open('/tmp/iter_full.json'))
+status = [c['status'] for c in r['cases']]
+print('total:', len(status))
+print('first-try pass:', status.count('pass'))
+print('effective (pass + recovered + clarified + soft):',
+      sum(s in {'pass','recovered-pass','clarified-pass','soft-pass'} for s in status))
+print('fails:', [c['id'] for c in r['cases'] if c['status']=='fail'])
+```
 
----
+Reference baselines (from [SMOKE-CORPUS.md](./SMOKE-CORPUS.md)):
 
-## Refinement plan — what landed (2026-05-10)
-
-The post-iter-20 plan, ranked by leverage and shipped together as the
-iter-27 candidate:
-
-### Action A — runtime collision-object catalog descriptions (Pattern C, ~3 cases)
-
-[`manyforge_behavior/resources/node_catalog.yaml`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_behavior/resources/node_catalog.yaml).
-6 entries rewritten (`add_collision_object`, `upsert_collision_object`,
-`remove_collision_object`, `update_collision_object_pose`,
-`attach_object_to_link`, `detach_object_from_link`). Each description
-now leads with a "Behavior-tree leaf — runtime collision-object
-operation" framing and explicitly contrasts against the corresponding
-`scene_draft_*` tool, so the model's lexical pattern match against the
-word "scene" no longer pulls it toward the static-scene tool family.
-YAML-only change; Composer rebuilds the catalog on next request.
-
-### Action B — `afterName` / `beforeName` / `position` on `tree_draft_insert_node` (Pattern B, ~5 cases)
-
-Two files, ~110 LoC of new handler logic:
-
-1. [`assistant_tool_schemas.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_tool_schemas.py):
-   schema now declares `afterName`, `beforeName`, and `position: "first" |
-   "last"` alongside the existing `parentName` + `index`. `required` is
-   now just `["node"]`; the description spells out four mutually
-   exclusive positional forms and which natural-language patterns map
-   to each. `parentName`'s and `index`'s descriptions explicitly mark
-   their mutual exclusivity with the new forms.
-2. [`routes_assistant.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/routes_assistant.py):
-   new `_resolve_insert_position` helper translates the chosen form
-   into a (parent_name, optional_index) pair before the existing
-   parent-resolution path runs. `afterName`/`beforeName` use
-   `_find_tree_node_ref` to read the sibling's parent + index out of
-   the live tree; `position: "first"` resolves to index 0 and
-   `"last"` to the parent's child count. The 404 response now carries
-   an explicit `hint` when the model passed a known *leaf* node as
-   `parentName` (suggesting `afterName`/`beforeName` instead).
-   `_apply_tree_draft_insert_node` was lightly refactored around
-   the new helper.
-
-### Action C — rename `tree_draft_swap_node` → `tree_draft_change_node_kind` + `move_node` cross-ref (Pattern E, ~1 case)
-
-Clean rename, no alias. The new name ends the lexical trap where
-"swap the order" routed to the wrong tool because both share the
-word "swap". Files updated:
-
-1. [`assistant_tool_schemas.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_tool_schemas.py):
-   `_TREE_DRAFT_SWAP_NODE_SCHEMA` → `_TREE_DRAFT_CHANGE_NODE_KIND_SCHEMA`,
-   registry key updated. Description gains an explicit anti-example
-   sentence that names `tree_draft_move_node` as the right tool for
-   sibling reordering.
-2. `_TREE_DRAFT_MOVE_NODE_SCHEMA` description gains the matching
-   forward reference: this is the right tool when the user says
-   "swap the order", "swap A with B", or "reorder".
-3. [`routes_assistant.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/routes_assistant.py):
-   `_apply_tree_draft_swap_node` → `_apply_tree_draft_change_node_kind`,
-   dispatcher updated, internal error messages reflect the new name.
-4. [`assistant_recovery.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_recovery.py):
-   recovery hint text updated.
-5. [`assistant_modes_scene_authoring.deployment.yaml`](/home/tndlux/workspaces/dev_ws/src/manyforge/examples/assistant_modes_scene_authoring.deployment.yaml):
-   mode-tools allowlist + the tool registry block, both renamed.
-6. [`manyforge_assistant_bridge/bridge.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_assistant_bridge/bridge.py):
-   intent-inference heuristic updated. "swap the order" / "swap order"
-   / "reorder" now route to `tree_draft_move_node`; bare "swap"
-   continues to route to `tree_draft_change_node_kind`.
-7. [`manyforge_behavior/manyforge_behavior/catalog.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_behavior/manyforge_behavior/catalog.py):
-   `swap_class` field comment updated.
-8. [`test_deployment.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_behavior/tests/test_deployment.py):
-   tool-list assertion updated; comment carries the historical pointer.
-9. [`smoke_corpus.yaml`](../scripts/debug/smoke_corpus.yaml): three
-   forbidden-tools list entries renamed.
-
-The OpenClaw bridge ([`adapter.py`](../openclaw_assistant_bridge/adapter.py))
-doesn't name-match on tool ids, so no edit was needed there.
+| Iter | Recipe summary | First-try | Effective |
+|------|---------------|-----------|-----------|
+| 20 | chain-off, no recovery turn | 45/66 (68.2%) | 49/66 (74.2%) |
+| 28 | chain-off, recovery turn, schema refactor | 49/66 (74.2%) | 51/66 (77.3%) |
+| **32** | **chain-on + COMPACT_EVERY_N=2 + recovery turn (current prod)** | **47/66 (71.2%)** | **51/66 (77.3%)** |
 
 ---
 
-## After applying the plan
+## G. Known-good production config (snapshot)
 
-*Historical note: this section described the iter-20 → iter-27 transition.
-Iter 27 → 33 has now happened; iter 32 is the production recipe. The
-forecast in this section was partially borne out (iter 27 → 28 landed
-+2 effective from the schema refactor, hitting 51/66; iter 32 then
-moved chain-session ON without regression) and partially didn't (the
-predicted ~58/66 was not reached — Pattern A turned out to be a deeper
-model ceiling than predicted, see iter 33 negative result on the
-`request_clarification` direction). See SMOKE-CORPUS.md for the full
-per-iter history.*
+The single source of truth is
+[`dev_ws/src/manyforge/scripts/lib/assistant.sh`](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/lib/assistant.sh).
+The block below mirrors it for documentation purposes; if the launcher
+changes, **the launcher wins**.
 
-For a future refinement cycle:
+### G.1 Stack diagram
 
-1. Re-run iter 32's production recipe verbatim (commands above). Confirm
-   you can reproduce 51/66 (77.3 %) on the unchanged corpus before
-   layering any new change. This is the regression baseline.
-2. Compare against the iter-32 failure set: 15 consistent fails grouped
-   into Pattern A (Pattern A residuals — model won't ask), Pattern B
-   (insert_node multi-arg specificity), Pattern C (tool-mismatch), and
-   variance (PnP_06, PnP_14, PnP_18). See SMOKE-CORPUS.md for the
-   full breakdown by group.
-3. Apply ONE cross-cutting change at a time. The corpus is sensitive
-   enough that two simultaneous changes interact unpredictably (e.g.,
-   iter 33 changed corpus rubrics AND added the recovery turn —
-   disentangling the net effect required careful counterfactual scoring).
-4. Document the result as the next iter in SMOKE-CORPUS.md, including
-   a counterfactual line ("would have been X/66 if Y had stayed at iter-32
-   value") so future readers can disentangle interacting changes.
+```
+Composer (container) :9000          ─┐
+openclaw_assistant_bridge :8200      │   ┌─ proxy log: /tmp/manyforge-assistant-e2e/vllm-proxy.jsonl
+                                      ├─►│  bridge log: /tmp/manyforge-assistant-e2e/known-good-bridge.log
+vllm-proxy :8000 (mutator + logger)  │   │  bridge audit: /tmp/manyforge-assistant-e2e/known-good-bridge-audit.jsonl
+vLLM container :8050  cosmos-8b      ─┘
+```
+
+### G.2 Env vars (every load-bearing one)
+
+```bash
+# Composer
+ASSISTANT_PROVIDER=openclaw
+MODEL_PROFILE=cosmos-reason2-8b
+START_VLLM_PROXY=true
+ASSISTANT_TIMEOUT_S=300
+DROP_CACHES=true
+PROVISION_OPENCLAW_SANDBOX=true
+
+# Proxy
+OPENCLAW_PROXY_BIND=0.0.0.0
+OPENCLAW_PROXY_LISTEN_PORT=8000
+OPENCLAW_PROXY_UPSTREAM=http://127.0.0.1:8050
+OPENCLAW_PROXY_LOG_PATH=/tmp/manyforge-assistant-e2e/vllm-proxy.jsonl
+OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048        # LOAD-BEARING
+OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512       # production sweet-spot
+# (loop defense uses defaults: REFLECT_AT=4, STOP_AT=8)
+
+# Bridge
+OPENCLAW_ASSISTANT_USE_GATEWAY=true            # gateway mode
+OPENCLAW_ASSISTANT_AGENT=manyforge-composer
+OPENCLAW_ASSISTANT_LOCAL=false
+OPENCLAW_ASSISTANT_TIMEOUT_S=300
+OPENCLAW_ASSISTANT_BRIDGE_HOST=127.0.0.1
+OPENCLAW_ASSISTANT_BRIDGE_PORT=8200
+OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2           # iter-32 chain-on enabler
+OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S=120
+OPENCLAW_ASSISTANT_METRICS_ENABLED=false       # turn on for /metrics
+# (loop detector uses default LOOP_TOOL_THRESHOLD=5)
+
+# vLLM (set via serving/launch.sh per-profile case branch)
+--attention-backend flashinfer
+--enforce-eager
+--mm-encoder-attn-backend TORCH_SDPA
+--kv-cache-dtype fp8
+--max-num-batched-tokens 8192
+--enable-auto-tool-choice
+--tool-call-parser hermes
+--override-generation-config '{"temperature":0.2,"top_p":0.95}'
+--default-chat-template-kwargs '{"enable_thinking":true}'
+--reasoning-parser qwen3
+```
+
+### G.3 Bring-up (single command per role)
+
+```bash
+cd ~/workspaces/dev_ws/src/manyforge
+./scripts/demo-assistant-known-good.sh start         # boots vLLM + proxy + provisioner + bridge + supervisor
+./scripts/demo-assistant-known-good.sh smoke         # blocks on /healthz, full readiness probe
+./scripts/demo-assistant-known-good.sh stop          # tears everything down + drop_caches
+```
+
+To swap to the **direct lane** (fast-path for simple prompts only):
+
+```bash
+ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
+```
+
+---
+
+## H. Session learnings (2026-05-31 / 2026-06-01)
+
+Recorded under `/tmp/35b-iter-log/rounds/`. Round structure:
+
+| Round | Hypothesis | Result |
+|-------|-----------|--------|
+| **0** | Cosmos-8B parser-only fix (qwen3 reasoning parser; without it, thinking bled into content) | Necessary precondition; alone insufficient to unblock the 9 hard cases. |
+| **1-2** | Per-profile sampling overrides (temperature, top_p tweaks) | Neutral on the hard set; baseline TEB unchanged. |
+| **3.1** | "Thinking fully on" (top-level + chat_template_kwargs mirror) for cosmos-8b | Discovered the top-level-precedence bug; the mirror landed in `vllm-proxy.py:285-292`. Cleared the silent thinking-off regression. |
+| **3.2** | Repro that the proxy mirror actually fires for cosmos under Composer's `enable_thinking:false` payload | Confirmed via `proxy.jsonl` mutations field. |
+| **4** | Bigger thinking budget (1024 → 2048) | Net-negative on cosmos-8b; 512 stays the sweet-spot. |
+| **5** | `OPENCLAW_PROXY_FORCE_TOOL_CHOICE=required-first` | Aborted — interacted poorly with chain-on session memory; reverted to no force. |
+| **6** | `OPENCLAW_PROXY_USER_MESSAGE_SUFFIX` plan-then-execute nudge | Ignored by the model on first-turn action prompts. Suffix deprecated for this stack. |
+| **7** | Bridge synthetic clarification short-circuit for `add a <kind>` | Lands the answer-text rubric for the 4 affected smoke cases; very narrow gate intentionally. |
+| **8** | Bridge cross-turn `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` fail-fast | Stops the 25-28-turn same-tool runaway pattern. Tight defaults (5). |
+| **10** | Proxy cascading loop defense (reflect_at=4 + stop_at=8) | Bounds total time-per-case at ~60-80 s in the worst loop; lets the model recover once after seeing the reflection prompt. |
+
+**Per-model takeaways**:
+
+- **Cosmos-Reason2-8B** is the production winner. Thinking-on + qwen3 reasoning
+  parser + proxy mirror + max_tokens=2048 + thinking_budget=512 + compact-every-2.
+  9/9 on the lane-parity probe; 51/66 (77.3%) on the iter-32 smoke corpus.
+- **Nemotron-3-Nano-Omni-30B-A3B** (instruct, non-reasoning) was the 2026-04-30 candidate
+  but lost the lane-parity head-to-head 0/9 vs cosmos-8b 9/9. The reasoning variant has not been
+  retried since the bridge would need to read `reasoning` (not `content`).
+- **Qwen3.6-35B-A3B-NVIDIA** + MTP K=3 + Marlin MoE wins quality (56/66) vs RedHat-quant
+  (53/66) at 65 min vs 82 min, but at 8B-class-quality-only level after the round-3.1 cosmos fix.
+- **Nemotron-3-Nano-4B-BF16** is the NVIDIA Jetson Thor explicit default per the HF card
+  but ranks BFCL v3 = 61.1 — adequate for tool-call but not for ManyForge's composer-assistant
+  pattern complexity.
 
 ---
 
 ## Glossary
 
-- **Bridge**: the HTTP service that consumes Composer's
-  `manyforge.assistant.provider_request.v0` envelope and runs (or
-  delegates) the LLM agent loop.
-- **Lane**: one of the two bridge implementations.
-- **Mutator**: the `vllm-proxy` running with mutation env vars set.
-- **Direct lane**: bridge runs the agent loop locally.
-- **OpenClaw lane**: bridge delegates to OpenClaw which runs the agent loop.
-- **Chain-session**: Composer's per-conversation session key; when the smoke
-  runner reuses it across chain steps, OpenClaw retains the prior turn
-  history.
+- **Bridge** — the HTTP service that consumes Composer's
+  `manyforge.assistant.provider_request.v0` envelope and runs (or delegates) the
+  LLM agent loop. Two implementations: `openclaw_assistant_bridge` (gateway-delegating, production) and `manyforge_assistant_bridge` (in-process loop, fallback).
+- **Lane** — one of the two bridge implementations.
+- **Mutator** — the `vllm-proxy` running with mutation env vars set.
+- **Direct lane** — `manyforge_assistant_bridge` on `:8100`; runs the agent loop in-process.
+- **OpenClaw lane** — `openclaw_assistant_bridge` on `:8200`; delegates to the OpenClaw gateway in the sandbox.
+- **Chain-session** — Composer's per-conversation session key. When the smoke runner reuses it across chain steps (default), OpenClaw retains prior turn history.
+- **Session key** — `derive_gateway_session_key(payload)` = `conversationId + catalogHash + programRevision`. Bridge counters (compact, loop) are keyed by this.
+- **Compact** — OpenClaw's `/compact` slash-command. Rolls the agent's accumulated conversation up into a summary; preserves chain memory while preventing context overflow.
+- **Reflection injection** — proxy mutation that adds a `[loop-reflection]`-marked user message after N same-tool calls, urging the model to change tactics. Forwarded to the model.
+- **Hard stop** — proxy mutation that synthesizes an SSE assistant response after M same-tool calls, no GPU spend. OpenClaw treats it as a normal text completion.
+- **Synthetic clarification** — bridge-side short-circuit for very narrow `add a <kind>` prompts; returns a canned "which parent? which position?" without invoking OpenClaw.
+
+---
+
+## Maintaining this doc
+
+This file is the **architectural entry point** for the assistant pipeline. Keep it durable:
+
+- When a new round / iter introduces a knob, document it in §B (with default + when-to-use) and in §C, §D, or §E as appropriate.
+- When a profile lands or retires, update §E and `serving/config.sh` / `serving/launch.sh` comments in lockstep.
+- Date-specific results live in [SMOKE-CORPUS.md](./SMOKE-CORPUS.md) and dated `serving/docs/PERFORMANCE-V*.md` files — not here.
+- Operational symptoms + their gates live in [COMPOSER-ASSISTANT-RUNBOOK.md](./COMPOSER-ASSISTANT-RUNBOOK.md). When that runbook adds a new gate, link it here only if it's about an architectural component (not a one-off incident).
+- Per memory `feedback_agents_md_durability.md`, transient incident docs do **not** belong in this file's reference table. Add findings here only when they have outlived the incident.

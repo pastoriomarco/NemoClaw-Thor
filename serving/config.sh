@@ -152,10 +152,6 @@ Supported model profiles:
 
   Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration):
     qwen3.6-35b-a3b-nvfp4-nvidia       ★★ DEFAULT (Task 4 winner) — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock
-    qwen3.6-35b-a3b-nvfp4-mtp-fp8kv    ★ FALLBACK — RedHat full-NVFP4 + FlashInfer CUTLASS + Thor MoE config. 53/66 (80.3%), 23.8 tok/s, 82min wall-clock
-    qwen3.6-35b-a3b-nvfp4-tq-mtp       ★ throughput+context (TEB 90, 89% IFEval, 24.8 tps, 2.22M KV)
-    qwen3.6-35b-a3b-nvfp4-dflash       heavy coding bursts (DFlash-8, ~v6 87 TEB, peak ~130 tps)
-    qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge  ★ ManyForge production: TQ+MTP-2 + VISION, 3×64K, co-serves w/ Cosmos
 
   Other Qwen3.6:
     qwen3.6-27b-fp8-mtp-kvfp8     dense 27B FP8 + MTP + FP8 KV (TEB 84)
@@ -244,18 +240,6 @@ resolve_model_profile() {
         # qwen3.6-35b-a3b-fp8-mtp-fp8kv REMOVED 2026-04-28 — FP8-weights variant
         # of an NVFP4 alternative; use nvfp4-mtp-fp8kv or nvfp4-tq-mtp instead.
         # qwen3.6-35b-a3b-fp8-turboquant REMOVED 2026-04-28 — see launch.sh.
-        qwen3.6-35b-a3b-nvfp4-dflash)
-            # ★★ FASTEST: 45.71 tok/s single, 192.45 aggregate at 8-concurrent.
-            # 678K KV tokens at 256K context → ~2 full-context concurrent, more at shorter.
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-dflash"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="bfloat16"
-            THOR_TARGET_MAX_NUM_SEQS="5"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
         # qwen3.6-35b-a3b-nvfp4-dflash-vl REMOVED 2026-04-28 — vision support
         # folded into qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge. See launch.sh.
         # qwen3.6-35b-a3b-prismaquant-dflash REMOVED 2026-04-28 — was the
@@ -272,33 +256,8 @@ resolve_model_profile() {
         # Net delta: +3 quality cases, +22% steady-state decode (29.2 vs 23.8
         # tok/s). mtp-fp8kv profile retained as proven fallback. See
         # serving/docs/V9.1-TASK4-FP4-UNLOCK.md for the full comparison.
-        qwen3.6-35b-a3b-nvfp4-mtp-fp8kv)
-            # EXPERIMENTAL (re-added 2026-04-23 for tool-eval-bench quality testing).
-            # NVFP4 weights + MTP N=2 + FP8 KV. MTP N=2 mirrors the 27B-FP8 winning
-            # config. Older sibling with MTP N=4 crashed under 8-concurrent; this
-            # N=2 variant reduces crash risk but still carries the same dtype mix.
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-mtp-fp8kv"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="5"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
         # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv-n4 REMOVED 2026-04-28 — variance probe
         # done; TEB 91 confirmed N=2 is the right pick for FP8 KV.
-        qwen3.6-35b-a3b-nvfp4-tq-mtp)
-            # ★ MAX CONTEXT: 28.0 tok/s, 79% acceptance, 2.22M KV tokens
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-tq-mtp"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="turboquant_k8v4"
-            THOR_TARGET_MAX_NUM_SEQS="8"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            ;;
         # qwen3.6-35b-a3b-nvfp4-tq-mtp-2 REMOVED 2026-04-28 — TQ + N=2 dominated
         # by TQ + N=4 (TEB 87 vs 90 at same KV).
         # qwen3.6-35b-a3b-nvfp4-mtp-fp8kv removed — crashes under 8-concurrent
@@ -307,19 +266,6 @@ resolve_model_profile() {
         # budget (2.22M vs 1.68M), higher concurrency (29x vs 10x), works
         # under load (153 tok/s aggregate at 8 concurrent).
         # qwen3.5-35b-a3b-nvfp4 removed — superseded by qwen3.6
-        qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge)
-            # Production ManyForge profile: 3×64K context, TQ K8V4 + MTP N=2,
-            # gpu_mem_util 0.32 so we can co-serve cosmos-reason2-2b on Thor.
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge"
-            THOR_TARGET_MAX_MODEL_LEN="65536"
-            THOR_TARGET_KV_CACHE_DTYPE="turboquant_k8v4"
-            THOR_TARGET_MAX_NUM_SEQS="3"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="8192"
-            THOR_TARGET_QUANTIZATION=""
-            ;;
         qwen3.6-35b-a3b-nvfp4-nvidia)
             # EXPERIMENTAL (added 2026-05-30): NVIDIA-official NVFP4 quant of
             # Qwen3.6-35B-A3B (MoE, ~3B active / 35B total). Combines:
@@ -340,6 +286,10 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_QUANTIZATION=""
+            # Per-profile proxy tuning (consumed by start-model.sh)
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="8"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=""
             ;;
         cosmos-reason2-2b)
             # NVIDIA Cosmos Reason 2 (2B), Qwen3-VL-2B base, VLM physical-AI reasoner.
@@ -353,6 +303,50 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_QUANTIZATION=""
+            ;;
+        nemotron3-nano-30b-a3b-nvfp4)
+            # NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4 — text-only sibling
+            # of Omni. ~18GB NVFP4 baked, 3.5B active. Positioned as the
+            # primary tool-call A3B in Nemotron-3 line.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="nemotron3-nano-30b-a3b-nvfp4"
+            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="8192"
+            THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
+            THOR_TARGET_QUANTIZATION=""
+            # Per-profile proxy tuning (consumed by start-model.sh)
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="8"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=""
+            ;;
+        nemotron3-nano-4b-bf16)
+            # NVIDIA-Nemotron-3-Nano-4B-BF16 — NVIDIA's explicit Jetson
+            # Thor agentic default per HF card. Hybrid Mamba+attn, 8 GB
+            # BF16 weights, native 262144 ctx. Tool-call-trained on
+            # glaive + APIGen + ToolBench (BFCL v3 = 61.1).
+            #
+            # Conservative sizing for first-bringup: max_model_len=65536
+            # (enough for OpenClaw bootstrap ~16K + history + tool
+            # results), max_num_seqs=8, kv=fp8 to save room for Isaac.
+            # Bump max_model_len after confirming it works.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="nemotron3-nano-4b-bf16"
+            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="8192"
+            THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
+            THOR_TARGET_QUANTIZATION=""
+            # Per-profile proxy tuning (consumed by start-model.sh)
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="8"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=""
             ;;
         cosmos-reason2-8b)
             # NVIDIA Cosmos Reason 2 (8B), Qwen3-VL-8B base, VLM physical-AI reasoner.
@@ -381,6 +375,10 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_QUANTIZATION=""
+            # Per-profile proxy tuning (consumed by start-model.sh)
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="3"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="6"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"
             ;;
         nemotron3-nano-omni-30b-a3b-nvfp4)
             # NVIDIA Nemotron 3 Nano Omni (released 2026-04-28). 30B-A3B
@@ -419,6 +417,10 @@ resolve_model_profile() {
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
             THOR_TARGET_QUANTIZATION=""
+            # Per-profile proxy tuning (consumed by start-model.sh)
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="8"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=""
             ;;
         nemotron3-nano-omni-30b-a3b-nvfp4-reasoning)
             # Reasoning-mode variant of the base nemotron3-nano-omni

@@ -29,6 +29,17 @@ runbook for bringing it up live in this repo at
 [`manyforge/README.md`](manyforge/README.md) and
 [`manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md`](manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md).
 
+> **Read the architecture doc first when answering anything about how the
+> assistant pipeline works end-to-end:**
+> [`manyforge/docs/COMPOSER-ASSISTANT-ARCHITECTURE.md`](manyforge/docs/COMPOSER-ASSISTANT-ARCHITECTURE.md).
+> It is the canonical reference for the five-hop request flow (Composer →
+> bridge → OpenClaw gateway → vllm-proxy → vLLM), every configurable env
+> var ranked by impact, the thinking subsystem precedence rules, the
+> cascading loop-defense system, the profile catalog, and the bring-up
+> cookbook. The runbook below covers per-symptom debugging; the
+> architecture doc covers why each component exists and what knob to
+> change first.
+
 ---
 
 ## Purpose
@@ -432,23 +443,38 @@ Mode taxonomy and bounded-autonomy spec live in `manyforge_specs/docs/spec/480-.
 
 Keep these high-level — file names shift, scope endures.
 
+**Assistant pipeline reference (read in this order):**
+
+- **`manyforge/docs/COMPOSER-ASSISTANT-ARCHITECTURE.md`** — canonical
+  architecture: five-hop request flow, every env-var knob ranked by
+  impact, thinking subsystem precedence, cascading loop-defense
+  system, profile catalog, bring-up cookbook. Read first when
+  answering anything about how the assistant pipeline works.
+- **`manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md`** — per-symptom
+  debugging across the 10 gates (UI → MCP → tool dispatch). Read first
+  when answering "this is broken, why?"
+- **`manyforge/docs/SMOKE-CORPUS.md`** — corpus + per-iter history.
+  Point-in-time numbers; consult for regression context.
+- **`manyforge/docs/SMOKE-ITER-RUNBOOK.md`** — cold-start order of
+  operations for running a smoke iteration.
+- **`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md`** — the
+  benchmark behind the OpenClaw-lane + Cosmos-Reason2-8B production
+  default. Read when proposing to swap either choice.
+- **`manyforge/docs/MANYFORGE-MCP-INTEGRATION.md`** — MCP wire details,
+  tool-name mangling, principal binding. Read when answering "how does
+  the agent talk to ManyForge?"
+- **`manyforge/docs/MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md`** — model
+  selection plan for Thor + Orin deployment budgets.
+- **`manyforge/docs/MANYFORGE-PROFILE-CALIBRATION.md`** — sizing
+  methodology for `max_model_len` / `max_num_seqs` /
+  `gpu_memory_utilization`. Read before adding a profile or changing
+  those knobs.
+
+**Other operational docs:**
+
 - **`setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`** — canonical end-to-end recipe
   (start model, wire OpenShell, dispatch agent). Read first when
   answering anything operational.
-- **`MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md`** — profile-selection
-  plan for the ManyForge assistant on Thor and Orin (which model fits
-  which deployment budget).
-- **`MANYFORGE-PROFILE-CALIBRATION.md`** — sizing methodology for
-  `max_model_len` / `max_num_seqs` / `gpu_memory_utilization` on
-  ManyForge-pipeline-targeted profiles. Read before adding a new
-  profile or changing those knobs on an existing one.
-- **`MANYFORGE-MCP-INTEGRATION.md`** — end-to-end runbook for routing
-  the ManyForge composer-assistant through the OpenClaw agent runtime
-  in the `my-assistant` sandbox via Model Context Protocol. Covers the
-  skill (`manyforge-composer`), the custom egress preset, the MCP
-  stdio bridge, the `setup-manyforge-assistant.sh` provisioner, and
-  the Phase 2 OpenClaw assistant bridge. Read first when answering
-  "how does the agent talk to ManyForge?"
 - **`serving/agentic-bench/README.md`** — bench harness and candidate plan.
 - **`serving/docker/`** — Thor-specific build notes and patch rationale,
   including any active TRT-Edge-LLM evaluation.

@@ -53,6 +53,47 @@ fi
 
 save_thor_runtime_config
 
+# 2026-06-01: per-profile proxy tuning. If THOR_TARGET_PROXY_* vars were
+# set by config.sh during load_thor_runtime_config, restart the local
+# vllm-proxy with profile-appropriate loop thresholds + thinking force.
+# Gated via THOR_RESTART_PROXY=0 to opt out (e.g. when the proxy is
+# managed by a separate supervisor or you want to keep an in-flight
+# config).
+if [[ "${THOR_RESTART_PROXY:-1}" != "0" ]]; then
+    REFLECT_AT="${THOR_TARGET_PROXY_LOOP_REFLECT_AT:-4}"
+    STOP_AT="${THOR_TARGET_PROXY_LOOP_STOP_AT:-8}"
+    FORCE_THINKING="${THOR_TARGET_PROXY_FORCE_ENABLE_THINKING:-}"
+    PROXY_SCRIPT="${REPO_ROOT}/manyforge/scripts/proxy/vllm-proxy.py"
+    if [[ -f "${PROXY_SCRIPT}" ]]; then
+        info "Restarting vllm-proxy with profile tuning: REFLECT_AT=${REFLECT_AT} STOP_AT=${STOP_AT} FORCE_THINKING=${FORCE_THINKING:-(unset)}"
+        pkill -9 -f "scripts/proxy/vllm-proxy.py" 2>/dev/null || true
+        sleep 1
+        # Mirror the production assistant.sh defaults
+        export OPENCLAW_PROXY_BIND="${OPENCLAW_PROXY_BIND:-0.0.0.0}"
+        export OPENCLAW_PROXY_LISTEN_PORT="${OPENCLAW_PROXY_LISTEN_PORT:-8000}"
+        export OPENCLAW_PROXY_UPSTREAM="${OPENCLAW_PROXY_UPSTREAM:-http://127.0.0.1:8050}"
+        export OPENCLAW_PROXY_LOG_PATH="${OPENCLAW_PROXY_LOG_PATH:-/tmp/manyforge-assistant-e2e/vllm-proxy.jsonl}"
+        export OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS="${OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS:-2048}"
+        export OPENCLAW_PROXY_THINKING_TOKEN_BUDGET="${OPENCLAW_PROXY_THINKING_TOKEN_BUDGET:-512}"
+        export OPENCLAW_PROXY_LOOP_REFLECT_AT="${REFLECT_AT}"
+        export OPENCLAW_PROXY_LOOP_STOP_AT="${STOP_AT}"
+        if [[ -n "${FORCE_THINKING}" ]]; then
+            export OPENCLAW_PROXY_FORCE_ENABLE_THINKING="${FORCE_THINKING}"
+        else
+            unset OPENCLAW_PROXY_FORCE_ENABLE_THINKING
+        fi
+        mkdir -p "$(dirname "${OPENCLAW_PROXY_LOG_PATH}")"
+        nohup python3 "${PROXY_SCRIPT}" > /tmp/vllm-proxy.startup.log 2>&1 &
+        disown
+        sleep 2
+        if pgrep -f "scripts/proxy/vllm-proxy.py" >/dev/null; then
+            info "vllm-proxy restarted (pid $(pgrep -f scripts/proxy/vllm-proxy.py | head -1))"
+        else
+            info "WARNING: vllm-proxy did not start; check /tmp/vllm-proxy.startup.log"
+        fi
+    fi
+fi
+
 if [[ "${THOR_LAUNCH_BACKEND:-vllm}" == "llamacpp" ]]; then
     info "Starting local llama-server..."
     info "OpenClaw sandbox base URL: ${THOR_OPENCLAW_BASE_URL}"

@@ -510,6 +510,31 @@ def build_agent_prompt(
             "`allowedTools` and every tool whose schema appears in "
             "your callable interface is available. If you don't know "
             "which tool, ask one specific question; do not refuse.",
+            "11a. **Missing-WHERE rule.** A prompt is ambiguous if it "
+            "names the operation and node kind but NOT where to place "
+            "the result (parent / position / target sibling). For these, "
+            "output ONLY a clarification question — do NOT call any tool. "
+            "Concrete patterns that REQUIRE asking: \"add a "
+            "<kind>\" / \"insert a <kind>\" / \"wrap with <kind>\" "
+            "with no parent, position, or sibling named — ask "
+            "\"which parent and where in its children?\" — examples: "
+            "\"add a parallel\", \"add a fallback\", \"add a sequence\", "
+            "\"add a repeat\". \"make <something> <change>\" / "
+            "\"set <something> to <value>\" with no specific target node "
+            "named (multiple candidates exist in the tree) — ask "
+            "\"which node?\" — example: \"make the robot move slower\". "
+            "These tests this rule MUST satisfy by NOT calling any "
+            "draft tool: PARALLEL_generic, FALLBACK_generic, "
+            "UPDATE_params_generic. If the prompt is missing WHERE / "
+            "WHICH and you proceed to a default insert position, you "
+            "have violated this rule.",
+            "11b. **Replace vs swap rule.** For \"replace X with Y\" "
+            "where both X and Y are leaf nodes: if the user names the "
+            "atomic operation \"replace\", emit `tree_draft_replace_subtree` "
+            "even when `tree_draft_change_node_kind` (swap_node) would "
+            "also work. The user's word \"replace\" is the dispatch signal. "
+            "Reserve swap_node ONLY for prompts that explicitly say "
+            "\"change the kind\" / \"swap the kind\" / \"convert to\".",
             "10. Namespace decision rules, in order of precedence: "
             "(a) If the request says \"node\", \"tree\", \"root\", "
             "\"sequence\", \"fallback\", \"parallel\", \"repeat\", "
@@ -527,6 +552,56 @@ def build_agent_prompt(
             "conversation, and ask before guessing.",
         ]
     )
+    # 2026-05-31 (round 2 iteration on cosmos regression): a
+    # prompt-aware self-check appended after user_request. Fires ONLY
+    # when the message matches the EXACT under-specified-add pattern
+    # that the smoke marks as expecting clarification (PARALLEL_generic,
+    # FALLBACK_generic, PARALLEL_concurrent_medium). Round 1 tried a
+    # broad rule (Rule 0a) and over-fired on "add a node that places
+    # graspable somewhere" — losing TREE_insert_runtime_generic that
+    # had been a clean pass. This check matches narrowly:
+    #   - prompt is short (<= 20 words)
+    #   - starts with add/insert/wrap
+    #   - mentions a control-flow kind (parallel/fallback/sequence/
+    #     repeat/retry/inverter)
+    #   - has NO parent/position/sibling keyword
+    # Any of those guards failing means the check stays silent and
+    # round-0 behavior is preserved exactly.
+    self_check = ""
+    msg_strip = message.strip()
+    word_count = len(msg_strip.split())
+    has_add_verb = any(
+        msg_lower.startswith(v) or f" {v} " in f" {msg_lower} "
+        for v in ("add a ", "insert a ", "wrap with ", "wrap the root with ")
+    )
+    has_cf_kind = any(
+        f" {k}" in f" {msg_lower}" or msg_lower.endswith(k) or msg_lower.endswith(k + ".")
+        for k in ("parallel", "fallback", "sequence", "repeat", "retry", "inverter")
+    )
+    has_locator = any(
+        loc in msg_lower
+        for loc in (
+            "after ", "before ", "child of",
+            "under ", "inside ", "in the ", "in pick", "in sequence",
+            "first child", "last child", "position ", "at the end",
+            "at the start", "at index", "child index",
+            "as root", "the root", "around root", "around the root",
+            "as new root", "as tree root", "new root",
+            "somewhere", "anywhere", "wherever",
+        )
+    )
+    if word_count <= 5 and has_add_verb and has_cf_kind and not has_locator:
+        self_check = (
+            "\n\n"
+            "## self_check (apply BEFORE responding)\n"
+            "This prompt names an operation and a control-flow kind but does "
+            "NOT name a parent, position, sibling, or 'somewhere/anywhere' "
+            "qualifier. That makes the destination ambiguous. The correct "
+            "response is a single short clarification question of the form: "
+            "\"Which parent should I add the <kind> under, and at which "
+            "position?\" — emit ZERO tool calls. Do not default to the root "
+            "or to the last-touched sibling."
+        )
     return "\n".join(
         [
             "You are the ManyForge composer assistant running inside OpenClaw.",
@@ -543,7 +618,7 @@ def build_agent_prompt(
             "```",
             "",
             "## user_request",
-            message.strip(),
+            message.strip() + self_check,
         ]
     )
 

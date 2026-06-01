@@ -246,14 +246,17 @@ cases:
 - id: TREE_insert_runtime_generic
   category: tree_insert_runtime_obj
   detail_level: generic
+  # Reframed 2026-06-01 (model-bakeoff): "places graspable somewhere"
+  # has no position spec (no parent, no sibling, no pose). Best
+  # agentic behavior is to ASK: which sequence/parent? what pose?
+  # The prior expected-act framing biased the corpus toward Cosmos's
+  # "default-anywhere" behavior. Models with proper agentic training
+  # (Nemotron-Omni/4B, Qwen3 with thinking) ask first.
   prompt: "add a node that places graspable somewhere"
   expected:
-    tools_called:
-      - name: tree_draft_insert_node
-        args_contain:
-          node.id: upsert_collision_object
-          node.params.object_id: graspable
-        allow_retries: true
+    tools_called: []
+    forbidden_tools: [tree_draft_insert_node, tree_draft_wrap_node]
+    answer_must_contain: ["where"]
 
 - id: TREE_insert_runtime_medium
   category: tree_insert_runtime_obj
@@ -453,12 +456,17 @@ cases:
 - id: UPDATE_params_generic
   category: tree_update_node_params
   detail_level: generic
+  # Reframed 2026-06-01 (model-bakeoff): "make the robot move slower"
+  # is multi-ambiguous — there are several move_manipulator_action
+  # nodes in pick_and_place (move_to_pick, move_to_pre_place,
+  # move_to_place...), each with its own velocity_scale. Best agentic
+  # behavior is to ASK which node(s) to slow down and by how much.
+  # Prior expected-act framing rewarded blind-guessing one node.
   prompt: "make the robot move slower"
   expected:
-    tools_called:
-      - name: tree_draft_update_node_params
-        allow_retries: true
-    forbidden_tools: [tree_draft_insert_node, tree_draft_delete_node]
+    tools_called: []
+    forbidden_tools: [tree_draft_insert_node, tree_draft_delete_node, tree_draft_update_node_params]
+    answer_must_contain: ["which"]
 
 # ===================================================================
 # Section 7 — Delete nodes
