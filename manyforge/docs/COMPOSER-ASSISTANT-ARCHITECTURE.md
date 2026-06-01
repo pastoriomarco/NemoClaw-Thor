@@ -17,6 +17,77 @@ Cross-references:
 
 ---
 
+## Recent changes (2026-05-31 / 2026-06-01)
+
+The pipeline accumulated several behavior-changing patches in late May / early
+June 2026. The list below is the rapid-reference; each item is fully described
+later in the doc.
+
+- **Synthetic clarification inverted to default-OFF (2026-06-01).** Was
+  hard-coded ON before. Opt-in via `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1`;
+  legacy `OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC=1` preserved as the back-compat
+  off-switch. The bypass was hiding model-specific ability to ask clarification
+  on `add a <kind>` patterns; default-off makes the smoke corpus a fair
+  comparator across models. Implementation: `service.py:397-407`. See §B.3 +
+  §D.4.
+- **CONSECUTIVE (not LIFETIME) tail-run loop counting (2026-06-01).** The
+  proxy's `vllm-proxy.py:403-442` now counts run-length at the tail of the
+  assistant-turn sequence — any different tool resets the run to 1, a no-tool
+  assistant turn resets it to 0. Lifetime counting was the major bug that
+  hard-stopped every chained smoke case (PnP_01..PnP_20) after the 3rd or 4th
+  retry because the shared `conversationId` history accumulated faster than
+  the case-local loop length. Documented in §D.1.
+- **Cascading loop defense (round 10, 2026-06-01).** Reflection-injection
+  at `_REFLECT_AT=4` + hard stop at `_STOP_AT=8`. Two-stage: the model gets
+  exactly one shot to act on the reflection prompt before being cut off. Pairs
+  with the consecutive counting fix above. Documented in §D.1.
+- **Rule 11 NO_REPLY guard + Rule 11a Missing-WHERE clause (2026-06-01).**
+  `adapter.py:513-536`. Rule 11 explicitly forbids the model from replying the
+  literal `NO_REPLY` string on action-shaped prompts; 11a names
+  `PARALLEL_generic` / `FALLBACK_generic` / `UPDATE_params_generic` as the
+  patterns that MUST elicit a clarification question instead of a tool call.
+  This is the prompt-side replacement for the now-default-off synthetic
+  clarification bypass. Documented in §B.2-prompt and §D.4.
+- **Per-profile proxy tuning (2026-06-01).** `serving/config.sh` carries
+  `THOR_TARGET_PROXY_LOOP_REFLECT_AT` / `_STOP_AT` / `_FORCE_ENABLE_THINKING`
+  per profile case branch (5 active branches);
+  `serving/start-model.sh:56-95` auto-restarts the local vllm-proxy with
+  those values whenever a new profile boots. Opt out with
+  `THOR_RESTART_PROXY=0` (e.g. when a separate supervisor owns the proxy).
+  Documented in §B.1.
+- **Proxy top-level enable_thinking mirror (2026-05-31).**
+  `vllm-proxy.py:285-292`. When `OPENCLAW_PROXY_FORCE_ENABLE_THINKING` is
+  set, the proxy writes the target value to BOTH
+  `chat_template_kwargs.enable_thinking` AND the top-level `enable_thinking`
+  field. vLLM treats the top-level as source of truth and ignores
+  `chat_template_kwargs` when both are present; without the mirror, Composer's
+  top-level `enable_thinking:false` silently cancels every profile's
+  thinking-on default. Now fed automatically from the per-profile
+  `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING` via `start-model.sh`. See §C.
+- **Schema fix: `node.name` accepted in tree_draft_insert_node (2026-06-01).**
+  `dev_ws/src/manyforge/manyforge_composer/backend/assistant_tool_schemas.py:488-528`.
+  The `_TREE_NODE_PAYLOAD_FOR_INSERT_SCHEMA` now accepts an optional
+  `node.name` as a duplicate of the top-level `nodeName` argument
+  (mirroring the older `_TREE_NODE_SCHEMA` shape used by `tree_draft_wrap_node`).
+  Handler still reads from the top-level `nodeName`; `node.name` is
+  accepted-and-ignored. Stops validator death spirals when models
+  emit the legacy duplicated shape. See §B-Composer.
+- **Smoke runner `alt_names` support (2026-06-01).**
+  `smoke_corpus_runner.py:391-424`. Corpus cases may declare an `alt_names`
+  list for tools with equivalent effect (e.g. `scene_draft_upsert_objects`
+  as an alt for `scene_draft_add_object`). When the primary `name` is
+  missing but an alt fired with 2xx, the case is recorded as `soft-pass`
+  instead of failing. Documented in §B.5 and §F.7.
+- **Smoke corpus rebalance (2026-06-01).** 4 cases now expect ASK
+  (clarification, no tool emission) rather than a tool call:
+  `PARALLEL_generic`, `FALLBACK_generic`, plus 2 cases labeled
+  `category: clarification` (smoke_corpus.yaml lines 1170, 1196, 1214).
+  These rebalances are tied to the default-synthetic-off measurement design —
+  they probe whether the model itself asks (via Rule 11a) without the
+  bridge bypass.
+
+---
+
 ## TL;DR
 
 - A user message in **Composer** (FastAPI + React UI on `:9000`) traverses
@@ -42,7 +113,14 @@ Cross-references:
   4. `OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2` (bridge-fired `/compact` keeps
      chain-on sessions from overflowing).
   5. `OPENCLAW_PROXY_LOOP_REFLECT_AT=4` / `OPENCLAW_PROXY_LOOP_STOP_AT=8`
-     (round-10 cascading loop defense, 2026-06-01).
+     (round-10 cascading loop defense, **CONSECUTIVE** counting since
+     2026-06-01).
+- **Synthetic clarification is OFF by default since 2026-06-01.** The
+  bypass that used to short-circuit `add a <kind>` prompts is now an
+  opt-in (`OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1`). The prompt-side
+  replacement is Rule 11a (Missing-WHERE) in `adapter.py:519-536`, which
+  instructs the model to ask "which parent and where in its children?"
+  for those patterns without bypass.
 - **Production default**: `cosmos-reason2-8b` (8B Qwen3-VL VLM, FP8 KV,
   hermes tool parser, qwen3 reasoning parser, thinking-on, 256K ctx).
 
@@ -73,7 +151,10 @@ Cross-references:
 │                     ▼                                                       │
 │  ┌────────────────────────── Hop 2 (lane-specific) ──────────────────┐    │
 │  │  openclaw_assistant_bridge :8200  (FastAPI, this repo)             │    │
-│  │  ─ short-circuits "add a <kind>" with synthetic clarif (round 7)   │    │
+│  │  ─ synthetic clarif for "add a <kind>" — DEFAULT OFF since         │    │
+│  │      2026-06-01 (opt-in: OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1)    │    │
+│  │  ─ Rule 11 NO_REPLY guard + 11a Missing-WHERE injected into RULES  │    │
+│  │      block (adapter.py:513-536) — prompt-side replacement          │    │
 │  │  ─ detects 5+ same-tool calls across turns → synthetic stop (r 8)  │    │
 │  │  ─ fires /compact every Nth user prompt on this session key        │    │
 │  │  ─ builds OpenClaw agent invocation (gateway mode = HTTP)          │    │
@@ -104,8 +185,9 @@ Cross-references:
 │  │  ─ injects max_tokens, thinking_token_budget, enable_thinking…     │    │
 │  │  ─ mirrors top-level enable_thinking to chat_template_kwargs (r10) │    │
 │  │  ─ cascading loop defense (round 10, 2026-06-01):                  │    │
-│  │      4 same-tool calls   → injects reflection user message         │    │
-│  │      8 same-tool calls   → synthesizes SSE assistant stop          │    │
+│  │      4 CONSECUTIVE same-tool calls → injects reflection prompt     │    │
+│  │      8 CONSECUTIVE same-tool calls → synthesizes SSE assistant stop│    │
+│  │      (consecutive ≠ lifetime — different tool or no-tool resets)   │    │
 │  │  ─ 200s per-request socket timeout (fails before smoke's 244s)     │    │
 │  └──────────────────┬─────────────────────────────────────────────────┘    │
 │                     │ forward to upstream                                   │
@@ -214,6 +296,44 @@ production recipe sets `OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048` and
 case timeout is 244 s; the proxy's 200 s ensures it fails first and releases
 the upstream KV slot. Don't raise either without raising both.
 
+#### Per-profile proxy tuning (2026-06-01)
+
+Every model profile carries its own preferred proxy knobs in
+`serving/config.sh`. The launcher reads these during
+`load_thor_runtime_config` and `serving/start-model.sh:56-95` then
+**auto-restarts** the local vllm-proxy with those values whenever a new
+profile boots. Opt out (e.g. when the proxy is managed by a separate
+supervisor) with `THOR_RESTART_PROXY=0`.
+
+| Profile | `THOR_TARGET_PROXY_LOOP_REFLECT_AT` | `THOR_TARGET_PROXY_LOOP_STOP_AT` | `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING` | Rationale |
+|---------|--------------------------------------|----------------------------------|--------------------------------------------|-----------|
+| `cosmos-reason2-8b` | `4` | `8` | _(unset — server default thinking-on dominates)_ | Production default; the proxy mirror picks up server-side thinking-on so no force needed. |
+| `cosmos-reason2-2b` | `4` | `8` | _(unset)_ | Same as 8B with smaller footprint. |
+| `nemotron3-nano-omni-30b-a3b-nvfp4` | `3` | `6` | `on` | Tighter loop because the model loops faster; force thinking-on because Composer's top-level `enable_thinking:false` would otherwise cancel the thinking budget. |
+| `qwen3.6-35b-a3b-nvfp4-nvidia` | `4` | `8` | _(unset)_ | Heavier model; default thresholds suffice. |
+| _other profiles_ | `4` | `8` | _(unset)_ | Defaults until a profile-specific calibration is added. |
+
+The `start-model.sh` auto-restart preserves any `OPENCLAW_PROXY_*` env vars
+the caller set explicitly (it sources `:-…` defaults so caller values win).
+Combined with `assistant.sh`'s baseline (`OVERRIDE_MAX_TOKENS=2048`,
+`THINKING_TOKEN_BUDGET=512`), the production proxy boot is:
+
+```bash
+OPENCLAW_PROXY_BIND=0.0.0.0
+OPENCLAW_PROXY_LISTEN_PORT=8000
+OPENCLAW_PROXY_UPSTREAM=http://127.0.0.1:8050
+OPENCLAW_PROXY_LOG_PATH=/tmp/manyforge-assistant-e2e/vllm-proxy.jsonl
+OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048
+OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512
+OPENCLAW_PROXY_LOOP_REFLECT_AT=<profile value>
+OPENCLAW_PROXY_LOOP_STOP_AT=<profile value>
+[OPENCLAW_PROXY_FORCE_ENABLE_THINKING=<profile value if set>]
+```
+
+When adding a new profile (recipe §F.5), the per-profile proxy vars are
+now part of the profile contract — set them in `config.sh` even if they
+match the default-4/8 values, so future re-tuning has a clear baseline.
+
 ### B.3 Bridge config (`manyforge/openclaw_assistant_bridge/`)
 
 Loaded in `service.py::_config_from_env()` and (for cluster identifiers) at
@@ -234,7 +354,9 @@ unchanged.
 | `OPENCLAW_ASSISTANT_GATEWAY_ENABLE_THINKING` | unset | Optional boolean. If set, added to `chat_template_kwargs` in the gateway envelope. Note: **the proxy's mirror is the proven path** — this flag exists as an alternative but is less tested. | Use the **proxy's** `OPENCLAW_PROXY_FORCE_ENABLE_THINKING` for production toggles. This bridge-side var is here for symmetry. |
 | `OPENCLAW_ASSISTANT_COMPACT_EVERY_N` | `0` (disabled) | When set to N>0, the bridge POSTs `/compact` to the gateway **before** every Nth user prompt on this session key (skipping #1). Counter resets on bridge restart. **Iter-32 production setting.** | `2` in production — keeps chain-on sessions from overflowing the 256K context. Disable only if measuring an isolated baseline. |
 | `OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S` | `120` | Timeout for the `/compact` call itself. If exceeded the failure is logged and the user request still goes through. | Leave alone — compaction normally completes in 10-30 s. |
-| `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` | `5` | Bridge-side **cross-turn loop detector** (round 8, 2026-05-31). When the request's `messages[]` history has 5+ assistant turns calling the same tool, the bridge short-circuits with a synthetic stop response (status 200, message "I have called X N times… stopping to prevent a runaway loop.", `warnings: ["loop_detected_stopped: …"]`). | This catches loops the proxy's per-conversation threshold would miss when Composer restarts conversations indefinitely. Leave at 5; raise to `0` to disable. |
+| `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` | `5` | Bridge-side **cross-turn loop detector** (round 8, 2026-05-31). When the request's `messages[]` history has 5+ assistant turns calling the same tool, the bridge short-circuits with a synthetic stop response (status 200, message "I have called X N times… stopping to prevent a runaway loop.", `warnings: ["loop_detected_stopped: …"]`). NOTE: Composer→bridge sends ONE user message per turn — `messages[]` is rarely populated as a history — so the load-bearing duplicate-tool detector is the **proxy's**. Leave at 5 as a belt-and-braces backstop. | This catches loops the proxy's per-conversation threshold would miss when Composer restarts conversations indefinitely. Leave at 5; raise to `0` to disable. |
+| `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC` | _(unset = off)_ | **NEW 2026-06-01.** Opt-in for the bridge-side synthetic clarification short-circuit (see §D.4). When set (1/true/yes/on), prompts matching the narrow gate `add a <kind>` / `insert a <kind>` / `wrap with <kind>` (≤4 words, kind ∈ {parallel, fallback, sequence, repeat, retry, inverter}) are answered with a canned "Which parent? Which position?" without invoking OpenClaw. Default OFF means the model itself must ask (Rule 11a in `adapter.py`). | Production: leave OFF. Enable only when running a smoke against a model that demonstrably cannot pass Rule 11a and you need the bypass to ship. |
+| `OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC` | _(unset = off)_ | **Legacy back-compat opt-out** (was the only knob before 2026-06-01, when synthetic was hard-coded ON). When set (1/true/yes/on), forces the bypass off even if `_ENABLE_SYNTHETIC` was also set. Honored for backwards compatibility with launcher scripts that referenced this var. | Use only if you have an old script that sets ENABLE but you want to verify the bypass is off. New deployments should leave it unset and rely on the new opt-in. |
 | `OPENCLAW_ASSISTANT_SANDBOX` | `my-assistant` | NemoClaw sandbox name. | Match the actual sandbox; default is the one the provisioner installs. |
 | `OPENCLAW_ASSISTANT_NAMESPACE` | `openshell` | K8s namespace inside the cluster gateway container. | Leave alone. |
 | `OPENCLAW_ASSISTANT_CONTAINER` | `agent` | K8s container name. | Leave alone. |
@@ -252,13 +374,23 @@ unchanged.
 | `OPENCLAW_ASSISTANT_METRICS_ENABLED` | `false` | When `true`, mount `/metrics` Prometheus endpoint on the bridge port. | Enable for production observability. |
 | `OPENCLAW_ASSISTANT_LOG_LEVEL` | `info` | Uvicorn log level. | `debug` for new-incident triage. |
 
-**Bridge-side synthetic-clarification short-circuit** (`service.py:355-411`,
-round 7, 2026-05-31): pattern-matches `add a <kind>` / `insert a <kind>` /
-`wrap with <kind>` (kind ∈ parallel, fallback, sequence, repeat, retry,
-inverter; word count ≤ 4); returns a canned "Which parent? Which position?"
-clarification without ever invoking OpenClaw. No env var to disable today — it
-is hard-coded and intentionally narrow. To suppress: edit the `cf_kinds`
-tuple in `service.py` or the `starts_add_verb` gate.
+**Bridge-side synthetic-clarification short-circuit** (`service.py:370-446`,
+round 7 of 2026-05-31; **default-OFF since 2026-06-01**): pattern-matches
+`add a <kind>` / `insert a <kind>` / `wrap with <kind>` (kind ∈ parallel,
+fallback, sequence, repeat, retry, inverter; word count ≤ 4); returns a
+canned "Which parent? Which position?" clarification without ever invoking
+OpenClaw.
+
+The 2026-06-01 inversion: **opt-in via `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1`**;
+default off so smoke benchmarks measure the model's actual ability to ask
+clarification on those patterns (the bypass was hiding model-specific
+behavior). Legacy `OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC=1` opt-out preserved
+for backwards compatibility — if set, forces off even when ENABLE is set.
+
+The prompt-side replacement is **Rule 11a Missing-WHERE** (adapter.py:519-536)
+which instructs the model to ask "which parent and where in its children?"
+for `PARALLEL_generic` / `FALLBACK_generic` / `UPDATE_params_generic`
+patterns. See §D.4 for full details on both mechanisms.
 
 ### B.4 Composer config (sibling `dev_ws/src/manyforge/`)
 
@@ -292,7 +424,26 @@ as opt-in). vLLM treats the top-level field as the source of truth and
 The proxy's `_FORCE_ENABLE_THINKING` mode mirrors its chat_template_kwargs
 decision to the top level (`vllm-proxy.py:285-292`); without that mirror,
 thinking-on profiles silently revert to thinking-off when Composer is the
-client.
+client. The per-profile `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING` in
+`serving/config.sh` feeds this mirror through `start-model.sh`'s
+auto-restart path so each profile gets its preferred thinking posture
+without manual env setup.
+
+**Composer tool schema reuse: `node.name` accepted in `tree_draft_insert_node`**
+(`manyforge_composer/backend/assistant_tool_schemas.py:488-528`, 2026-06-01).
+The `_TREE_NODE_PAYLOAD_FOR_INSERT_SCHEMA` schema now accepts an optional
+`node.name` field as a duplicate of the top-level `nodeName` argument
+(mirroring the older `_TREE_NODE_SCHEMA` shape used by
+`tree_draft_wrap_node` / `tree_draft_replace_subtree`). Background: small
+models routinely emit both shapes — top-level `nodeName: foo` AND
+`node.name: foo` inside the payload — because they've seen `_TREE_NODE_SCHEMA`
+in the wrap/replace tools. Before the fix, `additionalProperties: false`
+on the insert payload rejected `node.name` and the model entered a
+validator death-spiral (verified during Cosmos-Reason2-8B smoke runs). The
+handler still reads `nodeName` from the top level; `node.name` is
+accepted-and-ignored. If a model passes mismatched values, top-level
+`nodeName` wins. The fix is comment-documented in the schema source at
+lines 510-528.
 
 ### B.5 Smoke corpus knobs (`manyforge/scripts/debug/smoke_corpus_runner.py`)
 
@@ -308,6 +459,26 @@ client.
 | `--verbose` | off | Print per-case detail to stdout. |
 | `--enable-recovery-turn` | off (default-on in production runbook) | When a case fails AND chat returned 200, send one generic follow-up. Cases that pass on the recovery turn are scored `recovered-pass` ([SMOKE-ITER-RUNBOOK.md `--enable-recovery-turn` section](./SMOKE-ITER-RUNBOOK.md)). Iter 33 measured +10 cases salvaged this way. |
 | `--no-chain-session` | off | Give each chain step its own `conversationId`. Without this, PnP_01..PnP_20 share a session and one early failure can cascade. **Iter 32 + bridge compaction made chain-on viable**; only use `--no-chain-session` for chain-off baseline comparison. |
+
+**Per-case `alt_names`** (2026-06-01, `smoke_corpus_runner.py:391-424`):
+each `expected_tool_calls[]` entry can carry an `alt_names: [...]` list of
+tool names that produce an equivalent effect (e.g.
+`scene_draft_upsert_objects` as an alt for `scene_draft_add_object` — both
+land the same resource via different verbs). The matcher tries the primary
+`name` first; on miss, walks `alt_names` looking for any with a 2xx tool
+result. A successful alt match records the entry as a **soft-pass**
+(`alt-tool '<x>' used instead of '<y>' (equivalent effect)`) rather than a
+hard fail. The outer runner's report rolls those into `soft-pass` status
+which counts toward the "effective" tally but not "first-try". Use this to
+accept legitimate variant behavior without rewriting corpus expectations.
+
+**Smoke corpus rebalance (2026-06-01)**: 4 cases now expect ASK
+(clarification, no tool emission) rather than a tool call:
+`PARALLEL_generic`, `FALLBACK_generic`, plus 2 cases labeled
+`category: clarification` (smoke_corpus.yaml lines 1170, 1196, 1214). The
+rebalance is tied to the default-synthetic-OFF design — these cases probe
+whether the model itself (via Rule 11a) asks for parent/position without
+the bridge bypass.
 
 The runner reconfigures stdout to line-buffered at import (`smoke_corpus_runner.py:48`) so `tail -f /tmp/iterN_runner.log` streams verdicts realtime — see [SMOKE-ITER-RUNBOOK.md §4](./SMOKE-ITER-RUNBOOK.md) for the rationale.
 
@@ -417,25 +588,49 @@ The proxy and the bridge each defend one layer.
 
 ### D.1 Proxy defense (within one chat-completions call)
 
-`vllm-proxy.py:362-487`. Counts the most common assistant tool name in
-`messages[]`, considering **all** turns in the request envelope (which under
-chain-on smoke includes prior Composer prompts' history too).
+`vllm-proxy.py:362-510`. **CONSECUTIVE tail-run counting since 2026-06-01**.
+The proxy walks the assistant turns in `messages[]` in order, tracking the
+**run length** of consecutive same-tool calls at the **tail** of the
+sequence:
+
+- A turn that calls a tool with the **same** name as the running `top_name`
+  increments `consecutive_count` by 1.
+- A turn that calls a **different** tool resets the run to 1 with the new
+  name as `top_name`.
+- A turn with **no tool call** resets `consecutive_count = 0` and
+  `top_name = None`.
+
+This replaced the prior lifetime-counter implementation (using
+`Counter.most_common`). Lifetime counting was the major bug fixed 2026-06-01:
+when Composer shared a `conversationId` across chained smoke cases (e.g.
+`PnP_01`..`PnP_20`), the same tool's lifetime call count crossed `_STOP_AT`
+by the 3rd or 4th case and hard-stopped every subsequent case on turn 1 —
+even though no case was actually in a same-tool loop. The new semantics
+only fire when the model is **actually** stuck in a same-tool retry pattern
+within the current case's turn stream.
 
 | Trigger | Action |
 |---------|--------|
-| `top_count >= OPENCLAW_PROXY_LOOP_REFLECT_AT` (default 4) | **Inject** a `[loop-reflection]`-marked user message right after the last tool result, urging the model to (a) call a different tool, (b) change the failing argument, or (c) ask the user. Forward the mutated body. Marker prevents double-injection. |
-| `top_count >= OPENCLAW_PROXY_LOOP_STOP_AT` (default 8) | **Hard-stop**: synthesize an SSE `chat.completion.chunk` with finish_reason=stop and content "I have called X N times… stopping to avoid runaway. Please refine the request…". OpenClaw treats this as a normal text completion and exits the loop. |
+| `consecutive_count >= OPENCLAW_PROXY_LOOP_REFLECT_AT` (default 4) | **Inject** a `[loop-reflection]`-marked user message right after the last tool result, urging the model to (a) call a different tool, (b) change the failing argument, or (c) ask the user. Forward the mutated body. Marker prevents double-injection. |
+| `consecutive_count >= OPENCLAW_PROXY_LOOP_STOP_AT` (default 8) | **Hard-stop**: synthesize an SSE `chat.completion.chunk` with finish_reason=stop and content "I have called X N times… stopping to avoid runaway. Please refine the request…". OpenClaw treats this as a normal text completion and exits the loop. NEVER forwarded upstream — no GPU spend. |
 
 Telemetry events appended to the proxy JSONL:
 
-- `proxy_loop_reflection_injected` — round 4 fired, mutated body forwarded
-- `proxy_loop_hard_stop` — round 8 fired, synthetic SSE returned, no GPU spend
+- `proxy_loop_reflection_injected` — count crossed `_REFLECT_AT`, mutated
+  body forwarded
+- `proxy_loop_hard_stop` — count crossed `_STOP_AT`, synthetic SSE returned,
+  no GPU spend
 
 Why **both** triggers exist instead of one: a single hard stop at low N
 denies the model a chance to recover after seeing fresh advice. The two-stage
 design (reflect → wait one turn → stop) means the model gets exactly one shot
 at the reflection prompt before being cut off, capping total GPU spend
 predictably at `STOP_AT` turns per case.
+
+**Legacy back-compat**: the older single-knob `OPENCLAW_PROXY_LOOP_TOOL_THRESHOLD`
+env var is still honored — when set, it maps to `_STOP_AT` and DISABLES
+reflection (sets `_REFLECT_AT=0`) unless `OPENCLAW_PROXY_LOOP_REFLECT_AT` is
+also explicitly set. New deployments should use the two-knob form.
 
 ### D.2 Bridge defense (across multiple Composer prompts)
 
@@ -458,25 +653,77 @@ normal model message and the smoke runner scores as a fail.
 - The two-stage proxy design + bridge cross-turn floor reliably bound
   total time-per-case at ~60-80 s even in the worst loop.
 
-### D.4 Bridge synthetic-clarification short-circuit (round 7, 2026-05-31)
+### D.4 Bridge synthetic-clarification + the Rule 11a prompt-side equivalent
 
-Different pattern from the loop detector, same purpose: bypass OpenClaw for
-prompts where the model has been observed to ignore in-prompt clarification
-guidance. Hard-coded narrow gate:
+There are **two** mechanisms in the pipeline that attempt to make the model
+ask the right "which parent / where in its children?" clarification on
+narrow `add a <kind>` patterns. They overlap in purpose but operate at
+different layers:
+
+| Mechanism | Where | Cost | Gating | Today |
+|-----------|-------|------|--------|-------|
+| **Bridge synthetic clarification** | `service.py:370-446` | 0 GPU — bypass before OpenClaw is invoked | Opt-in env `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1` | **DEFAULT OFF since 2026-06-01** |
+| **Prompt-side Rule 11 NO_REPLY + Rule 11a Missing-WHERE** | `adapter.py:513-536` | Normal GPU spend (model invocation) | Always-on (part of every RULES block) | Production replacement for the bypass |
+
+**Bridge synthetic clarification (round 7, 2026-05-31)** — bypass OpenClaw
+entirely on prompts matching a narrow gate, return a canned answer. Narrow
+gate (`service.py:407-415`):
 
 - `add a <kind>` / `insert a <kind>` / `wrap with <kind>`
 - `<kind>` ∈ {parallel, fallback, sequence, repeat, retry, inverter}
-- Total word count ≤ 4
+- Total word count ≤ 4 (compound forms like `add a parallel that ...`
+  refused)
 
 Returns a canned "Which parent node? Which position? For example: 'as the
 first child of pick_and_place', 'after gripper_close', or 'as a new root
 wrapping the existing tree'." answer. Smoke's `answer_must_contain` rubric
 checks for "which" and "where" tokens; the synthetic answer contains both.
 
-Added 2026-05-31 (round 7) after rounds 1-6 confirmed both in-prompt rule
-text and proxy USER_MESSAGE_SUFFIX nudges were ignored on first-turn action
-prompts. Not gated by an env var — to disable, edit the pattern gate in
-`service.py:373-380`.
+Default inverted to **OFF** on 2026-06-01 because the bypass gave every
+candidate model the same free pass on `PARALLEL_generic` /
+`FALLBACK_generic`, masking model-specific ability (or lack thereof) to ask
+clarification. Enable with `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1` for a
+production lane where the model demonstrably cannot pass Rule 11a (e.g.
+Cosmos-Reason2-8B on chain-off first-turn action prompts). Legacy
+`OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC=1` is preserved as a back-compat
+opt-out — if set, forces off even when ENABLE is set.
+
+**Rule 11 NO_REPLY guard + Rule 11a Missing-WHERE
+(2026-06-01, `adapter.py:513-536`)** — the prompt-side replacement. Both
+rules sit in the per-turn RULES block injected into every gateway-mode
+agent prompt:
+
+- **Rule 11**: "NEVER reply with the literal string `NO_REPLY` when the
+  user's prompt contains an action verb — `NO_REPLY` is reserved for
+  genuinely empty contexts (silence, continuation prompts), NOT for action
+  requests. If the request is action-shaped, either emit a tool call or
+  ask a clarifying question with real text content." Some Qwen-family
+  models default to `NO_REPLY` on unfamiliar action prompts; this guard
+  forbids that escape hatch.
+- **Rule 11a (Missing-WHERE)**: "A prompt is ambiguous if it names the
+  operation and node kind but NOT where to place the result (parent /
+  position / target sibling). For these, output ONLY a clarification
+  question — do NOT call any tool." The rule names the patterns
+  explicitly: `PARALLEL_generic`, `FALLBACK_generic`,
+  `UPDATE_params_generic`. The smoke corpus mirrors these names in case
+  IDs so the rule maps directly to test outcomes.
+
+The two rules together are designed to make the model do what the bypass
+used to do, **without** requiring the bypass — letting the smoke corpus
+fairly measure cross-model clarification quality. When designing a new
+profile, the question to ask is: "does this model satisfy Rule 11a on the
+4 ASK cases without the bypass?" If yes, leave synthetic OFF. If no, the
+bypass exists as a shipping crutch.
+
+There is also a separate **self_check appendix** at `adapter.py:575-610`
+that appends a `\n\n## self_check (apply BEFORE responding)` block to the
+user_request when the prompt is ≤5 words, starts with `add a `/`insert a `
+/`wrap with `/`wrap the root with `, contains a control-flow kind, and has
+**no** locator keyword (none of: `after `, `before `, `child of`,
+`under `, `inside `, `position `, `first child`, `last child`, `at index`,
+`somewhere`, …). The self_check still routes through the model (unlike
+the synthetic bypass which short-circuits), but biases it toward asking
+rather than guessing.
 
 ---
 
@@ -656,7 +903,12 @@ Two files, same case label:
    `THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT`,
    `THOR_TARGET_MODEL_REASONING`, `THOR_TARGET_MAX_TOKENS`,
    `THOR_TARGET_TOOL_CALL_PARSER` (if non-default),
-   `THOR_TARGET_QUANTIZATION`. Read [MANYFORGE-PROFILE-CALIBRATION.md](./MANYFORGE-PROFILE-CALIBRATION.md)
+   `THOR_TARGET_QUANTIZATION`. **Also set per-profile proxy tuning**
+   (new 2026-06-01): `THOR_TARGET_PROXY_LOOP_REFLECT_AT` (default `"4"`),
+   `THOR_TARGET_PROXY_LOOP_STOP_AT` (default `"8"`),
+   `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING` (`"on"` / `"off"` /
+   `""` to leave the proxy untouched). Read
+   [MANYFORGE-PROFILE-CALIBRATION.md](./MANYFORGE-PROFILE-CALIBRATION.md)
    for the sizing methodology.
 
 2. `serving/launch.sh` — add the matching `case` branch with the actual
@@ -668,7 +920,12 @@ Two files, same case label:
    Don't forget `THOR_DOCKER_ENV_ARGS+=(…)` for env vars
    (`VLLM_USE_FLASHINFER_MOE_FP4`, etc.) if your weights need them.
 
-3. Validate:
+3. **`serving/start-model.sh` proxy auto-restart** picks up the per-profile
+   proxy tuning from step 1 automatically (lines 56-95). No edits needed
+   unless you want to opt out (`THOR_RESTART_PROXY=0` — useful when a
+   separate supervisor owns the proxy lifecycle).
+
+4. Validate:
    ```bash
    ./serving/start-model.sh <new-slug>           # boots vLLM
    curl -s http://127.0.0.1:8000/v1/models | jq -r '.data[].id'   # → new-slug
@@ -678,7 +935,7 @@ Two files, same case label:
      | jq -r '.choices[0].message.content'
    ```
 
-4. Then drive a targeted-9 smoke (recipe F.1) to verify before adding to
+5. Then drive a targeted-9 smoke (recipe F.1) to verify before adding to
    any benchmark sweep.
 
 The slug must be identical in both files; `serving/start-model.sh`
@@ -743,7 +1000,17 @@ Reference baselines (from [SMOKE-CORPUS.md](./SMOKE-CORPUS.md)):
 |------|---------------|-----------|-----------|
 | 20 | chain-off, no recovery turn | 45/66 (68.2%) | 49/66 (74.2%) |
 | 28 | chain-off, recovery turn, schema refactor | 49/66 (74.2%) | 51/66 (77.3%) |
-| **32** | **chain-on + COMPACT_EVERY_N=2 + recovery turn (current prod)** | **47/66 (71.2%)** | **51/66 (77.3%)** |
+| **32** | **chain-on + COMPACT_EVERY_N=2 + recovery turn (prior prod)** | **47/66 (71.2%)** | **51/66 (77.3%)** |
+| 33+ (2026-06-01) | iter-32 recipe **+ synthetic OFF + Rule 11a + alt_names + consecutive-counting + 4 cases rebalanced to ASK** | (re-baselining in progress) | (re-baselining in progress) |
+
+The 2026-06-01 corpus rebalance moves 4 cases (`PARALLEL_generic`,
+`FALLBACK_generic`, 2 `category: clarification` cases at smoke_corpus.yaml
+lines 1170/1196/1214) from "expect a tool call" to "expect a clarification
+question". This couples the corpus to the default-synthetic-OFF design:
+under the bypass, those 4 cases were guaranteed to pass via the canned
+answer; under Rule 11a, they probe whether the model itself asks. Older
+iter-N numbers are NOT directly comparable to runs after the rebalance —
+re-baseline on each model when comparing recipes.
 
 ---
 
@@ -834,14 +1101,18 @@ Recorded under `/tmp/35b-iter-log/rounds/`. Round structure:
 |-------|-----------|--------|
 | **0** | Cosmos-8B parser-only fix (qwen3 reasoning parser; without it, thinking bled into content) | Necessary precondition; alone insufficient to unblock the 9 hard cases. |
 | **1-2** | Per-profile sampling overrides (temperature, top_p tweaks) | Neutral on the hard set; baseline TEB unchanged. |
-| **3.1** | "Thinking fully on" (top-level + chat_template_kwargs mirror) for cosmos-8b | Discovered the top-level-precedence bug; the mirror landed in `vllm-proxy.py:285-292`. Cleared the silent thinking-off regression. |
+| **3.1** | "Thinking fully on" (top-level + chat_template_kwargs mirror) for cosmos-8b | Discovered the top-level-precedence bug; the mirror landed in `vllm-proxy.py:285-292`. Cleared the silent thinking-off regression. **Wired through per-profile `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING` on 2026-06-01 so each profile boots with its preferred posture.** |
 | **3.2** | Repro that the proxy mirror actually fires for cosmos under Composer's `enable_thinking:false` payload | Confirmed via `proxy.jsonl` mutations field. |
 | **4** | Bigger thinking budget (1024 → 2048) | Net-negative on cosmos-8b; 512 stays the sweet-spot. |
 | **5** | `OPENCLAW_PROXY_FORCE_TOOL_CHOICE=required-first` | Aborted — interacted poorly with chain-on session memory; reverted to no force. |
 | **6** | `OPENCLAW_PROXY_USER_MESSAGE_SUFFIX` plan-then-execute nudge | Ignored by the model on first-turn action prompts. Suffix deprecated for this stack. |
-| **7** | Bridge synthetic clarification short-circuit for `add a <kind>` | Lands the answer-text rubric for the 4 affected smoke cases; very narrow gate intentionally. |
+| **7** | Bridge synthetic clarification short-circuit for `add a <kind>` | Lands the answer-text rubric for the 4 affected smoke cases; very narrow gate intentionally. **Default-INVERTED to OFF 2026-06-01** so smoke fairly measures cross-model clarification quality. Opt-in via `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1`. |
 | **8** | Bridge cross-turn `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` fail-fast | Stops the 25-28-turn same-tool runaway pattern. Tight defaults (5). |
-| **10** | Proxy cascading loop defense (reflect_at=4 + stop_at=8) | Bounds total time-per-case at ~60-80 s in the worst loop; lets the model recover once after seeing the reflection prompt. |
+| **10** | Proxy cascading loop defense (reflect_at=4 + stop_at=8) | Bounds total time-per-case at ~60-80 s in the worst loop; lets the model recover once after seeing the reflection prompt. **2026-06-01 follow-up: CONSECUTIVE tail-run counting replaces lifetime counting** — fixes false-positive hard-stops on chain-on smoke (every PnP_NN case after the 3rd was being shut down on turn 1). |
+| **11** (2026-06-01) | Rule 11 NO_REPLY guard + Rule 11a Missing-WHERE in `adapter.py:513-536` | Prompt-side replacement for the synthetic bypass — instructs the model directly to ask "which parent / where in its children?" on `PARALLEL_generic` / `FALLBACK_generic` / `UPDATE_params_generic` patterns. Lets the smoke corpus fairly measure cross-model clarification quality. |
+| **12** (2026-06-01) | Corpus rebalance: 4 cases switched from "expect tool call" → "expect ASK" | Couples the corpus to the default-synthetic-OFF design. Cases that used to pass via the canned bypass answer now probe whether the model itself asks via Rule 11a. |
+| **13** (2026-06-01) | Smoke runner `alt_names` support (`smoke_corpus_runner.py:391-424`) | Cases declare equivalent-effect tool aliases; soft-pass when an alt fires with 2xx. Stops false-fails on legitimate variant tool choices (e.g. `scene_draft_upsert_objects` for `scene_draft_add_object`). |
+| **14** (2026-06-01) | Schema fix: `node.name` accepted in `tree_draft_insert_node` payload | Stops validator death-spirals when models duplicate `nodeName` into `node.name` (legacy shape from `_TREE_NODE_SCHEMA`). Handler still reads top-level `nodeName`; `node.name` is accepted-and-ignored. |
 
 **Per-model takeaways**:
 

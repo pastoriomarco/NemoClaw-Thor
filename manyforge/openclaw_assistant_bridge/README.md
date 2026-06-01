@@ -117,6 +117,29 @@ and `--default-chat-template-kwargs` (see the matching profile in
 backward compatibility — when `None`, no body field is added and
 vLLM's defaults apply.
 
+### `enable_thinking` — load-bearing control (validated 2026-06-01)
+
+Don't use `gateway_enable_thinking` or `AdapterConfig.thinking` for
+reasoning-mode control on the OpenClaw lane. Both ultimately set
+fields the chat template **doesn't read**:
+
+- `AdapterConfig.thinking` → `openclaw --thinking off|on` → top-level
+  `enable_thinking` on the wire body. The chat template
+  (`chat_template.jinja:12`) reads only `chat_template_kwargs.enable_thinking`,
+  ignoring the top-level field.
+- `gateway_enable_thinking` → bridge would write
+  `chat_template_kwargs.enable_thinking` if non-`None`. Default `None`,
+  never wired.
+
+The load-bearing knob is the proxy's `OPENCLAW_PROXY_FORCE_ENABLE_THINKING`
+env var, defaulted per profile in
+`nemoclaw-thor/serving/config.sh` as `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING`
+("on" | "off" | "alternating-…"). The proxy enforces it by injecting
+`chat_template_kwargs.enable_thinking` on every chat completion,
+overriding anything the bridge or OpenClaw may have set. Mirror the
+value of `--default-chat-template-kwargs '{enable_thinking:X}'` in
+launch.sh for the same profile so the two sources stay consistent.
+
 The previous YAML-driven path
 (`manyforge/agent-sampling-defaults.yaml` → `service.py::_load_sampling_defaults_for_model`)
 was retired. The YAML file is kept as reference documentation for

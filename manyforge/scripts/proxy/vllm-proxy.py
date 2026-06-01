@@ -31,6 +31,14 @@ Environment variables (override flags):
   OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS       cap output tokens (injected when caller omits)
   OPENCLAW_PROXY_THINKING_TOKEN_BUDGET     soft cap on internal CoT
   OPENCLAW_PROXY_FORCE_ENABLE_THINKING     on | off | alternating-…
+                                            Load-bearing control for the chat
+                                            template's `enable_thinking` (the
+                                            top-level field on the wire body is
+                                            dead — template reads only
+                                            `chat_template_kwargs.enable_thinking`).
+                                            Per-profile default lives in
+                                            NemoClaw-Thor/serving/config.sh as
+                                            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING.
   OPENCLAW_PROXY_FORCE_TOOL_CHOICE         required | required-first | alternating[-on-even]
   OPENCLAW_PROXY_USER_MESSAGE_SUFFIX       append text to last user message
   OPENCLAW_PROXY_OVERRIDE_TEMPERATURE / _TOP_P
@@ -149,7 +157,10 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
     if (_FORCE_TOOL_CHOICE is None and _OVERRIDE_TEMPERATURE is None
             and _OVERRIDE_MAX_TOKENS is None and _OVERRIDE_TOP_P is None
             and _USER_MESSAGE_SUFFIX is None and _FORCE_ENABLE_THINKING is None
-            and _THINKING_TOKEN_BUDGET is None):
+            and _THINKING_TOKEN_BUDGET is None
+            and not _GUIDED_TOOL_CALLS
+            and not _TOOL_ERROR_REWRITE
+            and not _TOOL_PARSER):
         return body, None
     try:
         parsed = json.loads(body.decode("utf-8", errors="replace"))
@@ -275,21 +286,15 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
                     "mode": _FORCE_ENABLE_THINKING,
                     "asst_count": asst_count_thinking,
                 }
-            # 2026-05-31: composers like manyforge-composer also send a
-            # top-level `enable_thinking` field. vLLM treats that as the
-            # source of truth and IGNORES chat_template_kwargs when both
-            # are present (observed empirically on cosmos-reason2-8b
-            # 2026-05-31: chat_template_kwargs.enable_thinking=True +
-            # top-level enable_thinking=False → reasoning field stays
-            # empty). Mirror the chat_template_kwargs decision to the
-            # top-level field so the model actually engages thinking.
-            top_before = parsed.get("enable_thinking")
-            if top_before != target_value:
-                parsed["enable_thinking"] = target_value
-                changes["enable_thinking_top"] = {
-                    "before": top_before,
-                    "after": target_value,
-                }
+            # 2026-06-01: top-level `enable_thinking` mirror removed.
+            # The chat template (`chat_template.jinja:12`) only reads
+            # `chat_template_kwargs.enable_thinking`; the top-level field
+            # is dead at the template level. Earlier 2026-05-31 note
+            # claimed vLLM treated top-level as source of truth and
+            # ignored ctk — re-testing 2026-06-01 with reasoning_content
+            # inspection proved that claim was wrong: when ctk.enable_thinking
+            # is set, the template honors it. Keeping the wire surface
+            # narrow to ctk simplifies the propagation trace.
 
     # Append a generic suffix to the LAST user message in `messages`.
     # Cross-cutting, not per-prompt — same wording fires every request.
@@ -353,99 +358,806 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
                             "appended_part_chars": len(_USER_MESSAGE_SUFFIX),
                         }
 
+    # 2026-06-01: parser-specific tool-call constraint (Level 2 guided).
+    # When _TOOL_PARSER is known, choose the right vLLM constraint kind:
+    #   - hermes      → structural_tag (JSON-in-tags, per-tool JSON schema)
+    #   - qwen3_coder → grammar (Lark EBNF, per-tool param-key whitelist)
+    # Model retains free choice ask/act; the constraint only activates
+    # when the model emits `<tool_call>`. Skip if caller already set
+    # response_format or structured_outputs.
+    if _TOOL_PARSER and isinstance(parsed.get("tools"), list) and parsed["tools"]:
+        existing_rf = parsed.get("response_format")
+        existing_so = parsed.get("structured_outputs")
+        if not isinstance(existing_rf, dict) and not isinstance(existing_so, dict):
+            if _TOOL_PARSER == "hermes":
+                try:
+                    stag = _build_structural_tag(parsed["tools"], _TOOL_PARSER)
+                except Exception:
+                    stag = None
+                if stag is not None:
+                    parsed["response_format"] = stag
+                    changes["response_format_structural_tag"] = {
+                        "parser": _TOOL_PARSER,
+                        "n_structures": len(stag.get("structures", [])),
+                    }
+            elif _TOOL_PARSER == "qwen3_coder":
+                try:
+                    grammar = _build_qwen3_coder_grammar(parsed["tools"])
+                except Exception:
+                    grammar = None
+                if grammar:
+                    parsed["structured_outputs"] = {"grammar": grammar}
+                    changes["structured_outputs_grammar"] = {
+                        "parser": _TOOL_PARSER,
+                        "grammar_chars": len(grammar),
+                    }
+
+    # 2026-06-01: prompt-aware guided tool-call decoding (Level 1).
+    # When the last user message is action-shaped AND the request has
+    # tools[], force `tool_choice="required"` so vLLM uses guided
+    # decoding against the tool schemas. Skip if FORCE_TOOL_CHOICE
+    # already injected something (proxy modes own that field).
+    if (_GUIDED_TOOL_CALLS and _FORCE_TOOL_CHOICE is None
+            and isinstance(parsed.get("tools"), list) and parsed["tools"]):
+        existing_tc = parsed.get("tool_choice")
+        if existing_tc not in ("required", "none") and not isinstance(existing_tc, dict):
+            # Extract the most-recent user message text
+            last_user_text = ""
+            for m in reversed(parsed.get("messages") or []):
+                if not isinstance(m, dict) or m.get("role") != "user":
+                    continue
+                c = m.get("content")
+                if isinstance(c, str):
+                    last_user_text = c
+                elif isinstance(c, list):
+                    parts: list[str] = []
+                    for p in c:
+                        if isinstance(p, dict) and isinstance(p.get("text"), str):
+                            parts.append(p["text"])
+                    last_user_text = " ".join(parts)
+                break
+            # Find the user_request section to focus heuristic on the
+            # user's actual prompt (not the wrapping rules/preamble).
+            ur_marker = "## user_request"
+            idx = last_user_text.find(ur_marker)
+            target = last_user_text[idx + len(ur_marker):] if idx >= 0 else last_user_text
+            target_lc = target.lower()
+            # Quick action-shape heuristic
+            has_verb = any(v in (" " + target_lc) for v in _ACTION_VERBS)
+            has_noun = any(n in target_lc for n in _DOMAIN_NOUNS)
+            if has_verb and has_noun:
+                parsed["tool_choice"] = "required"
+                changes["tool_choice_guided"] = {
+                    "before": existing_tc,
+                    "after": "required",
+                    "reason": "action-shaped prompt",
+                }
+
+    # 2026-06-01: 4xx tool-result directive rewrite.
+    # When the last tool message contains a validation failure with
+    # structured guidance fields, prepend a directive preamble that
+    # names the valid values from the structured fields so the model
+    # can't miss them. Surgical — touches at most one message.
+    if _TOOL_ERROR_REWRITE:
+        msgs_te = parsed.get("messages")
+        if isinstance(msgs_te, list) and msgs_te:
+            last_tool_idx = -1
+            for i in range(len(msgs_te) - 1, -1, -1):
+                m = msgs_te[i]
+                if isinstance(m, dict) and m.get("role") == "tool":
+                    last_tool_idx = i
+                    break
+            if last_tool_idx >= 0:
+                last_tool = msgs_te[last_tool_idx]
+                content = last_tool.get("content")
+                if isinstance(content, str) and content:
+                    is_error = any(marker.lower() in content.lower()
+                                   for marker in _TOOL_ERROR_MARKERS)
+                    if is_error:
+                        # Pull any structured field values to surface
+                        try:
+                            parsed_content = json.loads(content)
+                        except (ValueError, TypeError):
+                            parsed_content = None
+                        directive_lines: list[str] = []
+
+                        def _walk_for_fields(obj):
+                            if isinstance(obj, dict):
+                                for k, v in obj.items():
+                                    if k in _VALIDATOR_FIELDS and isinstance(v, list) and v:
+                                        preview = v[:8]
+                                        suffix = "" if len(v) <= 8 else f" (+{len(v)-8} more)"
+                                        directive_lines.append(
+                                            f"  {k}: {preview}{suffix}"
+                                        )
+                                    else:
+                                        _walk_for_fields(v)
+                            elif isinstance(obj, list):
+                                for x in obj:
+                                    _walk_for_fields(x)
+
+                        if parsed_content is not None:
+                            _walk_for_fields(parsed_content)
+
+                        already = content.startswith("[VALIDATOR]")
+                        # Extract a "detail" / "message" / "error" prose snippet
+                        # if present, for cases where structured fields are absent.
+                        detail_text = ""
+                        if parsed_content is not None and isinstance(parsed_content, dict):
+                            for k in ("detail", "message", "error", "errorMessage"):
+                                v = parsed_content.get(k)
+                                if isinstance(v, str) and v.strip():
+                                    detail_text = v.strip()
+                                    break
+                        if (directive_lines or detail_text) and not already:
+                            # Build preamble. If we have structured fields, use the
+                            # directive list. If only prose detail, use the prose
+                            # as the directive.
+                            preamble_lines = [
+                                "[VALIDATOR] The previous call failed validation. "
+                                "Read the error BELOW and fix the specific failing "
+                                "field — do NOT retry with the same args, do NOT "
+                                "invent new values."
+                            ]
+                            if directive_lines:
+                                preamble_lines.extend(directive_lines)
+                            elif detail_text:
+                                # Cap the detail length to keep preamble tight
+                                preamble_lines.append(f"  detail: {detail_text[:400]}")
+                            preamble_lines.append("\n--- original tool result ---\n")
+                            preamble = "\n".join(preamble_lines)
+                            last_tool["content"] = preamble + content
+                            changes["tool_error_rewrite"] = {
+                                "field_count": len(directive_lines),
+                                "used_detail_fallback": bool(detail_text and not directive_lines),
+                                "tool_idx": last_tool_idx,
+                            }
+
     if not changes:
         return body, None
     new_body = json.dumps(parsed, separators=(",", ":")).encode("utf-8")
     return new_body, {"mutations": changes}
 
 
-# Round 10 (2026-06-01): cascading loop-break
-#   reflect_at  = inject reflection user message into messages[] when
-#                 same tool reaches this count (default 4)
-#   stop_at     = hard-stop with synthetic SSE when count reaches this
-#                 (default 8 — gives the model one shot after reflection)
-# Old single-threshold env (LOOP_TOOL_THRESHOLD) maps to stop_at if set.
+# Round 11 (2026-06-01): multi-criteria loop-break
+#   5 independent detectors fire ONE generic reflection message.
+#   Each detector is env-gated so any can be flipped off mid-run by
+#   restarting just the proxy (vLLM container undisturbed). Inner-loop
+#   only: consecutive counters reset on a non-tool assistant turn.
+#
+#   Existing knobs preserved:
+#     OPENCLAW_PROXY_LOOP_REFLECT_AT (default 4)  same-tool reflect threshold
+#     OPENCLAW_PROXY_LOOP_STOP_AT    (default 8)  same-tool hard-stop threshold
+#
+#   New trigger toggles (default ON; set to "0" to disable):
+#     OPENCLAW_PROXY_LOOP_TRIGGER_SAME_TOOL       same tool >= REFLECT_AT
+#     OPENCLAW_PROXY_LOOP_TRIGGER_SAME_ARGS       last 2 calls identical name+args
+#     OPENCLAW_PROXY_LOOP_TRIGGER_RESULT_REPEAT   last 2 tool results identical
+#     OPENCLAW_PROXY_LOOP_TRIGGER_NAMESPACE       same namespace >= NAMESPACE_AT
+#     OPENCLAW_PROXY_LOOP_TRIGGER_TURN_COUNTER    any-tool consecutive >= TURN_COUNTER_AT
+#
+#   New thresholds:
+#     OPENCLAW_PROXY_LOOP_NAMESPACE_AT      (default 5)
+#     OPENCLAW_PROXY_LOOP_TURN_COUNTER_AT   (default 5)
+#
+#   One generic reflection message is injected for ALL triggers. The
+#   trigger that fired is logged in the JSONL line for operator visibility.
+#   First-to-fire wins (priority order matches detector list above).
 _REFLECT_AT = int(os.environ.get("OPENCLAW_PROXY_LOOP_REFLECT_AT", "4") or "4")
 _STOP_AT = int(os.environ.get("OPENCLAW_PROXY_LOOP_STOP_AT", "8") or "8")
 _LEGACY_THRESHOLD = int(os.environ.get("OPENCLAW_PROXY_LOOP_TOOL_THRESHOLD", "0") or "0")
 if _LEGACY_THRESHOLD > 0:
     _STOP_AT = _LEGACY_THRESHOLD
-    # If only legacy is set, disable reflection (preserve old behavior)
     if "OPENCLAW_PROXY_LOOP_REFLECT_AT" not in os.environ:
         _REFLECT_AT = 0
 
-_REFLECTION_MARKER = "[loop-reflection]"  # marker so we never inject twice
+_NAMESPACE_AT = int(os.environ.get("OPENCLAW_PROXY_LOOP_NAMESPACE_AT", "5") or "5")
+_NAMESPACE_STOP_AT = int(os.environ.get("OPENCLAW_PROXY_LOOP_NAMESPACE_STOP_AT", "16") or "16")
+_TURN_COUNTER_AT = int(os.environ.get("OPENCLAW_PROXY_LOOP_TURN_COUNTER_AT", "5") or "5")
+
+# 2026-06-01: generic malformed-tool-call detection (response-side).
+# Fires when the response content contains a tool name from the request's
+# tools[] AND tool-call format markers, but no structured tool_calls came
+# through. Strong signal the model tried to emit a tool but the parser
+# dropped it. Model-agnostic — uses tool names from the request, markers
+# common across all known formats (hermes JSON, qwen3_coder XML,
+# nemotron, mistral, etc.). Diagnostic only: writes a JSONL event with
+# matched_tool + markers; the response itself is forwarded unmodified.
+_DETECT_MALFORMED_TOOL_CALL = (
+    os.environ.get("OPENCLAW_PROXY_DETECT_MALFORMED_TOOL_CALL", "1") or "1"
+).strip().lower() in ("1", "true", "yes", "on")
+
+_MALFORMED_MARKERS: tuple[str, ...] = (
+    "<parameter=", "<function=", "<tool_call>", "</tool_call>", "</function>",
+    "\"arguments\":", "\"tool_calls\":", "function_call",
+)
+
+# 2026-06-01: generic tool-name normalization (response-side mutation).
+# Models routinely emit MCP tool names without their namespace prefix
+# (e.g. `tree_draft_wrap_node` instead of `manyforge__tree_draft_wrap_node`).
+# OpenClaw's MCP dispatcher requires the exact registered name, so the
+# call fails. Active fix: when the model's emitted name is missing from
+# the request's `tools[]` but has EXACTLY ONE prefix-suffix match in the
+# catalog, rewrite the name in the response stream before the agent loop
+# sees it. Model-agnostic (any namespace prefix) and unambiguous-only
+# (multiple matches → leave alone; let dispatch fail honestly).
+_NORMALIZE_TOOL_NAMES = (
+    os.environ.get("OPENCLAW_PROXY_NORMALIZE_TOOL_NAMES", "1") or "1"
+).strip().lower() in ("1", "true", "yes", "on")
+
+# 2026-06-01: prompt-aware guided tool-call decoding (request-side).
+# When the LAST user message looks action-shaped (action verb + domain
+# noun), force `tool_choice="required"` so vLLM's tool-calling backend
+# uses guided decoding against the provided tools[] schemas. Eliminates
+# the "wrong-arg-shape" class of failure (missing required field, wrong
+# type, unknown enum) AND forces tool emission instead of prose on
+# unambiguous action prompts. Generic across models + parsers — vLLM
+# handles schema enforcement internally.
+# Set OPENCLAW_PROXY_GUIDED_TOOL_CALLS=0 to disable. The action-shape
+# heuristic mirrors the bridge's `is_action_shaped_prompt()`.
+#
+# NOTE 2026-06-01 second pass: Level 1 (tool_choice=required) interacts
+# poorly with cosmos's thinking-on hermes parser — model produces empty
+# output. Default is now 0; use only on profiles known to be compatible
+# (typically non-thinking or qwen3_coder parser).
+_GUIDED_TOOL_CALLS = (
+    os.environ.get("OPENCLAW_PROXY_GUIDED_TOOL_CALLS", "0") or "0"
+).strip().lower() in ("1", "true", "yes", "on")
+
+# 2026-06-01: structural_tag injection for tool schemas (Level 2 guided).
+# When parser is known, build a per-tool `structural_tag` config so the
+# model can decide ask-vs-act freely, but if it DOES emit `<tool_call>`
+# vLLM constrains the JSON inside to match one of the tool schemas.
+# Eliminates the "args wrong shape" class without forcing tool emission.
+#
+# Parser must be specified via OPENCLAW_PROXY_TOOL_PARSER env var. Set
+# per-profile in config.sh — cosmos=hermes, 4B/omni/35B=qwen3_coder.
+# Disabled (empty) by default — opt-in.
+_TOOL_PARSER = (os.environ.get("OPENCLAW_PROXY_TOOL_PARSER", "") or "").strip()
 
 
-def _check_loop_short_circuit(path: str, body: bytes) -> tuple[bytes | None, bytes | None]:
-    """Inspect /v1/chat/completions request for runaway same-tool loops.
-    Returns (synthetic_sse_response, mutated_body):
-      - both None: forward as-is
-      - synthetic_sse_response set: short-circuit (do not forward)
-      - mutated_body set: forward the mutated body (reflection injected)
-    Designed to break the openclaw per-turn retry-loop where the model
-    keeps calling the same tool with the same args after the validator
-    fails repeatedly with the same error.
+def _lark_escape(s: str) -> str:
+    """Escape a string for use as a Lark terminal literal.
+    Lark literals are double-quoted; embedded backslashes and quotes
+    need escaping. Newlines in qwen3_coder format are written as \\n."""
+    return s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+
+def _build_qwen3_coder_grammar(tools_list: list) -> str | None:
+    """Build a Lark EBNF grammar that constrains the model to emit a
+    qwen3_coder-format tool call:
+
+        <tool_call>\\n<function=NAME>\\n<parameter=K>\\nVAL\\n</parameter>\\n...</function>\\n</tool_call>
+
+    Each tool gets its own rule with the function name baked in and
+    the parameter-key alternation restricted to that tool's own
+    parameters. Values are unconstrained (any non-empty text up to
+    the next \\n</parameter> closing) — full JSON-type enforcement on
+    values would require nested grammar; the structure-level
+    enforcement here already eliminates the wrong-tool-name and
+    invalid-param-key failure classes.
     """
-    if _STOP_AT <= 0 and _REFLECT_AT <= 0:
-        return None, None
+    if not isinstance(tools_list, list) or not tools_list:
+        return None
+    tool_rules: list[str] = []   # named per-tool rules
+    tool_alts: list[str] = []    # names to alternate at the top
+    for i, t in enumerate(tools_list):
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") or {}
+        name = fn.get("name") or t.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        params_schema = fn.get("parameters")
+        props = {}
+        if isinstance(params_schema, dict):
+            p = params_schema.get("properties")
+            if isinstance(p, dict):
+                props = p
+        rule = f"tool_{i}"
+        tool_alts.append(rule)
+        param_keys = [k for k in props.keys() if isinstance(k, str)]
+        if param_keys:
+            keys_alt = " | ".join(f'"{_lark_escape(k)}"' for k in param_keys)
+            tool_rules.append(
+                f'{rule}: "<function={_lark_escape(name)}>" NL '
+                f'param_{i}* "</function>"'
+            )
+            tool_rules.append(
+                f'param_{i}: "<parameter=" ({keys_alt}) ">" NL '
+                f'PARAM_VALUE NL "</parameter>" NL'
+            )
+        else:
+            # tool with no params: emit just the function open/close
+            tool_rules.append(
+                f'{rule}: "<function={_lark_escape(name)}>" NL "</function>"'
+            )
+    if not tool_alts:
+        return None
+    alt = " | ".join(tool_alts)
+    # Use a named NL terminal driven by a regex literal — vLLM/Lark
+    # interprets `\n` inside string literals as a real newline char
+    # before the grammar parser sees it, which breaks multi-line
+    # rules. Using `NL: /\n/` keeps the newline as a regex token.
+    grammar = (
+        f'start: "<tool_call>" NL ({alt}) NL "</tool_call>"\n'
+        + "\n".join(tool_rules)
+        + '\n'
+        + 'NL: /\\n/\n'
+        # PARAM_VALUE: any non-`<` character, one or more. vLLM/Lark
+        # regex backend doesn't support lookahead, so we can't accept
+        # `<` inside values. Trade-off: param values containing a
+        # literal `<` (e.g. a description string with HTML-ish text)
+        # won't match and the constraint will fail. Acceptable for
+        # the manyforge tool surface where values are typically JSON
+        # primitives, IDs, or short text. Counter-cases would retry.
+        + 'PARAM_VALUE: /[^<]+/\n'
+    )
+    return grammar
+
+
+def _build_structural_tag(tools_list: list, parser: str) -> dict | None:
+    """Build a vLLM structural_tag config for hermes parsers (JSON-in-tags).
+
+    Returns the dict with `type:"structural_tag", structures:[...], triggers:[...]`
+    or None if parser is not hermes or tools_list is empty.
+
+    For qwen3_coder, use `_build_qwen3_coder_grammar` instead (returns a
+    Lark grammar string for the `grammar` field).
+    """
+    if parser != "hermes":
+        return None
+    if not isinstance(tools_list, list) or not tools_list:
+        return None
+    structures: list[dict] = []
+    for t in tools_list:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") or {}
+        name = fn.get("name") or t.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        params = fn.get("parameters")
+        if not isinstance(params, dict):
+            params = {"type": "object"}
+        structures.append({
+            "begin": "<tool_call>\n",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"const": name},
+                    "arguments": params,
+                },
+                "required": ["name", "arguments"],
+                "additionalProperties": False,
+            },
+            "end": "\n</tool_call>",
+        })
+    if not structures:
+        return None
+    return {
+        "type": "structural_tag",
+        "structures": structures,
+        "triggers": ["<tool_call>"],
+    }
+
+_ACTION_VERBS = (
+    "add ", "remove ", "delete ", "insert ", "update ", "wrap ", "swap ",
+    "move ", "create ", "make ", "place ", "attach ", "detach ", "set ",
+    "replace ", "rename ", "reorder ", "drop ", "modify ", "resize ",
+    "change ",
+)
+_DOMAIN_NOUNS = (
+    "node", "tree", "root", "sequence", "fallback", "parallel", "repeat",
+    "retry", "inverter", "object", "obstacle", "box", "sphere", "cylinder",
+    "ground", "collider", "graspable", "scene", "program", "parameter",
+    "param", "blackboard",
+)
+
+# 2026-06-01: 4xx tool-result directive rewrite (request-side mutation).
+# When the model's most recent tool message contains a validation
+# failure with structured guidance fields (validParentNames,
+# allowedNodeKinds, validNodeNames, validTargetNames, etc.), prepend
+# a directive preamble that names the failing field + valid values
+# so the model can't miss it. Model-agnostic — depends only on
+# composer's validator returning the standard field names.
+_TOOL_ERROR_REWRITE = (
+    os.environ.get("OPENCLAW_PROXY_TOOL_ERROR_REWRITE", "1") or "1"
+).strip().lower() in ("1", "true", "yes", "on")
+
+_VALIDATOR_FIELDS = (
+    "validParentNames", "validNodeNames", "validTargetNames",
+    "allowedNodeKinds", "rejectedNodeKinds", "wrapperIdSuggestions",
+    "validKindIds", "allowedKindIds",
+)
+_TOOL_ERROR_MARKERS = (
+    "validation_error", "validation failed", "validation error",
+    "\"status\": 4", "\"status\":4",
+    "\"http_status\": 4", "\"httpStatus\": 4",  # snake AND camel
+    "\"http_status\":4", "\"httpStatus\":4",
+    "\"success\": false", "\"success\":false",
+    "missing required parameter", "missing required",
+    "\"error\":", "BadRequest", "UnprocessableEntity",
+)
+
+
+def _env_truthy(name: str, default: str = "1") -> bool:
+    return (os.environ.get(name, default) or default).strip().lower() in ("1", "true", "yes", "on")
+
+
+_TRIGGER_SAME_TOOL = _env_truthy("OPENCLAW_PROXY_LOOP_TRIGGER_SAME_TOOL")
+_TRIGGER_SAME_ARGS = _env_truthy("OPENCLAW_PROXY_LOOP_TRIGGER_SAME_ARGS")
+_TRIGGER_RESULT_REPEAT = _env_truthy("OPENCLAW_PROXY_LOOP_TRIGGER_RESULT_REPEAT")
+_TRIGGER_NAMESPACE = _env_truthy("OPENCLAW_PROXY_LOOP_TRIGGER_NAMESPACE")
+_TRIGGER_TURN_COUNTER = _env_truthy("OPENCLAW_PROXY_LOOP_TRIGGER_TURN_COUNTER")
+
+_REFLECTION_MARKER = "[loop-reflection]"  # marker so we never inject twice
+_GENERIC_REFLECTION_MSG = (
+    f"{_REFLECTION_MARKER} You may be repeating yourself or stuck on this approach. "
+    f"Stop and consider: "
+    f"(a) a DIFFERENT tool, "
+    f"(b) DIFFERENT arguments to the same tool, or "
+    f"(c) ask the user one specific clarifying question if you need missing information. "
+    f"Do not repeat the same failing call."
+)
+
+
+def _tool_name_from_assistant(m: dict) -> str | None:
+    tcs = m.get("tool_calls") or []
+    for tc in tcs:
+        if isinstance(tc, dict):
+            fn = tc.get("function") or {}
+            nm = fn.get("name") or tc.get("name")
+            if nm:
+                return nm
+    return None
+
+
+def _tool_args_from_assistant(m: dict) -> str | None:
+    """Canonical-JSON string form of the first tool call's arguments.
+    Falls back to repr on non-JSON. False-negative-tolerant by design."""
+    tcs = m.get("tool_calls") or []
+    for tc in tcs:
+        if isinstance(tc, dict):
+            fn = tc.get("function") or {}
+            args = fn.get("arguments")
+            if args is None:
+                args = tc.get("arguments")
+            if isinstance(args, str):
+                try:
+                    return json.dumps(json.loads(args), sort_keys=True, separators=(",", ":"))
+                except (ValueError, TypeError):
+                    return args
+            elif args is not None:
+                try:
+                    return json.dumps(args, sort_keys=True, separators=(",", ":"))
+                except (TypeError, ValueError):
+                    return repr(args)
+    return None
+
+
+def _namespace_of(tool_name: str) -> str:
+    """Coarse namespace = first two `_`-separated segments
+    (tree_draft_insert_node → tree_draft, scene_draft_add_object → scene_draft)."""
+    parts = tool_name.split("_", 2)
+    return "_".join(parts[:2]) if len(parts) >= 2 else parts[0]
+
+
+def _tool_names_from_body(body: object) -> list[str]:
+    """Extract every tool name advertised in a chat-completion request body.
+    Handles OpenAI-style `[{type:"function", function:{name:...}}]` and
+    the flat-name fallback some clients use.
+
+    Returns the full names PLUS prefix-stripped variants. MCP-namespaced
+    tools come through as `manyforge__tree_draft_wrap_node` but models
+    routinely emit just the suffix `tree_draft_wrap_node` (a known
+    observed failure mode 2026-06-01). Including both forms keeps the
+    detector's substring check robust to that drift."""
+    if not isinstance(body, dict):
+        return []
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return []
+    out: list[str] = []
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") or {}
+        n = fn.get("name") or t.get("name")
+        if isinstance(n, str) and n:
+            out.append(n)
+            if "__" in n:
+                suffix = n.split("__", 1)[1]
+                if suffix and suffix not in out:
+                    out.append(suffix)
+    return out
+
+
+def _response_content_and_tool_calls(resp_body: bytes | str) -> tuple[str, bool]:
+    """Pull (concatenated content text, did_emit_tool_calls) from a
+    chat-completion response. Handles both JSON (non-streaming) and SSE
+    (streaming) shapes. Returns ("", False) on any parse failure — the
+    detector treats that as "nothing to inspect"."""
+    if not resp_body:
+        return "", False
+    if isinstance(resp_body, bytes):
+        try:
+            txt = resp_body.decode("utf-8", errors="replace")
+        except Exception:
+            return "", False
+    else:
+        txt = resp_body
+    # First try JSON (non-streaming)
+    try:
+        data = json.loads(txt)
+        if isinstance(data, dict):
+            content_parts: list[str] = []
+            tool_calls_seen = False
+            for ch in (data.get("choices") or []):
+                if not isinstance(ch, dict):
+                    continue
+                msg = ch.get("message") or {}
+                c = msg.get("content")
+                if isinstance(c, str):
+                    content_parts.append(c)
+                if msg.get("tool_calls"):
+                    tool_calls_seen = True
+            return "".join(content_parts), tool_calls_seen
+    except (ValueError, TypeError):
+        pass
+    # Fall back to SSE
+    import re as _re
+    content_parts: list[str] = []
+    tool_calls_seen = False
+    for m in _re.finditer(r'data: (\{.*?\})\n\n', txt + '\n\n'):
+        try:
+            c = json.loads(m.group(1))
+        except (ValueError, TypeError):
+            continue
+        ch = (c.get("choices") or [{}])[0]
+        if not isinstance(ch, dict):
+            continue
+        d = ch.get("delta") or {}
+        if isinstance(d.get("content"), str):
+            content_parts.append(d["content"])
+        if d.get("tool_calls"):
+            tool_calls_seen = True
+    return "".join(content_parts), tool_calls_seen
+
+
+def _build_canonical_tool_map(req_body: object) -> dict[str, str]:
+    """Map bare suffix → unique canonical (full prefixed) tool name.
+    Only includes entries with EXACTLY ONE catalog match; ambiguous
+    suffixes are dropped (rewrite would be unsafe). Full names map to
+    themselves so already-correct emissions pass through trivially."""
+    if not isinstance(req_body, dict):
+        return {}
+    tools = req_body.get("tools")
+    if not isinstance(tools, list):
+        return {}
+    full_names: list[str] = []
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") or {}
+        n = fn.get("name") or t.get("name")
+        if isinstance(n, str) and n:
+            full_names.append(n)
+    canonical: dict[str, str | None] = {n: n for n in full_names}
+    for full in full_names:
+        if "__" in full:
+            suffix = full.split("__", 1)[1]
+            if not suffix:
+                continue
+            if suffix in canonical and canonical[suffix] != full:
+                canonical[suffix] = None  # ambiguous; mark for removal
+            elif suffix not in canonical:
+                canonical[suffix] = full
+    return {k: v for k, v in canonical.items() if v is not None}
+
+
+def _normalize_tool_names_in_response(
+    req_body: object, resp_body: bytes | str,
+) -> tuple[bytes, list[dict]]:
+    """Rewrite tool_call.name in a chat-completion response when the
+    emitted name maps to a unique catalog entry under the bare-suffix
+    rule. Handles both JSON and SSE response shapes. Returns
+    (new_body_bytes, rewrites_list). rewrites_list is empty if no
+    change was made; in that case new_body_bytes equals the input."""
+    if not _NORMALIZE_TOOL_NAMES:
+        return (resp_body if isinstance(resp_body, bytes)
+                else (resp_body or "").encode("utf-8")), []
+    canonical_map = _build_canonical_tool_map(req_body)
+    if not canonical_map:
+        return (resp_body if isinstance(resp_body, bytes)
+                else (resp_body or "").encode("utf-8")), []
+    if isinstance(resp_body, bytes):
+        try:
+            txt = resp_body.decode("utf-8")
+        except UnicodeDecodeError:
+            return resp_body, []
+    else:
+        txt = resp_body or ""
+    if not txt:
+        return b"", []
+    rewrites: list[dict] = []
+
+    def _rewrite_tc(tc_obj: dict) -> bool:
+        fn = tc_obj.get("function") if isinstance(tc_obj, dict) else None
+        if not isinstance(fn, dict):
+            return False
+        original = fn.get("name")
+        if not isinstance(original, str) or not original:
+            return False
+        canonical = canonical_map.get(original)
+        if canonical is None or canonical == original:
+            return False
+        fn["name"] = canonical
+        rewrites.append({"original": original, "rewritten": canonical})
+        return True
+
+    # JSON shape first (non-streaming responses)
+    if txt.lstrip().startswith("{"):
+        try:
+            data = json.loads(txt)
+        except (ValueError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            modified = False
+            for ch in (data.get("choices") or []):
+                if not isinstance(ch, dict):
+                    continue
+                msg = ch.get("message") or {}
+                for tc in (msg.get("tool_calls") or []):
+                    if _rewrite_tc(tc):
+                        modified = True
+            if modified:
+                return json.dumps(data).encode("utf-8"), rewrites
+            return txt.encode("utf-8"), []
+
+    # SSE shape: rewrite one `data: {...}` chunk at a time.
+    new_lines: list[str] = []
+    for line in txt.split("\n"):
+        if not line.startswith("data: "):
+            new_lines.append(line)
+            continue
+        payload = line[6:]
+        if payload == "[DONE]" or not payload.strip().startswith("{"):
+            new_lines.append(line)
+            continue
+        try:
+            chunk = json.loads(payload)
+        except (ValueError, TypeError):
+            new_lines.append(line)
+            continue
+        modified = False
+        for ch in (chunk.get("choices") or []):
+            if not isinstance(ch, dict):
+                continue
+            d = ch.get("delta") or {}
+            for tc in (d.get("tool_calls") or []):
+                if _rewrite_tc(tc):
+                    modified = True
+            # Some clients also send tool_calls on the non-delta message
+            msg = ch.get("message") or {}
+            for tc in (msg.get("tool_calls") or []):
+                if _rewrite_tc(tc):
+                    modified = True
+        if modified:
+            new_lines.append("data: " + json.dumps(chunk, separators=(",", ":")))
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines).encode("utf-8"), rewrites
+
+
+def _detect_malformed_tool_call(
+    req_body: object, resp_body: bytes | str,
+) -> dict | None:
+    """Generic, model-agnostic detector: response content names a tool
+    AND contains tool-call format markers, but NO structured tool_calls
+    came through. Returns a dict on hit, None otherwise."""
+    if not _DETECT_MALFORMED_TOOL_CALL:
+        return None
+    tool_names = _tool_names_from_body(req_body)
+    if not tool_names:
+        return None
+    content, has_tcs = _response_content_and_tool_calls(resp_body)
+    if has_tcs or not content:
+        return None
+    matched_tool = next((n for n in tool_names if n in content), None)
+    if matched_tool is None:
+        return None
+    matched_markers = [m for m in _MALFORMED_MARKERS if m in content]
+    if not matched_markers:
+        return None
+    return {
+        "matched_tool": matched_tool,
+        "markers": matched_markers,
+        "content_preview": content[:300].replace("\n", "\\n"),
+        "content_chars": len(content),
+    }
+
+
+def _check_loop_short_circuit(
+    path: str, body: bytes,
+) -> tuple[bytes | None, bytes | None, dict | None]:
+    """Inspect /v1/chat/completions for runaway loops via 5 detectors.
+
+    Returns (synthetic_sse, mutated_body, trigger_info):
+      - all None: forward as-is
+      - synthetic_sse set: hard-stop with synthetic SSE (no further forward)
+      - mutated_body set: forward the mutated body (reflection injected)
+      - trigger_info {trigger, tool, count, ...}: appended to JSONL log
+
+    Each detector is independently env-gated. First-to-fire wins.
+    Inner-loop only: a non-tool assistant turn resets all consecutive counters.
+    """
+    any_trigger_enabled = (
+        _TRIGGER_SAME_TOOL or _TRIGGER_SAME_ARGS or _TRIGGER_RESULT_REPEAT
+        or _TRIGGER_NAMESPACE or _TRIGGER_TURN_COUNTER
+    )
+    if _STOP_AT <= 0 and _REFLECT_AT <= 0 and not any_trigger_enabled:
+        return None, None, None
     if not path.endswith("/v1/chat/completions"):
-        return None, None
+        return None, None, None
     try:
         parsed = json.loads(body.decode("utf-8", errors="replace"))
     except (ValueError, UnicodeDecodeError):
-        return None, None
+        return None, None, None
     if not isinstance(parsed, dict):
-        return None, None
+        return None, None, None
     msgs = parsed.get("messages") or []
     if not isinstance(msgs, list):
-        return None, None
-    # Count CONSECUTIVE same-tool calls at the TAIL of the assistant
-    # turn history. Lifetime counting (the prior implementation) broke
-    # chained smoke cases: when composer shares a conversationId across
-    # cases (e.g. PnP_01..PnP_20), the lifetime same-tool count crosses
-    # _STOP_AT by the 3rd or 4th case, then hard-stops every subsequent
-    # case on turn 1. Consecutive counting only fires when the model is
-    # ACTUALLY stuck in a same-tool loop within the current case.
-    # A turn that calls a DIFFERENT tool resets the run length to 1
-    # (or 0 if that turn has no tool call).
-    from collections import Counter as _Counter
-    consecutive_count = 0
-    top_name = None
+        return None, None, None
+
+    # Build TAIL run of consecutive assistant-with-tool-call turns.
+    # A non-tool assistant turn resets the run. This is the "inner loop"
+    # the detectors all reason over.
+    consecutive_tail: list[dict] = []
     for m in msgs:
         if not isinstance(m, dict): continue
         if m.get("role") != "assistant": continue
-        tcs = m.get("tool_calls") or []
-        if not tcs:
-            # Assistant turn with no tool call → reset
-            consecutive_count = 0
-            top_name = None
+        nm = _tool_name_from_assistant(m)
+        if nm is None:
+            consecutive_tail = []  # reset on no-tool assistant turn
             continue
-        # Take the first tool name from this assistant turn
-        nm = None
-        for tc in tcs:
-            if isinstance(tc, dict):
-                fn = tc.get("function") or {}
-                nm = fn.get("name") or tc.get("name")
-                if nm: break
-        if not nm:
-            consecutive_count = 0
-            top_name = None
-            continue
-        if nm == top_name:
-            consecutive_count += 1
-        else:
-            top_name = nm
-            consecutive_count = 1
-    if top_name is None or consecutive_count == 0:
-        return None, None
-    top_count = consecutive_count
+        consecutive_tail.append({
+            "name": nm,
+            "args": _tool_args_from_assistant(m),
+        })
 
-    # ----- HARD STOP at _STOP_AT -----
-    if _STOP_AT > 0 and top_count >= _STOP_AT:
+    # Tool-result history (full order; we only need the last 2)
+    tool_results: list[str] = []
+    for m in msgs:
+        if isinstance(m, dict) and m.get("role") == "tool":
+            c = m.get("content")
+            if isinstance(c, str):
+                tool_results.append(c)
+
+    # Marker check: never inject twice in the same conversation
+    already_injected = any(
+        isinstance(m, dict) and m.get("role") == "user"
+        and isinstance(m.get("content"), str) and _REFLECTION_MARKER in m["content"]
+        for m in msgs
+    )
+
+    if not consecutive_tail:
+        return None, None, None
+
+    # Same-tool run length at the tail (used by both hard-stop and detector 1)
+    same_tool_run = 1
+    for i in range(len(consecutive_tail) - 1, 0, -1):
+        if consecutive_tail[i]["name"] == consecutive_tail[i - 1]["name"]:
+            same_tool_run += 1
+        else:
+            break
+    last_name = consecutive_tail[-1]["name"]
+
+    # ----- HARD STOP at _STOP_AT (existing safety; not gated by trigger flags) -----
+    if _STOP_AT > 0 and same_tool_run >= _STOP_AT:
         model = parsed.get("model") or "unknown"
         stop_msg = (
-            f"[loop-break] I have called `{top_name}` {top_count} times in this "
+            f"[loop-break] I have called `{last_name}` {same_tool_run} times in this "
             f"conversation. Repeated retries hit the same validator error. "
             f"Stopping to avoid runaway. Please refine the request with the "
             f"specific missing field, pick a different tool, or restate the goal."
@@ -464,54 +1176,118 @@ def _check_loop_short_circuit(path: str, body: bytes) -> tuple[bytes | None, byt
             f"data: {json.dumps(chunk2)}\n\n"
             f"data: [DONE]\n\n"
         )
-        return sse.encode("utf-8"), None
+        return sse.encode("utf-8"), None, {
+            "trigger": "hard_stop", "tool": last_name, "count": same_tool_run,
+        }
 
-    # ----- REFLECTION INJECTION at _REFLECT_AT -----
-    if _REFLECT_AT > 0 and top_count >= _REFLECT_AT:
-        # Skip if reflection already injected for this convo (any user
-        # message containing the marker)
-        already = any(
-            isinstance(m, dict) and m.get("role") == "user"
-            and isinstance(m.get("content"), str) and _REFLECTION_MARKER in m["content"]
-            for m in msgs
-        )
-        if already:
-            return None, None
-        # Extract the most recent tool error to feed back to the model
-        last_err = ""
-        for m in reversed(msgs):
-            if isinstance(m, dict) and m.get("role") == "tool":
-                c = m.get("content") or ""
-                if isinstance(c, str):
-                    last_err = c[:400]
+    if already_injected:
+        return None, None, None
+
+    fired: dict | None = None
+
+    # Detector 1: SAME TOOL consecutive >= _REFLECT_AT
+    if (fired is None and _TRIGGER_SAME_TOOL and _REFLECT_AT > 0
+            and same_tool_run >= _REFLECT_AT):
+        fired = {"trigger": "same_tool", "tool": last_name, "count": same_tool_run}
+
+    # Detector 2: SAME TOOL + SAME ARGS (last 2 calls identical)
+    if (fired is None and _TRIGGER_SAME_ARGS and len(consecutive_tail) >= 2):
+        last = consecutive_tail[-1]
+        prev = consecutive_tail[-2]
+        if (last["name"] == prev["name"]
+                and last["args"] is not None
+                and last["args"] == prev["args"]):
+            fired = {
+                "trigger": "same_args", "tool": last_name, "count": 2,
+                "args_preview": (last["args"] or "")[:120],
+            }
+
+    # Detector 3: RESULT REPEAT (last 2 tool results identical 200-char prefix)
+    # Inner-loop guard: require >=2 tool calls in the current run.
+    # Otherwise across-case chains (where case A's final result + case B's
+    # first result happen to match) could false-fire on case B turn 1.
+    if (fired is None and _TRIGGER_RESULT_REPEAT
+            and len(tool_results) >= 2 and len(consecutive_tail) >= 2):
+        a = (tool_results[-1] or "")[:200]
+        b = (tool_results[-2] or "")[:200]
+        if a and a == b:
+            fired = {
+                "trigger": "result_repeat", "tool": last_name, "count": 2,
+                "result_preview": a[:120],
+            }
+
+    # Detector 4: SAME NAMESPACE consecutive >= _NAMESPACE_AT
+    # Also enforces NAMESPACE_STOP_AT (default 16, ~3x NAMESPACE_AT=5) as
+    # hard stop — same_tool's STOP_AT doesn't cover the cosmos pattern of
+    # alternating tools within the same namespace (e.g. tree_draft_*
+    # ping-pong between replace_subtree and wrap_node). Without this,
+    # namespace-alternation loops spin until smoke-runner's per-case
+    # timeout fires, wasting GPU on a single case.
+    if (_TRIGGER_NAMESPACE and _NAMESPACE_AT > 0):
+        last_ns = _namespace_of(last_name)
+        ns_run = 1
+        for i in range(len(consecutive_tail) - 1, 0, -1):
+            if (_namespace_of(consecutive_tail[i]["name"])
+                    == _namespace_of(consecutive_tail[i - 1]["name"])):
+                ns_run += 1
+            else:
                 break
-        reflect_msg = (
-            f"{_REFLECTION_MARKER} STOP. You have called `{top_name}` "
-            f"{top_count} times with the same arguments and got the same "
-            f"error each time. Last error snippet: {last_err!r}. "
-            f"Do NOT retry the same call. Choose ONE of: "
-            f"(a) call a DIFFERENT tool, "
-            f"(b) change the specific failing argument named in the error "
-            f"(not other arguments), or "
-            f"(c) emit a short clarifying question for the user. "
-            f"Reply now with your next action — but do not repeat the "
-            f"failing call."
-        )
-        # Inject as a user message AFTER the last tool result
-        new_msgs = list(msgs)
-        # Find the index of the last tool message; insert after it
-        last_tool_idx = -1
-        for i, m in enumerate(new_msgs):
-            if isinstance(m, dict) and m.get("role") == "tool":
-                last_tool_idx = i
-        insert_idx = (last_tool_idx + 1) if last_tool_idx >= 0 else len(new_msgs)
-        new_msgs.insert(insert_idx, {"role": "user", "content": reflect_msg})
-        parsed["messages"] = new_msgs
-        mutated = json.dumps(parsed).encode("utf-8")
-        return None, mutated
+        # Hard stop first (regardless of already_injected): the SSE response
+        # cleanly exits the agent loop and prevents unbounded GPU spend.
+        if _NAMESPACE_STOP_AT > 0 and ns_run >= _NAMESPACE_STOP_AT:
+            model = parsed.get("model") or "unknown"
+            stop_msg = (
+                f"[loop-break] I have made {ns_run} consecutive calls within "
+                f"the `{last_ns}_*` tool family without converging. Stopping "
+                f"to avoid runaway. Please clarify the request or pick a "
+                f"different approach."
+            )
+            chatcmpl_id = "chatcmpl-loopbreak-ns"
+            chunk1 = {
+                "id": chatcmpl_id, "object": "chat.completion.chunk", "model": model,
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": stop_msg}, "finish_reason": None}],
+            }
+            chunk2 = {
+                "id": chatcmpl_id, "object": "chat.completion.chunk", "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+            sse = (
+                f"data: {json.dumps(chunk1)}\n\n"
+                f"data: {json.dumps(chunk2)}\n\n"
+                f"data: [DONE]\n\n"
+            )
+            return sse.encode("utf-8"), None, {
+                "trigger": "namespace_hard_stop", "tool": last_name,
+                "namespace": last_ns, "count": ns_run,
+            }
+        if fired is None and ns_run >= _NAMESPACE_AT:
+            fired = {
+                "trigger": "same_namespace", "tool": last_name,
+                "namespace": last_ns, "count": ns_run,
+            }
 
-    return None, None
-    return sse.encode("utf-8")
+    # Detector 5: TURN COUNTER (any-tool consecutive run >= _TURN_COUNTER_AT)
+    if (fired is None and _TRIGGER_TURN_COUNTER and _TURN_COUNTER_AT > 0
+            and len(consecutive_tail) >= _TURN_COUNTER_AT):
+        fired = {
+            "trigger": "turn_counter", "tool": last_name,
+            "count": len(consecutive_tail),
+        }
+
+    if fired is None:
+        return None, None, None
+
+    # Inject the generic reflection as a user message AFTER the last tool result
+    new_msgs = list(msgs)
+    last_tool_idx = -1
+    for i, m in enumerate(new_msgs):
+        if isinstance(m, dict) and m.get("role") == "tool":
+            last_tool_idx = i
+    insert_idx = (last_tool_idx + 1) if last_tool_idx >= 0 else len(new_msgs)
+    new_msgs.insert(insert_idx, {"role": "user", "content": _GENERIC_REFLECTION_MSG})
+    parsed["messages"] = new_msgs
+    mutated = json.dumps(parsed).encode("utf-8")
+    return None, mutated, fired
 
 
 def _try_parse_json(blob: bytes) -> tuple[object | None, str]:
@@ -586,7 +1362,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # Configured via OPENCLAW_PROXY_LOOP_REFLECT_AT (default 4) and
         # OPENCLAW_PROXY_LOOP_STOP_AT (default 8). Legacy single-knob
         # OPENCLAW_PROXY_LOOP_TOOL_THRESHOLD still honored.
-        loop_sse, loop_mutated_body = _check_loop_short_circuit(path, body)
+        loop_sse, loop_mutated_body, loop_trigger_info = _check_loop_short_circuit(path, body)
         if loop_sse is not None:
             # Hard stop — synthesize SSE and return
             self.send_response(200)
@@ -600,6 +1376,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "ts": int(time.time() * 1000),
                 "event": "proxy_loop_hard_stop",
                 "path": path,
+                "trigger_info": loop_trigger_info,
             })
             return
         if loop_mutated_body is not None:
@@ -609,6 +1386,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "ts": int(time.time() * 1000),
                 "event": "proxy_loop_reflection_injected",
                 "path": path,
+                "trigger_info": loop_trigger_info,
             })
 
         forward_headers["Content-Length"] = str(len(body))
@@ -672,6 +1450,30 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         duration_ms = (time.time() - ts_in) * 1000.0
+
+        # 2026-06-01: tool-name normalization (response-side mutation).
+        # Rewrite emitted tool_call names that drop the MCP namespace
+        # prefix to their unique canonical form. Diagnostic event logged
+        # per rewrite. Path-gated to /v1/chat/completions and only fires
+        # when there's a UNIQUE match (ambiguous cases pass through).
+        normalize_rewrites: list[dict] = []
+        if _NORMALIZE_TOOL_NAMES and path.endswith("/v1/chat/completions"):
+            try:
+                new_body, normalize_rewrites = _normalize_tool_names_in_response(
+                    body_json, resp_body,
+                )
+                if normalize_rewrites:
+                    resp_body = new_body
+            except Exception:
+                normalize_rewrites = []
+        if normalize_rewrites:
+            _append_log({
+                "ts": int(time.time() * 1000),
+                "event": "proxy_tool_name_normalized",
+                "path": path,
+                "rewrites": normalize_rewrites,
+            })
+
         resp_body_json, resp_body_raw = _try_parse_json(resp_body)
         response_record: dict = {
             "status": resp_status,
@@ -679,6 +1481,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             "duration_ms": round(duration_ms, 1),
             "body_chars": len(resp_body),
         }
+        if normalize_rewrites:
+            response_record["normalize_rewrites"] = normalize_rewrites
         if resp_body_json is not None:
             response_record["body"] = resp_body_json
         else:
@@ -689,6 +1493,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
             "request": request_record,
             "response": response_record,
         })
+
+        # 2026-06-01: response-side malformed-tool-call detection (generic).
+        # Diagnostic-only — does not modify the response. Writes a
+        # separate JSONL event for easy grep / per-model metric.
+        if _DETECT_MALFORMED_TOOL_CALL and path.endswith("/v1/chat/completions"):
+            try:
+                detection = _detect_malformed_tool_call(body_json, resp_body)
+            except Exception:
+                detection = None
+            if detection is not None:
+                _append_log({
+                    "ts": int(time.time() * 1000),
+                    "event": "proxy_malformed_tool_call_detected",
+                    "path": path,
+                    "matched_tool": detection["matched_tool"],
+                    "markers": detection["markers"],
+                    "content_chars": detection["content_chars"],
+                    "content_preview": detection["content_preview"],
+                })
 
         # Forward response to the bridge. Strip hop-by-hop again on
         # the way back; preserve Content-Type and any custom headers.
@@ -850,6 +1673,27 @@ def main() -> None:
         mutation_summary.append(f"enable_thinking={_FORCE_ENABLE_THINKING}")
     if _THINKING_TOKEN_BUDGET is not None:
         mutation_summary.append(f"thinking_token_budget={_THINKING_TOKEN_BUDGET}")
+    # Multi-criteria loop-reflection summary
+    triggers_on = []
+    if _TRIGGER_SAME_TOOL: triggers_on.append(f"same_tool>={_REFLECT_AT}")
+    if _TRIGGER_SAME_ARGS: triggers_on.append("same_args>=2")
+    if _TRIGGER_RESULT_REPEAT: triggers_on.append("result_repeat>=2")
+    if _TRIGGER_NAMESPACE: triggers_on.append(f"namespace>={_NAMESPACE_AT}(stop@{_NAMESPACE_STOP_AT})")
+    if _TRIGGER_TURN_COUNTER: triggers_on.append(f"turn_counter>={_TURN_COUNTER_AT}")
+    if triggers_on or _STOP_AT > 0:
+        loop_str = (",".join(triggers_on) if triggers_on else "off") + f" stop@{_STOP_AT}"
+        mutation_summary.append(f"loop_reflect=[{loop_str}]")
+    if _DETECT_MALFORMED_TOOL_CALL:
+        mutation_summary.append("malformed_tool_detect=on")
+    if _NORMALIZE_TOOL_NAMES:
+        mutation_summary.append("normalize_tool_names=on")
+    if _GUIDED_TOOL_CALLS:
+        mutation_summary.append("guided_tool_calls=on(action-shaped)")
+    if _TOOL_PARSER:
+        constraint_kind = "structural_tag" if _TOOL_PARSER == "hermes" else "grammar"
+        mutation_summary.append(f"tool_constraint={_TOOL_PARSER}({constraint_kind})")
+    if _TOOL_ERROR_REWRITE:
+        mutation_summary.append("tool_error_rewrite=on")
     mutation_str = ", ".join(mutation_summary) if mutation_summary else "logging-only (no mutations)"
     print(
         f"openclaw-logging-proxy listening on {cfg.bind}:{_LISTEN_PORT} "

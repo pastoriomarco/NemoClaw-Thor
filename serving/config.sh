@@ -179,6 +179,35 @@ normalize_model_profile() {
 }
 
 resolve_model_profile() {
+    # =====================================================================
+    # `enable_thinking` propagation — source of truth (validated 2026-06-01)
+    # =====================================================================
+    # Multiple layers historically wrote `enable_thinking` but only ONE is
+    # load-bearing for the chat template:
+    #
+    #   1. Bridge AdapterConfig.thinking → OpenClaw `--thinking` flag →
+    #      OpenClaw sets *top-level* `enable_thinking` on the wire body.
+    #      DEAD: the chat template (chat_template.jinja:12) only reads
+    #      `chat_template_kwargs.enable_thinking`, never the top-level.
+    #   2. Bridge AdapterConfig.gateway_enable_thinking. DEPRECATED: hook
+    #      exists, defaults None, never wired to a per-profile default.
+    #   3. Proxy `OPENCLAW_PROXY_FORCE_ENABLE_THINKING`. LOAD-BEARING.
+    #      Reads THOR_TARGET_PROXY_FORCE_ENABLE_THINKING per profile,
+    #      injects `chat_template_kwargs.enable_thinking` on every chat
+    #      completion. The proxy is restarted on every model boot by
+    #      start-model.sh, picking up the per-profile value defined below.
+    #   4. launch.sh `--default-chat-template-kwargs '{enable_thinking:X}'`.
+    #      vLLM-side default. Active only when the request body has no
+    #      ctk.enable_thinking, so the proxy override (3) always wins.
+    #      Kept as a belt-and-suspenders fallback for direct-curl tests.
+    #
+    # Rule: when adding/editing a profile below, set
+    # THOR_TARGET_PROXY_FORCE_ENABLE_THINKING to mirror the value of
+    # `--default-chat-template-kwargs '{enable_thinking:...}'` in
+    # launch.sh ("on" or "off"). If neither is set, leave "" — the
+    # template default (True) will apply. Inline `# launch.sh: ...`
+    # markers on the line make the mirror explicit at-a-glance.
+    # =====================================================================
     local requested
     # Default profile: cosmos-reason2-8b (NVIDIA Cosmos Reason 2 8B — Qwen3-VL-8B base,
     # FP8 KV, hermes tool parser, 64K context). Production default for the ManyForge
@@ -286,10 +315,14 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_QUANTIZATION=""
-            # Per-profile proxy tuning (consumed by start-model.sh)
+            # Per-profile proxy tuning (consumed by start-model.sh).
+            # FORCE_ENABLE_THINKING is the *load-bearing* control for the
+            # chat template's `enable_thinking` variable (see comment block
+            # at the top of resolve_model_profile). Mirror the value of
+            # `--default-chat-template-kwargs` in launch.sh for this profile.
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
             THOR_TARGET_PROXY_LOOP_STOP_AT="8"
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=""
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"  # launch.sh: enable_thinking=true
             ;;
         cosmos-reason2-2b)
             # NVIDIA Cosmos Reason 2 (2B), Qwen3-VL-2B base, VLM physical-AI reasoner.
@@ -321,7 +354,7 @@ resolve_model_profile() {
             # Per-profile proxy tuning (consumed by start-model.sh)
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
             THOR_TARGET_PROXY_LOOP_STOP_AT="8"
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=""
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="off"  # launch.sh: enable_thinking=false
             ;;
         nemotron3-nano-4b-bf16)
             # NVIDIA-Nemotron-3-Nano-4B-BF16 — NVIDIA's explicit Jetson
@@ -346,7 +379,7 @@ resolve_model_profile() {
             # Per-profile proxy tuning (consumed by start-model.sh)
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
             THOR_TARGET_PROXY_LOOP_STOP_AT="8"
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=""
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="off"  # launch.sh: enable_thinking=false
             ;;
         cosmos-reason2-8b)
             # NVIDIA Cosmos Reason 2 (8B), Qwen3-VL-8B base, VLM physical-AI reasoner.
@@ -378,7 +411,7 @@ resolve_model_profile() {
             # Per-profile proxy tuning (consumed by start-model.sh)
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="3"
             THOR_TARGET_PROXY_LOOP_STOP_AT="6"
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"  # launch.sh: enable_thinking=true
             ;;
         nemotron3-nano-omni-30b-a3b-nvfp4)
             # NVIDIA Nemotron 3 Nano Omni (released 2026-04-28). 30B-A3B
@@ -420,7 +453,7 @@ resolve_model_profile() {
             # Per-profile proxy tuning (consumed by start-model.sh)
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
             THOR_TARGET_PROXY_LOOP_STOP_AT="8"
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=""
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="off"  # launch.sh: enable_thinking=false
             ;;
         nemotron3-nano-omni-30b-a3b-nvfp4-reasoning)
             # Reasoning-mode variant of the base nemotron3-nano-omni
@@ -442,6 +475,10 @@ resolve_model_profile() {
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
             THOR_TARGET_QUANTIZATION=""
+            # Per-profile proxy tuning (consumed by start-model.sh)
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="8"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"  # launch.sh: enable_thinking=true
             ;;
         # cosmos-reason2-8b-reasoning REMOVED 2026-04-28 — broken-tuning
         # experiment, see launch.sh. Use cosmos-reason2-8b instead.

@@ -20,6 +20,29 @@ SUPPORTED_VERSION_FAMILY = "manyforge.assistant.provider_request.v0"
 DEFAULT_SCHEMA_VERSION = "0.1.0"
 
 
+# 2026-06-01 — recency-position tail checklist
+# Compact restatement of the most-violated rules, appended AFTER the
+# user_request so the model sees them in maximum-attention position.
+# The full rules_block higher up provides the per-rule rationale; this
+# tail block is the short-form reminder right before action. Env-gated:
+# set OPENCLAW_BRIDGE_TAIL_CHECKLIST=0 to disable.
+_TAIL_CHECKLIST_ENABLED = (
+    os.environ.get("OPENCLAW_BRIDGE_TAIL_CHECKLIST", "1") or "1"
+).strip().lower() in ("1", "true", "yes", "on")
+
+_TAIL_CHECKLIST_BODY = (
+    "\n\n"
+    "## tail_checklist (apply BEFORE emitting your next action)\n"
+    "- Re-read the user prompt: does it name WHERE (parent / position / target sibling)? "
+    "If not, output ONE clarification question — do NOT default to root or last sibling.\n"
+    "- Action verb + node/object? Emit a tool call. Never reply with `NO_REPLY`.\n"
+    "- On a 4xx tool result: read `allowedNodeKinds` / `validParentNames` from the response "
+    "and pick from there. Do NOT retry with identical args.\n"
+    "- If `result.delta.rootKind` already matches the user's requested kind, the goal is "
+    "satisfied — emit the final assistant message and stop."
+)
+
+
 @dataclass(frozen=True)
 class AdapterConfig:
     """Runtime configuration for invoking OpenClaw inside a sandbox."""
@@ -33,6 +56,18 @@ class AdapterConfig:
     timeout_s: float = 120.0
     openclaw_bin: str = "openclaw"
     local: bool = False
+    # `thinking`: passed as `--thinking off|on` to OpenClaw CLI. OpenClaw
+    # translates this into a top-level `enable_thinking` field on the
+    # chat-completion request body sent to the proxy. Per the trace
+    # validated 2026-06-01, the chat template does NOT read this top-
+    # level field — it reads `chat_template_kwargs.enable_thinking`
+    # instead. So this flag is **DEPRECATED for thinking control**: it
+    # produces only the inert top-level field. The load-bearing control
+    # is `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING` set per-profile in
+    # NemoClaw-Thor/serving/config.sh, which the proxy enforces by
+    # injecting `chat_template_kwargs.enable_thinking` on every request.
+    # Kept here for back-compat with older OpenClaw CLI flag plumbing;
+    # do not rely on it to control reasoning.
     thinking: str = "off"
     auto_tool_window: bool = True
     allowed_tools_file: str = "/tmp/manyforge-openclaw-allowed-tools.txt"
@@ -59,6 +94,17 @@ class AdapterConfig:
     gateway_temperature: float | None = None
     gateway_top_k: int | None = None
     gateway_top_p: float | None = None
+    # `gateway_enable_thinking`: when set, the bridge writes
+    # `chat_template_kwargs.enable_thinking` into the request body sent
+    # to the OpenClaw gateway. **DEPRECATED 2026-06-01**: this hook
+    # was never wired up to any default and the proxy now enforces
+    # `enable_thinking` per-profile via `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING`
+    # in NemoClaw-Thor/serving/config.sh (single source of truth).
+    # Setting `OPENCLAW_ASSISTANT_GATEWAY_ENABLE_THINKING=true|false`
+    # at the bridge layer still works for callers that bypass the
+    # proxy, but the proxy's mirror will override it on the standard
+    # path. Kept for back-compat; do not rely on it for the standard
+    # OpenClaw lane.
     gateway_enable_thinking: bool | None = None
 
 
@@ -608,6 +654,7 @@ def build_agent_prompt(
             "position?\" — emit ZERO tool calls. Do not default to the root "
             "or to the last-touched sibling."
         )
+    tail_block = _TAIL_CHECKLIST_BODY if _TAIL_CHECKLIST_ENABLED else ""
     return "\n".join(
         [
             "You are the ManyForge composer assistant running inside OpenClaw.",
@@ -624,7 +671,7 @@ def build_agent_prompt(
             "```",
             "",
             "## user_request",
-            message.strip() + self_check,
+            message.strip() + self_check + tail_block,
         ]
     )
 

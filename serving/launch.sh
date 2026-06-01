@@ -171,12 +171,14 @@ prepare_thor_launch_profile() {
             # glaive-function-calling-v2 + APIGen + ToolBench + Nemotron-
             # RL-Agentic-Conversational-Tool-Use-Pivot-v1. BFCL v3 = 61.1.
             #
-            # Per HF discussion #3 (on the 30B-A3B sibling): enabling
-            # both --tool-call-parser AND --reasoning-parser nano_v3
-            # simultaneously breaks tool calling. For tool-call regime
-            # we keep ONLY --tool-call-parser qwen3_coder. The <think>
-            # envelope (if any) bleeds into content; bridge consumes
-            # `content` so this is the correct path.
+            # 2026-06-01 experiment: previously removed --reasoning-parser
+            # nano_v3 because HF discussion #3 (on 30B-A3B sibling) said
+            # combining it with --tool-call-parser breaks tool calling.
+            # Re-enabling now to test against P1_wrap_root_specific
+            # failure where the model emitted a partial tool-call format
+            # (`tree_draft_wrap_node <parameter=...></function>` — missing
+            # the outer `<tool_call><function=` wrapper). Smoke run will
+            # tell us if the warning was outdated or still accurate.
             THOR_LAUNCH_MODEL_SOURCE="nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16"
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.40}"
             THOR_VLLM_ARGS+=(
@@ -185,6 +187,8 @@ prepare_thor_launch_profile() {
                 "--mamba_ssm_cache_dtype" "float32"
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
+                "--reasoning-parser-plugin" "/workspace/mods/nano_v3_reasoning_parser.py"
+                "--reasoning-parser" "nano_v3"
                 # Tool-call regime sampling per HF card: T=0.6, top_p=0.95
                 "--override-generation-config" '{"temperature":0.6,"top_p":0.95}'
                 # Thinking OFF by default for tool-call lane — same

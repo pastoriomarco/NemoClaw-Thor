@@ -369,16 +369,42 @@ async def assistant(request: Request) -> JSONResponse:
     # answer_must_contain assertion passes.
     msg_raw = payload.get("message")
     msg_lower = (msg_raw or "").strip().lower() if isinstance(msg_raw, str) else ""
-    # 2026-06-01: opt-out flag for benchmark runs. Set
-    # OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC=1 to skip the bridge-side
-    # canned-clarification short-circuit and let every prompt reach
-    # the model. Used to compare models on their actual ability to
-    # ask clarification (the bypass otherwise gives every model the
-    # same +2 free passes on PARALLEL_generic / FALLBACK_generic).
-    synthetic_disabled = os.environ.get(
+    # ------------------------------------------------------------------
+    # Bridge-side synthetic clarification (round 7 of 2026-05-31 session)
+    # ------------------------------------------------------------------
+    # The bridge can short-circuit the model entirely for narrow
+    # "under-specified add" prompts:
+    #   "add a parallel"   "add a fallback"   "add a sequence"
+    #   "add a repeat"     "wrap with retry"  "insert a inverter"
+    # (≤4 words, control-flow kind, no parent/position/locator).
+    #
+    # On these prompts the bridge returns a canned clarification
+    # ("Which parent should I add the X under, and where in its
+    # children?") without dispatching the request to OpenClaw or the
+    # model — instant, deterministic, zero-GPU.
+    #
+    # Why it was useful: Cosmos-Reason2-8B (the prior production
+    # default) couldn't reliably ask clarification on first turn for
+    # these patterns; the bypass guaranteed correct behavior in
+    # production. See COMPOSER-ASSISTANT-ARCHITECTURE.md §D and
+    # session log 2026-05-31 round 7.
+    #
+    # Why DEFAULT OFF (2026-06-01): in benchmark comparisons across
+    # models, the bypass gives every candidate the same free passes
+    # on PARALLEL_generic / FALLBACK_generic — hiding model-specific
+    # differences. Default-off ensures the smoke measures the model's
+    # actual ability to ask. For production deployments where the
+    # bypass is desired, set OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1.
+    synthetic_enabled = os.environ.get(
+        "OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    # Legacy opt-out env (DISABLE_SYNTHETIC=1) still honored for
+    # backwards compatibility — if it's set, synthetic stays off
+    # even if ENABLE_SYNTHETIC was also set somewhere.
+    synthetic_disabled_legacy = os.environ.get(
         "OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC", ""
     ).strip().lower() in ("1", "true", "yes", "on")
-    if msg_lower and not synthetic_disabled:
+    if msg_lower and synthetic_enabled and not synthetic_disabled_legacy:
         cf_kinds = ("parallel", "fallback", "sequence", "repeat", "retry", "inverter")
         # Strict template: "add a <kind>" / "insert a <kind>" / "wrap with <kind>"
         # (3-4 words exactly). Refuse compound forms ("add a parallel that ...").
