@@ -400,20 +400,46 @@ def _check_loop_short_circuit(path: str, body: bytes) -> tuple[bytes | None, byt
     msgs = parsed.get("messages") or []
     if not isinstance(msgs, list):
         return None, None
-    # Count tool_call names emitted by the assistant across the whole convo
+    # Count CONSECUTIVE same-tool calls at the TAIL of the assistant
+    # turn history. Lifetime counting (the prior implementation) broke
+    # chained smoke cases: when composer shares a conversationId across
+    # cases (e.g. PnP_01..PnP_20), the lifetime same-tool count crosses
+    # _STOP_AT by the 3rd or 4th case, then hard-stops every subsequent
+    # case on turn 1. Consecutive counting only fires when the model is
+    # ACTUALLY stuck in a same-tool loop within the current case.
+    # A turn that calls a DIFFERENT tool resets the run length to 1
+    # (or 0 if that turn has no tool call).
     from collections import Counter as _Counter
-    names: list[str] = []
+    consecutive_count = 0
+    top_name = None
     for m in msgs:
         if not isinstance(m, dict): continue
         if m.get("role") != "assistant": continue
-        for tc in (m.get("tool_calls") or []):
+        tcs = m.get("tool_calls") or []
+        if not tcs:
+            # Assistant turn with no tool call → reset
+            consecutive_count = 0
+            top_name = None
+            continue
+        # Take the first tool name from this assistant turn
+        nm = None
+        for tc in tcs:
             if isinstance(tc, dict):
                 fn = tc.get("function") or {}
                 nm = fn.get("name") or tc.get("name")
-                if nm: names.append(nm)
-    if not names:
+                if nm: break
+        if not nm:
+            consecutive_count = 0
+            top_name = None
+            continue
+        if nm == top_name:
+            consecutive_count += 1
+        else:
+            top_name = nm
+            consecutive_count = 1
+    if top_name is None or consecutive_count == 0:
         return None, None
-    top_name, top_count = _Counter(names).most_common(1)[0]
+    top_count = consecutive_count
 
     # ----- HARD STOP at _STOP_AT -----
     if _STOP_AT > 0 and top_count >= _STOP_AT:

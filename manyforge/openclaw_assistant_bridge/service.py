@@ -369,7 +369,16 @@ async def assistant(request: Request) -> JSONResponse:
     # answer_must_contain assertion passes.
     msg_raw = payload.get("message")
     msg_lower = (msg_raw or "").strip().lower() if isinstance(msg_raw, str) else ""
-    if msg_lower:
+    # 2026-06-01: opt-out flag for benchmark runs. Set
+    # OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC=1 to skip the bridge-side
+    # canned-clarification short-circuit and let every prompt reach
+    # the model. Used to compare models on their actual ability to
+    # ask clarification (the bypass otherwise gives every model the
+    # same +2 free passes on PARALLEL_generic / FALLBACK_generic).
+    synthetic_disabled = os.environ.get(
+        "OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if msg_lower and not synthetic_disabled:
         cf_kinds = ("parallel", "fallback", "sequence", "repeat", "retry", "inverter")
         # Strict template: "add a <kind>" / "insert a <kind>" / "wrap with <kind>"
         # (3-4 words exactly). Refuse compound forms ("add a parallel that ...").
