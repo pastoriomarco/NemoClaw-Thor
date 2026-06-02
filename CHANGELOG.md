@@ -19,6 +19,80 @@ own SemVer cadence.
 Work in progress on the `dev` branch — see [`ROADMAP.md`](ROADMAP.md)
 for direction.
 
+### Added
+
+- **Rebuild documentation suite** for the OpenShell 0.0.36 → 0.0.44 +
+  OpenClaw 2026.4.24 → 2026.5.22 + NemoClaw v0.0.31 → `lkg` (=v0.0.55)
+  upgrade. Three docs:
+  - [`manyforge/docs/REBUILD-2026-06-02-openshell-0.0.44.md`](manyforge/docs/REBUILD-2026-06-02-openshell-0.0.44.md)
+    — exact rebuild procedure, 12 fixes catalogued.
+  - [`manyforge/docs/REBUILD-FINDINGS-2026-06-02.md`](manyforge/docs/REBUILD-FINDINGS-2026-06-02.md)
+    — architectural findings + upstream issues to file
+    (OpenClaw [#80909](https://github.com/openclaw/openclaw/issues/80909),
+    NemoClaw https↔http gateway-registration mismatch).
+  - [`manyforge/docs/REBUILD-RESULTS-2026-06-02.md`](manyforge/docs/REBUILD-RESULTS-2026-06-02.md)
+    — smoke results + decision rationale.
+- [`manyforge/scripts/rebuild-headless-onboarding.sh`](manyforge/scripts/rebuild-headless-onboarding.sh)
+  — headless reproduction of the rebuild (detects + auto-fixes the
+  NemoClaw `https`-vs-`http` gateway-registration mismatch that breaks
+  the onboard step 4/8 "Setting up inference provider").
+- [`manyforge/scripts/debug/run-smoke-all-models.sh`](manyforge/scripts/debug/run-smoke-all-models.sh)
+  — multi-model bake-off runner across cosmos / omni / 4B-on /
+  4B-off / 35B with profile + thinking-flag tuning per run.
+- **Proxy: `reasoning → content` SSE/JSON response mutation**
+  (`OPENCLAW_PROXY_PROMOTE_REASONING_TO_CONTENT`). OpenClaw 2026.5.22
+  treats `content==null` as `code=incomplete_result`; vLLM profiles
+  launched with `--reasoning-parser` (cosmos `qwen3`, nemotron3
+  `nano_v3`) route output into `reasoning`. The proxy now mirrors it
+  into `content` so OpenClaw's stricter contract is satisfied while
+  any reasoning-only consumer downstream still sees the field.
+  Default on; `=0` to opt out.
+
+### Changed
+
+- **NemoClaw / OpenShell / OpenClaw pinning bumped** in
+  [`VERSIONS.md`](VERSIONS.md): NemoClaw `lkg` (v0.0.55), OpenShell
+  CLI 0.0.44, OpenClaw 2026.5.22, OpenShell driver `docker` (no k3s).
+  Prior audit row kept for diff context.
+- **Bridge adapter** (`manyforge/openclaw_assistant_bridge/adapter.py`):
+  k3s `docker exec ... kubectl exec` exec wrapper replaced with
+  `nemoclaw <sandbox> exec --no-tty -- bash -c`. Multi-line shell
+  commands base64-wrapped to bypass the new OpenShell exec gRPC
+  guard ("argv contains newline or carriage return characters").
+- **Bridge service** logs `openclaw_request_exit_nonzero` with
+  stderr/stdout excerpts on the 502 path so silent OpenClaw exits
+  are diagnosable from `/tmp/bridge.log`.
+- **`setup-manyforge-assistant.sh`** — 5 patches: exec wrapper for
+  the new docker driver; health probe via `exec true` (instead of
+  the broken `nemoclaw status`); `remote_hash` empty-dir guard for
+  fresh sandboxes; split precheck-vs-runtime composer base URL;
+  `postCompactionMaxChars` 80000 → 50000 (OpenClaw 2026.5.22
+  validation cap).
+- **`policies/manyforge-composer.preset.yaml`** — `allowed_ips`
+  now includes both `172.17.0.0/16` (old k3s bridge) and
+  `172.18.0.0/16` (new docker-driver bridge).
+
+### Manyforge MCP fix (composer-side; tracked here for context)
+
+- [`/api/assistant/bridge/tools/{toolId}` validator path](https://github.com/pastoriomarco/manyforge/blob/dev/manyforge_composer/backend/routes_assistant.py)
+  returns HTTP 200 + `{success:false, error:..., result:envelope}`
+  envelope instead of 4xx, so OpenClaw's hardcoded
+  `erroredAssistantResultPolicy:"drop"` doesn't silently strip
+  errored turns + tool results from chat history. (Composer repo is
+  upstream of NemoClaw-Thor; this entry exists for traceability.)
+
+### Known regression (deferred, upstream)
+
+- **OpenClaw 2026.5.22 hides MCP catalogs behind `tool_search_code`**
+  regardless of `tools.toolSearch.enabled=false` or `mode="tools"`
+  config. Cosmos hits 0/3 on a smoke subset because the JS-discovery
+  pattern (`tools.search → tools.describe → tools.call`) is not what
+  the manyforge skill/bridge prompts/smoke assertions were designed
+  for. Pivot to Hermes agent (NemoClaw natively supports
+  `NEMOCLAW_AGENT=hermes`) under evaluation; Hermes exposes MCP
+  tools directly per its
+  [architecture docs](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture).
+
 ## [0.1.0] — 2026-05-14
 
 First publishable release. Retrospective entry covering the phase
