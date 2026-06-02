@@ -77,6 +77,17 @@ if [[ "${THOR_RESTART_PROXY:-1}" != "0" ]]; then
         export OPENCLAW_PROXY_THINKING_TOKEN_BUDGET="${OPENCLAW_PROXY_THINKING_TOKEN_BUDGET:-512}"
         export OPENCLAW_PROXY_LOOP_REFLECT_AT="${REFLECT_AT}"
         export OPENCLAW_PROXY_LOOP_STOP_AT="${STOP_AT}"
+        # 2026-06-02: OpenClaw 2026.5.22 rejects responses where
+        # `content` is null (treats as `code=incomplete_result`). Any
+        # vLLM profile launched with `--reasoning-parser` (cosmos's
+        # qwen3 parser; nemotron3-nano's nano_v3 parser) routes all
+        # output into the `reasoning` field, leaving `content` null
+        # and breaking every chat-completion lane in the new agent.
+        # The proxy mirrors `reasoning` → `content` so the contract
+        # is satisfied for both old (reasoning-only) and new (content-
+        # required) consumers. Default on; set =0 to opt out for
+        # bake-off baselines.
+        export OPENCLAW_PROXY_PROMOTE_REASONING_TO_CONTENT="${OPENCLAW_PROXY_PROMOTE_REASONING_TO_CONTENT:-1}"
         if [[ -n "${FORCE_THINKING}" ]]; then
             export OPENCLAW_PROXY_FORCE_ENABLE_THINKING="${FORCE_THINKING}"
         else

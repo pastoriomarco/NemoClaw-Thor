@@ -717,22 +717,34 @@ def build_openclaw_command(
             f"trap 'rm -f {tool_file}' EXIT; "
             f"{shell_command}"
         )
+    # OpenShell 0.0.44+ docker driver: the k3s cluster container
+    # (`openshell-cluster-nemoclaw`) no longer exists, and there's no
+    # in-cluster kubectl. The new sandbox-exec entrypoint is
+    # `nemoclaw <name> exec --no-tty -- <cmd>`, which runs as the
+    # sandbox user (uid 998, HOME=/sandbox).
+    #
+    # However: OpenShell's gRPC exec endpoint rejects arguments that
+    # contain newline or carriage-return characters with
+    # `InvalidArgument: command argument 2 contains newline or carriage
+    # return characters`. Multi-line shell commands (which the bridge
+    # produces because user prompts contain `\n`) trip that guard.
+    #
+    # Workaround: base64-encode the shell command, then decode + eval
+    # it inside a single-line bash invocation. The encoded form has
+    # no newlines, so the exec guard is happy; the decoded payload
+    # runs identically to the original shell_command.
+    import base64
+    encoded = base64.b64encode(shell_command.encode("utf-8")).decode("ascii")
+    wrapped = f"eval \"$(echo {encoded} | base64 -d)\""
     return [
-        "docker",
-        "exec",
-        config.cluster_container,
-        "kubectl",
-        "exec",
-        "-n",
-        config.namespace,
+        "nemoclaw",
         config.sandbox,
-        "-c",
-        config.container,
+        "exec",
+        "--no-tty",
         "--",
-        "su",
-        config.sandbox_user,
+        "bash",
         "-c",
-        shell_command,
+        wrapped,
     ]
 
 

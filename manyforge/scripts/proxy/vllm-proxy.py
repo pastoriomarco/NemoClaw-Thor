@@ -585,6 +585,27 @@ _NORMALIZE_TOOL_NAMES = (
     os.environ.get("OPENCLAW_PROXY_NORMALIZE_TOOL_NAMES", "1") or "1"
 ).strip().lower() in ("1", "true", "yes", "on")
 
+# 2026-06-02: response-side reasoning→content promotion.
+# When vLLM is launched with --reasoning-parser (e.g. qwen3 for cosmos),
+# the parser routes everything inside <think>...</think> blocks to
+# the `reasoning` field and leaves `content` empty. OpenClaw 2026.5.22
+# treats this as an incomplete terminal response ("code=incomplete_result")
+# and refuses to surface it back to the bridge.
+#
+# Older OpenClaw (2026.4.24, what was current during the iter-32 win
+# of 77.3% on cosmos) accepted reasoning-only responses. The newer
+# stricter contract breaks every model that emits to reasoning.
+#
+# When this flag is on, the proxy rewrites streaming SSE chunks and
+# non-streaming JSON responses so that `reasoning` content is mirrored
+# into `content`. Tool_calls and other fields pass through untouched.
+# This preserves both bridge correctness (sees content) and any
+# reasoning-only consumer downstream (the reasoning field stays
+# populated alongside).
+_PROMOTE_REASONING_TO_CONTENT = (
+    os.environ.get("OPENCLAW_PROXY_PROMOTE_REASONING_TO_CONTENT", "1") or "1"
+).strip().lower() in ("1", "true", "yes", "on")
+
 # 2026-06-01: prompt-aware guided tool-call decoding (request-side).
 # When the LAST user message looks action-shaped (action verb + domain
 # noun), force `tool_choice="required"` so vLLM's tool-calling backend
@@ -954,6 +975,96 @@ def _build_canonical_tool_map(req_body: object) -> dict[str, str]:
             elif suffix not in canonical:
                 canonical[suffix] = full
     return {k: v for k, v in canonical.items() if v is not None}
+
+
+def _promote_reasoning_to_content_in_response(
+    resp_body: bytes | str,
+) -> tuple[bytes, int]:
+    """Mirror `reasoning` field content into `content` for OpenClaw 2026.5.22
+    compatibility (it rejects content==null as 'incomplete_result' even
+    when reasoning is populated).
+
+    Handles:
+      - Non-streaming `chat.completion` JSON: copies choices[i].message.reasoning
+        into choices[i].message.content if content is None / "".
+      - Streaming `chat.completion.chunk` SSE: copies delta.reasoning into
+        delta.content if content is None / absent.
+
+    Returns (new_body_bytes, mutations_count). When count==0, the body is
+    returned unchanged.
+    """
+    if not _PROMOTE_REASONING_TO_CONTENT:
+        return (resp_body if isinstance(resp_body, bytes)
+                else (resp_body or "").encode("utf-8")), 0
+    txt = resp_body.decode("utf-8", "replace") if isinstance(resp_body, bytes) else (resp_body or "")
+    if not txt:
+        return b"", 0
+
+    mutations = 0
+
+    # Non-streaming JSON shape: a single top-level object with `choices`.
+    if txt.lstrip().startswith("{") and "data: " not in txt:
+        try:
+            data = json.loads(txt)
+        except (ValueError, TypeError):
+            return txt.encode("utf-8"), 0
+        if isinstance(data, dict) and isinstance(data.get("choices"), list):
+            for ch in data["choices"]:
+                if not isinstance(ch, dict):
+                    continue
+                msg = ch.get("message")
+                if isinstance(msg, dict):
+                    reasoning = msg.get("reasoning")
+                    content = msg.get("content")
+                    if reasoning and (content is None or content == ""):
+                        msg["content"] = reasoning
+                        mutations += 1
+            if mutations:
+                return json.dumps(data).encode("utf-8"), mutations
+        return txt.encode("utf-8"), 0
+
+    # SSE streaming shape: `data: {...}\n\n` chunks.
+    new_lines: list[str] = []
+    for line in txt.split("\n"):
+        if not line.startswith("data: "):
+            new_lines.append(line)
+            continue
+        payload = line[6:]
+        if payload == "[DONE]" or not payload.strip().startswith("{"):
+            new_lines.append(line)
+            continue
+        try:
+            chunk = json.loads(payload)
+        except (ValueError, TypeError):
+            new_lines.append(line)
+            continue
+        modified = False
+        for ch in (chunk.get("choices") or []):
+            if not isinstance(ch, dict):
+                continue
+            d = ch.get("delta")
+            if isinstance(d, dict):
+                reasoning = d.get("reasoning")
+                content = d.get("content")
+                if reasoning and (content is None or content == ""):
+                    d["content"] = reasoning
+                    modified = True
+                    mutations += 1
+            # Non-streaming-mixed: some servers also place a full message
+            # on a final chunk.
+            msg = ch.get("message")
+            if isinstance(msg, dict):
+                reasoning = msg.get("reasoning")
+                content = msg.get("content")
+                if reasoning and (content is None or content == ""):
+                    msg["content"] = reasoning
+                    modified = True
+                    mutations += 1
+        if modified:
+            new_lines.append("data: " + json.dumps(chunk, separators=(",", ":")))
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines).encode("utf-8"), mutations
 
 
 def _normalize_tool_names_in_response(
@@ -1451,6 +1562,21 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         duration_ms = (time.time() - ts_in) * 1000.0
 
+        # 2026-06-02: reasoning→content promotion (response-side mutation).
+        # OpenClaw 2026.5.22 treats responses with `content==null` as
+        # incomplete_result errors. Models with --reasoning-parser (e.g.
+        # cosmos with qwen3) put all output in `reasoning`. Mirror it
+        # into `content` so OpenClaw is satisfied. Pass-through when
+        # content is already populated. See OPENCLAW_PROXY_PROMOTE_REASONING_TO_CONTENT.
+        promote_mutations = 0
+        if _PROMOTE_REASONING_TO_CONTENT and path.endswith("/v1/chat/completions"):
+            try:
+                new_body, promote_mutations = _promote_reasoning_to_content_in_response(resp_body)
+                if promote_mutations:
+                    resp_body = new_body
+            except Exception:
+                promote_mutations = 0
+
         # 2026-06-01: tool-name normalization (response-side mutation).
         # Rewrite emitted tool_call names that drop the MCP namespace
         # prefix to their unique canonical form. Diagnostic event logged
@@ -1694,6 +1820,8 @@ def main() -> None:
         mutation_summary.append(f"tool_constraint={_TOOL_PARSER}({constraint_kind})")
     if _TOOL_ERROR_REWRITE:
         mutation_summary.append("tool_error_rewrite=on")
+    if _PROMOTE_REASONING_TO_CONTENT:
+        mutation_summary.append("promote_reasoning_to_content=on")
     mutation_str = ", ".join(mutation_summary) if mutation_summary else "logging-only (no mutations)"
     print(
         f"openclaw-logging-proxy listening on {cfg.bind}:{_LISTEN_PORT} "

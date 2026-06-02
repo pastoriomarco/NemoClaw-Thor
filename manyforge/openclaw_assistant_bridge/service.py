@@ -734,6 +734,14 @@ async def assistant(request: Request) -> JSONResponse:
             f"OpenClaw agent exited with code {result.returncode}: "
             f"{(result.stderr or result.stdout)[:1000]}"
         )
+        # Log the actual error so we can diagnose 502s without re-running.
+        _log_event(
+            "openclaw_request_exit_nonzero",
+            requestId=request_id,
+            returncode=result.returncode,
+            stderr_excerpt=(result.stderr or "")[:1500],
+            stdout_excerpt=(result.stdout or "")[:1500],
+        )
         body = error_envelope(
             request_id=request_id,
             code="upstream_call_error",

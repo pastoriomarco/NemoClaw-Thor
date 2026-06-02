@@ -87,7 +87,13 @@ if [[ ! -f "${SKILL_SRC}/SKILL.md" ]]; then
 fi
 
 step "Sandbox check: ${SANDBOX}"
-if ! nemoclaw "${SANDBOX}" status >/dev/null 2>&1; then
+# Use `exec -- true` as the health probe. `nemoclaw status` is the obvious
+# choice but NemoClaw 0.0.56 throws "TypeError: shields.getShieldsPosture
+# is not a function" in `status` regardless of actual sandbox health,
+# blocking the gate even when the sandbox is fully up. The exec probe
+# actually connects to the OpenShell exec endpoint and runs a command,
+# which is a stronger liveness signal than `status` anyway.
+if ! nemoclaw "${SANDBOX}" exec --no-tty -- true >/dev/null 2>&1; then
   fail "Sandbox '${SANDBOX}' not found or unhealthy. Run 'nemoclaw list' to inspect."
 fi
 ok "sandbox ${SANDBOX} is up"
@@ -97,7 +103,18 @@ ok "sandbox ${SANDBOX} is up"
 # running Composer either isn't reachable or doesn't expose that mode.
 # This catches the "stale skill" failure mode at install time rather
 # than at first MCP call.
-PRECHECK_COMPOSER_BASE="${MANYFORGE_COMPOSER_BASE:-http://host.openshell.internal:9000}"
+# Precheck runs on the HOST (validating the composer is up), while the
+# sandbox-stored MCP config uses host.openshell.internal:9000 from inside
+# the sandbox container. These are two different namespaces:
+#   - On the host, host.openshell.internal does NOT resolve.
+#   - In the sandbox, localhost is the sandbox's own loopback (nothing
+#     listening on :9000 there).
+# Use MANYFORGE_COMPOSER_PRECHECK_BASE for the host-side validation URL.
+# It defaults to http://localhost:9000 which is correct on the host.
+# MANYFORGE_COMPOSER_BASE (used farther down for the MCP env in the
+# sandbox) stays at host.openshell.internal:9000 unless explicitly
+# overridden for a non-default routing setup.
+PRECHECK_COMPOSER_BASE="${MANYFORGE_COMPOSER_PRECHECK_BASE:-http://localhost:9000}"
 PRECHECK_MODE="${MANYFORGE_ASSISTANT_MODE:-composer-assistant}"
 PRECHECK_URL="${PRECHECK_COMPOSER_BASE}/api/assistant/modes/${PRECHECK_MODE}"
 step "Runtime compatibility check: ${PRECHECK_URL}"
@@ -173,7 +190,10 @@ step "Step 3/5: install skill 'manyforge-composer'"
 # fails with "Failed to upload N file(s)" without surfacing a useful
 # reason. The skill content is what matters; if hashes match, the
 # in-sandbox copy is correct and we can move on.
-KEX_USER=(docker exec openshell-cluster-nemoclaw kubectl exec -n openshell "${SANDBOX}" -c agent -- su sandbox -c)
+# OpenShell 0.0.44+ docker driver: no k3s/kubectl. `nemoclaw exec`
+# runs as the sandbox user (uid 998, HOME=/sandbox) via the OpenShell
+# exec endpoint, so we don't need `su sandbox -c`.
+KEX_USER=(nemoclaw "${SANDBOX}" exec --no-tty -- bash -c)
 SKILL_REMOTE_DIR="/sandbox/.openclaw/skills/manyforge-composer"
 # Concatenated sha256 of every staged file. Order-stable (sorted by
 # filename) so we don't trip on directory-iteration nondeterminism.
@@ -183,8 +203,13 @@ staged_hash() {
       xargs -I{} sha256sum {} ) 2>/dev/null | sha256sum | cut -d' ' -f1
 }
 remote_hash() {
-  "${KEX_USER[@]}" "test -d ${SKILL_REMOTE_DIR} && cd ${SKILL_REMOTE_DIR} && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs -I{} sha256sum {} | sha256sum | cut -d' ' -f1" 2>/dev/null \
-    | tr -d '[:space:]' | tail -c 64
+  # Wrap the whole pipe in a subshell with `|| true` so that a missing
+  # skill directory on a fresh sandbox (test -d fails) doesn't propagate
+  # through pipefail and trip the outer `set -e`. Empty stdout from an
+  # absent directory is the correct signal ("no remote skill yet"); we
+  # don't want it to be a fatal script error.
+  ( "${KEX_USER[@]}" "test -d ${SKILL_REMOTE_DIR} && cd ${SKILL_REMOTE_DIR} && find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs -I{} sha256sum {} | sha256sum | cut -d' ' -f1" 2>/dev/null \
+      | tr -d '[:space:]' | tail -c 64 ) || true
 }
 STAGED_HASH="$(staged_hash)"
 SANDBOX_HASH="$(remote_hash)"
@@ -302,9 +327,14 @@ profile = {
     # tool result and matches what direct-vLLM lane handles cleanly.
     # postCompactionMaxChars also raised so the compacted prompt can
     # still carry the full result on multi-turn conversations.
+    # OpenClaw 2026.5.22 caps postCompactionMaxChars at 50000 (was
+    # uncapped in 2026.4.24); larger values fail validation and the
+    # config is refused. 50000 is enough to carry catalog_read output
+    # through one compaction, but tight: if multi-turn compactions
+    # start dropping tool history, request OpenClaw to raise the cap.
     "contextLimits": {
         "toolResultMaxChars": 100000,
-        "postCompactionMaxChars": 80000,
+        "postCompactionMaxChars": 50000,
     },
 }
 
@@ -500,9 +530,16 @@ PY
 ok "OpenClaw agents.defaults.compaction.model routed to the active inference model"
 
 step "Composer reachability check (mode-scoped manifest)"
+# Host-side curl uses PRECHECK_COMPOSER_BASE (localhost:9000 by default)
+# because the COMPOSER_BASE value stored in the MCP config (e.g.
+# host.openshell.internal:9000) is only resolvable from inside the
+# sandbox.
+HOST_MODE_URL="${PRECHECK_COMPOSER_BASE}/api/assistant/modes/${ASSISTANT_MODE}"
+# Stored URL is what the in-sandbox MCP bridge will use; logged for
+# verification but not curled from the host.
 MODE_URL="${COMPOSER_BASE}/api/assistant/modes/${ASSISTANT_MODE}"
-if curl -fsS -o /dev/null --max-time 3 "${MODE_URL}" 2>/dev/null; then
-  ok "composer ${MODE_URL} reachable from this host"
+if curl -fsS -o /dev/null --max-time 3 "${HOST_MODE_URL}" 2>/dev/null; then
+  ok "composer ${HOST_MODE_URL} reachable from this host (sandbox MCP will use ${MODE_URL})"
 else
   printf '  ! composer mode endpoint %s did not answer from this host (curl).\n' "${MODE_URL}"
   printf '  ! If the composer is bound to 127.0.0.1 only, it will not reach. Confirm with:\n'
@@ -521,8 +558,8 @@ Setup complete.
 
 Next steps:
   - Verify the agent sees the manyforge MCP tools:
-      kubectl exec -n openshell ${SANDBOX} -c agent -- su sandbox -c \\
-        "openclaw agent --agent manyforge-composer --message 'List the manyforge MCP tools you can call. Reply with a JSON array of tool names.' --json --timeout 120"
+      nemoclaw ${SANDBOX} exec --no-tty -- \\
+        openclaw agent --agent manyforge-composer --message 'List the manyforge MCP tools you can call. Reply with a JSON array of tool names.' --json --timeout 120
   - Composer is now wired to use the openclaw lane by default
     (demo-assistant-known-good.sh ASSISTANT_PROVIDER=openclaw). Run the
     launcher's 'start' or 'restart' to bring the openclaw bridge

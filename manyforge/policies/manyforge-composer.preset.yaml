@@ -34,7 +34,13 @@ network_policies:
         protocol: rest
         enforcement: enforce
         allowed_ips:
-          - "172.17.0.0/16"     # Docker-bridge subnet that hosts host.openshell.internal
+          # Docker-bridge subnets that may host host.openshell.internal.
+          # The OpenShell 0.0.36 k3s cluster used the default `bridge`
+          # (172.17.0.0/16). The OpenShell 0.0.44 docker driver uses a
+          # dedicated network `openshell-docker` (172.18.0.0/16).
+          # Include both so the policy survives both deployments.
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
         rules:
           - allow:
               method: GET
@@ -66,7 +72,9 @@ network_policies:
         protocol: rest
         enforcement: enforce
         allowed_ips:
+          # 172.17 = OpenShell 0.0.36 k3s bridge; 172.18 = 0.0.44 docker driver.
           - "172.17.0.0/16"
+          - "172.18.0.0/16"
         rules:
           - allow:
               method: GET
@@ -93,7 +101,9 @@ network_policies:
         protocol: rest
         enforcement: enforce
         allowed_ips:
+          # 172.17 = OpenShell 0.0.36 k3s bridge; 172.18 = 0.0.44 docker driver.
           - "172.17.0.0/16"
+          - "172.18.0.0/16"
         rules:
           - allow:
               method: GET
