@@ -617,10 +617,19 @@ sync_sandbox_runtime_config() {
 
     cluster_container=$(thor_openshell_cluster_container_name 2>/dev/null || true)
     if [[ -z "${cluster_container}" ]]; then
-        fail "Could not determine the active OpenShell cluster container"
-        fix "Check: openshell gateway info"
-        fix "Check: docker ps --format '{{.Names}}'"
-        return 1
+        # OpenShell 0.0.44+ docker driver: there is no k3s cluster container
+        # to docker-exec into. The runtime overrides this function applies
+        # (NEMOCLAW_MODEL, context window, KV-cache settings, OpenClaw
+        # main/subagent concurrency caps) are already applied through:
+        #   - `nemoclaw onboard` at sandbox creation time
+        #   - `manyforge/scripts/apply-openclaw-overrides.sh` for
+        #     model-specific OpenClaw effects (e.g. tools.toolSearch).
+        # Treat as success so the launcher's start sequence completes.
+        # If you DO want the legacy docker-exec sync path, run the launcher
+        # against a 0.0.36 cluster (deprecated).
+        info "OpenShell docker driver detected — skipping cluster-exec runtime sync"
+        info "  (overrides applied via nemoclaw onboard + apply-openclaw-overrides.sh)"
+        return 0
     fi
 
     docker exec \

@@ -160,6 +160,7 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
             and _THINKING_TOKEN_BUDGET is None
             and not _GUIDED_TOOL_CALLS
             and not _TOOL_ERROR_REWRITE
+            and not _UNWRAP_TOOL_CALL_ARGS
             and not _TOOL_PARSER):
         return body, None
     try:
@@ -513,6 +514,73 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
                                 "tool_idx": last_tool_idx,
                             }
 
+    # 2026-06-02: hermes <tool_call> wrapper unwrap on history.
+    # When cosmos (and other hermes-trained models) emit a tool call
+    # while thinking-on is active, vLLM's hermes parser sometimes
+    # leaves the outer `<tool_call>{...}</tool_call>` wrapper inside
+    # `arguments` instead of extracting just the inner object. The
+    # turn that produced the call returns 200 (the parser DID record
+    # the call), but on the NEXT turn the chat template calls
+    # `json.loads(arguments)` and 400s on a wrapper that starts with
+    # `<`. This pass detects that exact pattern and replaces the
+    # wrapped string with just the inner `arguments` value (as a JSON
+    # string). Pass-through on cleanly-shaped args, on non-string
+    # args, and on args that fail to extract.
+    if _UNWRAP_TOOL_CALL_ARGS:
+        msgs_uw = parsed.get("messages")
+        if isinstance(msgs_uw, list):
+            unwrapped_count = 0
+            for m in msgs_uw:
+                if not isinstance(m, dict) or m.get("role") != "assistant":
+                    continue
+                tcs = m.get("tool_calls")
+                if not isinstance(tcs, list):
+                    continue
+                for tc in tcs:
+                    fn = tc.get("function") if isinstance(tc, dict) else None
+                    if not isinstance(fn, dict):
+                        continue
+                    args = fn.get("arguments")
+                    if not isinstance(args, str):
+                        continue
+                    stripped = args.lstrip()
+                    if not stripped.startswith("<tool_call>"):
+                        continue
+                    # Strip wrapper tags; tolerate optional closing tag.
+                    inner = stripped[len("<tool_call>"):]
+                    end = inner.rfind("</tool_call>")
+                    if end != -1:
+                        inner = inner[:end]
+                    inner = inner.strip()
+                    # The inner payload is hermes-format:
+                    #   {"name": "<tool>", "arguments": {...}}
+                    # We want JUST the inner `arguments` object as a
+                    # JSON string so the next-turn chat template can
+                    # parse it. Fall back to leaving the field alone
+                    # if anything in this extraction fails.
+                    try:
+                        parsed_inner = json.loads(inner)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(parsed_inner, dict):
+                        continue
+                    real_args = parsed_inner.get("arguments")
+                    if real_args is None:
+                        continue
+                    if isinstance(real_args, str):
+                        # Already a JSON string — pass through as-is.
+                        fn["arguments"] = real_args
+                    else:
+                        # Re-serialize the dict to a JSON string.
+                        fn["arguments"] = json.dumps(
+                            real_args, separators=(",", ":")
+                        )
+                    unwrapped_count += 1
+            if unwrapped_count:
+                changes["unwrap_tool_call_args"] = {
+                    "wrappers_stripped": unwrapped_count,
+                }
+
     if not changes:
         return body, None
     new_body = json.dumps(parsed, separators=(",", ":")).encode("utf-8")
@@ -784,6 +852,26 @@ _DOMAIN_NOUNS = (
 # composer's validator returning the standard field names.
 _TOOL_ERROR_REWRITE = (
     os.environ.get("OPENCLAW_PROXY_TOOL_ERROR_REWRITE", "1") or "1"
+).strip().lower() in ("1", "true", "yes", "on")
+
+# 2026-06-02: hermes wrapper unwrap for assistant.tool_calls[*].arguments.
+# vLLM's hermes tool-call parser can fail to strip the
+# `<tool_call>{...}</tool_call>` outer wrapper when extracting structured
+# tool calls from cosmos's reasoning-on output. The resulting
+# `arguments` string LOOKS like
+#   "<tool_call>\n{\"name\":\"tree_draft_wrap_node\",\"arguments\":{...}}"
+# instead of just the inner arguments object. On the NEXT turn, when the
+# bridge feeds the conversation back to vLLM, the chat template tries
+# `json.loads(arguments)` and 400s with
+#   "Expecting value: line 1 column 1 (char 0)".
+# This mutator opportunistically detects that pattern and replaces
+# the wrapper-wrapped string with just the inner `arguments` object as
+# a JSON string. No-op on cleanly-parsed args (pass-through), no-op on
+# args that aren't strings (vLLM also accepts dict args). Default on;
+# set =0 to disable per-profile if it ever bites a model that emits
+# legitimate `<tool_call>` content for some other reason.
+_UNWRAP_TOOL_CALL_ARGS = (
+    os.environ.get("OPENCLAW_PROXY_UNWRAP_TOOL_CALL_ARGS", "1") or "1"
 ).strip().lower() in ("1", "true", "yes", "on")
 
 _VALIDATOR_FIELDS = (
@@ -1822,6 +1910,8 @@ def main() -> None:
         mutation_summary.append("tool_error_rewrite=on")
     if _PROMOTE_REASONING_TO_CONTENT:
         mutation_summary.append("promote_reasoning_to_content=on")
+    if _UNWRAP_TOOL_CALL_ARGS:
+        mutation_summary.append("unwrap_tool_call_args=on")
     mutation_str = ", ".join(mutation_summary) if mutation_summary else "logging-only (no mutations)"
     print(
         f"openclaw-logging-proxy listening on {cfg.bind}:{_LISTEN_PORT} "

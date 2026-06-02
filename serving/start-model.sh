@@ -88,6 +88,16 @@ if [[ "${THOR_RESTART_PROXY:-1}" != "0" ]]; then
         # required) consumers. Default on; set =0 to opt out for
         # bake-off baselines.
         export OPENCLAW_PROXY_PROMOTE_REASONING_TO_CONTENT="${OPENCLAW_PROXY_PROMOTE_REASONING_TO_CONTENT:-1}"
+        # 2026-06-02: vLLM's hermes tool-call parser sometimes leaves the
+        # `<tool_call>{...}</tool_call>` wrapper in `assistant.tool_calls[*]
+        # .arguments` when cosmos/qwen3.6 emit calls in reasoning-on mode.
+        # On the next turn, the bridge replays the conversation; vLLM's
+        # chat template calls json.loads(arguments) and 400s on a string
+        # that starts with `<`. The proxy detects that pattern and unwraps
+        # to just the inner arguments JSON. Default on; set =0 to disable
+        # per-profile if a model emits legitimate `<tool_call>` content for
+        # some other reason.
+        export OPENCLAW_PROXY_UNWRAP_TOOL_CALL_ARGS="${OPENCLAW_PROXY_UNWRAP_TOOL_CALL_ARGS:-1}"
         if [[ -n "${FORCE_THINKING}" ]]; then
             export OPENCLAW_PROXY_FORCE_ENABLE_THINKING="${FORCE_THINKING}"
         else
