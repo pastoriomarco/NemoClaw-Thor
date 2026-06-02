@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Custom OpenClaw sandbox image with the ManyForge Direct Tools plugin
+# baked in.
+#
+# Use:
+#   build via build-manyforge-sandbox-image.sh — it captures the
+#   composer assistant-mode catalog into the build context, then runs
+#   docker build with this Dockerfile.
+#
+# Onboard with:
+#   nemoclaw onboard --from <repo>/manyforge/openclaw-plugins/Dockerfile.manyforge-sandbox \
+#     --name my-assistant --recreate-sandbox
+#
+# Tagged: manyforge/openclaw-sandbox:plugin-direct-tools
+#
+# After onboard succeeds, `apply-openclaw-overrides.sh` lays the
+# plugin entry into the runtime openclaw.json so OpenClaw loads it.
+
+# The POST-NemoClaw-built sandbox image. NemoClaw's own onboard build
+# step takes the upstream openclaw image, adds `nemoclaw-start` (the
+# entrypoint that wraps `openclaw-start` with provider routing etc.),
+# the per-blueprint model-specific-setup files, the bundled plugins
+# (kimi-inference-compat, …), and the runtime overrides logic.
+#
+# We must FROM this post-NemoClaw image — not the upstream openclaw
+# image directly — or the resulting container starts up, can't find
+# `nemoclaw-start`, exits 127, and the OpenShell supervisor fails to
+# reconnect to the GPU-enabled container.
+#
+# The tag is regenerated each onboard. build-manyforge-sandbox-image.sh
+# captures the latest one automatically and substitutes it here at
+# build time via --build-arg BASE_IMAGE=...
+ARG BASE_IMAGE=openshell/sandbox-from:latest
+FROM ${BASE_IMAGE}
+
+# The plugin install location is enforced by NemoClaw's
+# model-specific-setup schema:
+#   /usr/local/share/nemoclaw/openclaw-plugins/<plugin-id>/
+ARG PLUGIN_INSTALL_DIR=/usr/local/share/nemoclaw/openclaw-plugins/manyforge-direct-tools
+
+# Switch to root for the install — the upstream image drops back to
+# the `sandbox` user as ENTRYPOINT does.
+USER root
+
+# Copy the plugin source. The build-side script stages these three
+# files into the build context:
+#   index.js              - the plugin code
+#   openclaw.plugin.json  - the manifest
+#   catalog.json          - composer's assistant-mode tool catalog,
+#                           fetched at build time from the running
+#                           composer at http://localhost:9000
+COPY manyforge-direct-tools/index.js              ${PLUGIN_INSTALL_DIR}/index.js
+COPY manyforge-direct-tools/openclaw.plugin.json  ${PLUGIN_INSTALL_DIR}/openclaw.plugin.json
+COPY manyforge-direct-tools/catalog.json          ${PLUGIN_INSTALL_DIR}/catalog.json
+
+# Lock down the install. Plugin files are mode 444 (read-only for
+# everyone) and root-owned to match the upstream-shipped Kimi plugin's
+# permissions; OpenClaw refuses to load plugins whose source is writable
+# by the sandbox user.
+RUN chmod -R 0444 ${PLUGIN_INSTALL_DIR} \
+    && find ${PLUGIN_INSTALL_DIR} -type d -exec chmod 0555 {} \;
+
+# Sanity check: plugin manifest parses and the catalog has at least one
+# entry. Fails the build early if the build script staged something
+# malformed.
+RUN node -e " \
+    const m = require('${PLUGIN_INSTALL_DIR}/openclaw.plugin.json'); \
+    if (m.id !== 'nemoclaw-manyforge-direct-tools') { \
+      throw new Error('plugin manifest id mismatch: ' + m.id); \
+    } \
+    const c = require('${PLUGIN_INSTALL_DIR}/catalog.json'); \
+    const tools = Array.isArray(c) ? c : (c && Array.isArray(c.tools) ? c.tools : []); \
+    if (!tools.length) { throw new Error('catalog.json has no tools'); } \
+    console.log('manyforge-direct-tools: plugin baked with', tools.length, 'tool(s)'); \
+    "
+
+# The upstream image's ENTRYPOINT already switches back to the sandbox
+# user — no need for an explicit USER directive here. Leave the rest
+# of the image untouched.

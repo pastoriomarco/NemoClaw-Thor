@@ -1,0 +1,21 @@
+{
+  "$schema": "../../../../NemoClaw/nemoclaw-blueprint/model-specific-setup/schema.json",
+  "id": "nemotron3-nano-omni-30b-a3b-nvfp4-thor",
+  "agent": "openclaw",
+  "description": "Nemotron-3-Nano-Omni-30B-A3B-NVFP4 on Thor via vLLM + manyforge proxy. Disables OpenClaw Tool Search so the manyforge MCP catalog reaches the model directly. requiresStringContent mirrors the reasoning→content fix the manyforge proxy applies on the server side.",
+  "match": {
+    "modelIds": ["nemotron3-nano-omni-30b-a3b-nvfp4"],
+    "providerKey": "inference",
+    "inferenceApi": "openai-completions"
+  },
+  "effects": {
+    "openclawTools": { "toolSearch": false },
+    "openclawPlugins": [
+      {
+        "id": "nemoclaw-manyforge-direct-tools",
+        "path": "openclaw-plugins/manyforge-direct-tools",
+        "loadPath": "/usr/local/share/nemoclaw/openclaw-plugins/manyforge-direct-tools"
+      }
+    ]
+  }
+}

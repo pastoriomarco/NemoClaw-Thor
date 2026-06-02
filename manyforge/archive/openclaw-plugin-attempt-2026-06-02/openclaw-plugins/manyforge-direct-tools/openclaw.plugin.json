@@ -1,0 +1,12 @@
+{
+  "id": "nemoclaw-manyforge-direct-tools",
+  "name": "NemoClaw ManyForge Direct Tools",
+  "version": "0.1.0",
+  "description": "Replaces OpenClaw's tool-search compaction surface (tool_search_code / tool_search / tool_describe / tool_call) with the full ManyForge MCP catalog when the active provider is NemoClaw-managed local inference. Mirrors the kimi-inference-compat pattern (PR #4120). The catalog is baked in at sandbox-image build time via the companion build script in NemoClaw-Thor.",
+  "providers": ["inference"],
+  "configSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

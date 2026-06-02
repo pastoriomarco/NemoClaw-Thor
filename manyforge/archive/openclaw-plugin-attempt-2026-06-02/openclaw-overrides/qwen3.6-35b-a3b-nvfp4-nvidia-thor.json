@@ -1,0 +1,21 @@
+{
+  "$schema": "../../../../NemoClaw/nemoclaw-blueprint/model-specific-setup/schema.json",
+  "id": "qwen3.6-35b-a3b-nvfp4-nvidia-thor",
+  "agent": "openclaw",
+  "description": "Qwen3.6-35B-A3B-NVFP4-NVIDIA on Thor via vLLM + manyforge proxy. Disables OpenClaw Tool Search so the manyforge MCP catalog reaches the model directly. requiresStringContent mirrors the reasoning→content fix the manyforge proxy applies on the server side.",
+  "match": {
+    "modelIds": ["qwen3.6-35b-a3b-nvfp4-nvidia"],
+    "providerKey": "inference",
+    "inferenceApi": "openai-completions"
+  },
+  "effects": {
+    "openclawTools": { "toolSearch": false },
+    "openclawPlugins": [
+      {
+        "id": "nemoclaw-manyforge-direct-tools",
+        "path": "openclaw-plugins/manyforge-direct-tools",
+        "loadPath": "/usr/local/share/nemoclaw/openclaw-plugins/manyforge-direct-tools"
+      }
+    ]
+  }
+}

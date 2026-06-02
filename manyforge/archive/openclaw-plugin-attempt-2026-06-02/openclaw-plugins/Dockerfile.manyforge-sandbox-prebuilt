@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Thin pre-built reference for `nemoclaw onboard --from`.
+#
+# Why this exists: nemoclaw onboard --from <Dockerfile> rebuilds the
+# image using the Dockerfile's directory as the docker build context.
+# Our "real" Dockerfile (Dockerfile.manyforge-sandbox) COPYs a
+# generated `catalog.json` that lives only in a tmp staging dir
+# produced by build-manyforge-sandbox-image.sh — it's not in the
+# repo path, so nemoclaw's own docker build would fail at COPY.
+#
+# This file sidesteps that by referencing the locally-tagged image
+# that build-manyforge-sandbox-image.sh has already produced. Onboard
+# becomes a no-op rebuild that just re-tags our existing image.
+#
+# Use:
+#   1. Run ./manyforge/scripts/build-manyforge-sandbox-image.sh first
+#      to produce `manyforge/openclaw-sandbox:plugin-direct-tools`.
+#   2. Then:
+#        nemoclaw onboard --from <repo>/manyforge/openclaw-plugins/Dockerfile.manyforge-sandbox-prebuilt \
+#          --recreate-sandbox --name my-assistant ...
+#
+# If the tagged image isn't present locally, docker build will fail
+# with "pull access denied for manyforge/openclaw-sandbox" — run the
+# build script first.
+
+FROM manyforge/openclaw-sandbox:plugin-direct-tools
+
+# Nothing to do — all work was baked into the upstream tagged image.
+# The label below is for forensics: `docker inspect` makes the source
+# visible without having to read the build history.
+LABEL ai.nvidia.nemoclaw.manyforge-direct-tools.source="prebuilt-via-build-manyforge-sandbox-image.sh"
