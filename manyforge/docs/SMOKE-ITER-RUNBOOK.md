@@ -90,7 +90,7 @@ Start with the iter-32 production env:
 cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
 
 PYTHONPATH=$(pwd)/manyforge:${PYTHONPATH:-} \
-OPENCLAW_ASSISTANT_USE_GATEWAY=true \
+OPENCLAW_ASSISTANT_USE_GATEWAY=false \
 OPENCLAW_ASSISTANT_BRIDGE_HOST=127.0.0.1 \
 OPENCLAW_ASSISTANT_BRIDGE_PORT=8200 \
 OPENCLAW_ASSISTANT_AGENT=manyforge-composer \

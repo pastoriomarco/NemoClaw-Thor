@@ -16,8 +16,15 @@ runs API uses: ``session_key``).
 """
 from __future__ import annotations
 
-from openclaw_assistant_bridge.adapter import (  # noqa: F401
-    derive_gateway_session_key as derive_session_key,
-)
+# Lazy import: openclaw_assistant_bridge.adapter imports httpx +
+# composer-bridge helpers from the bridge's venv. Defer to first
+# call so the package is importable for smoke-testing without those
+# runtime deps installed.
+
+def derive_session_key(payload):  # type: ignore[no-untyped-def]
+    """Stable session key from the composer envelope. Lazy import."""
+    from openclaw_assistant_bridge.adapter import derive_gateway_session_key as _impl
+    return _impl(payload)
+
 
 __all__ = ["derive_session_key"]

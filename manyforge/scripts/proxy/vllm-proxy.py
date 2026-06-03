@@ -116,29 +116,62 @@ import time
 #   2. OPENCLAW_PROXY_<suffix>    (deprecated alias)
 #   3. argv flag default          (the original behavior — unchanged)
 #
+# Implementation: the actual ``os.environ.get(...)`` calls in the proxy
+# source still read the OPENCLAW_PROXY_* names (renaming all 30+ call
+# sites would be churn-heavy and increase merge conflicts; the rename
+# is deferred to a future cycle). To make MANYFORGE_PROXY_* work as
+# the canonical name TODAY, we materialize a BIDIRECTIONAL alias at
+# import:
+#
+#   - For each MANYFORGE_PROXY_<suffix> set, copy to the OPENCLAW_PROXY_
+#     equivalent if not already set. This makes the canonical name
+#     actually drive the read sites.
+#   - For each OPENCLAW_PROXY_<suffix> set (without an existing
+#     MANYFORGE_ counterpart), copy to MANYFORGE_PROXY_ so the
+#     canonical name is visible if anything probes that surface.
+#
+# If both names are set for the same suffix, **MANYFORGE_PROXY_ wins**:
+# we overwrite the OPENCLAW_PROXY_ value with the MANYFORGE one before
+# any read happens.
+#
 # A single stderr notice is emitted at import if any OPENCLAW_PROXY_*
-# alias is observed; this surfaces drift in caller scripts without
-# breaking them. Set MANYFORGE_PROXY_NO_DEPRECATION=1 to silence.
+# alias is observed without its MANYFORGE_ counterpart already set;
+# this surfaces drift in caller scripts without breaking them. Set
+# MANYFORGE_PROXY_NO_DEPRECATION=1 to silence.
 def _apply_manyforge_proxy_aliases() -> None:
     legacy_prefix = "OPENCLAW_PROXY_"
     new_prefix = "MANYFORGE_PROXY_"
-    aliased: list[str] = []
+    aliased_legacy: list[str] = []  # legacy names observed without canonical
+    # First pass: canonical MANYFORGE_PROXY_ → OPENCLAW_PROXY_ (overwrite).
+    # This is the critical fix — without this, setting only the canonical
+    # name has no effect because the read sites use OPENCLAW_PROXY_.
+    for key, value in list(os.environ.items()):
+        if not key.startswith(new_prefix):
+            continue
+        suffix = key[len(new_prefix):]
+        if suffix in {"NO_DEPRECATION", "PROFILE"}:
+            # Adapter-internal env names; do not project onto the
+            # legacy prefix.
+            continue
+        os.environ[f"{legacy_prefix}{suffix}"] = value
+    # Second pass: legacy OPENCLAW_PROXY_ → MANYFORGE_PROXY_ (only if
+    # canonical not already set). Records observed legacy names so we
+    # can emit the deprecation notice.
     for key, value in list(os.environ.items()):
         if not key.startswith(legacy_prefix):
             continue
         suffix = key[len(legacy_prefix):]
         new_key = f"{new_prefix}{suffix}"
         if new_key in os.environ:
-            # Caller set both; the canonical name wins. Do not overwrite.
             continue
         os.environ[new_key] = value
-        aliased.append(key)
-    if aliased and os.environ.get("MANYFORGE_PROXY_NO_DEPRECATION", "0") != "1":
+        aliased_legacy.append(key)
+    if aliased_legacy and os.environ.get("MANYFORGE_PROXY_NO_DEPRECATION", "0") != "1":
         sys.stderr.write(
             "[vllm-proxy] DEPRECATION: env vars OPENCLAW_PROXY_* are renamed to "
-            f"MANYFORGE_PROXY_*. {len(aliased)} alias(es) active "
+            f"MANYFORGE_PROXY_*. {len(aliased_legacy)} legacy alias(es) active "
             "(set MANYFORGE_PROXY_NO_DEPRECATION=1 to silence): "
-            f"{sorted(aliased)[:5]}{'…' if len(aliased) > 5 else ''}\n"
+            f"{sorted(aliased_legacy)[:5]}{'…' if len(aliased_legacy) > 5 else ''}\n"
         )
 
 

@@ -1052,7 +1052,11 @@ OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512       # production sweet-spot
 # (loop defense uses defaults: REFLECT_AT=4, STOP_AT=8)
 
 # Bridge
-OPENCLAW_ASSISTANT_USE_GATEWAY=true            # gateway mode
+# REVISED 2026-06-03: USE_GATEWAY defaults to false because OpenClaw
+# 2026.5.22 does not expose /v1/chat/completions on the gateway HTTP
+# server. The bridge uses CLI shell-out (openclaw agent via nemoclaw
+# exec) which works against 2026.5.22.
+OPENCLAW_ASSISTANT_USE_GATEWAY=false           # cli_shell_out (route fix)
 OPENCLAW_ASSISTANT_AGENT=manyforge-composer
 OPENCLAW_ASSISTANT_LOCAL=false
 OPENCLAW_ASSISTANT_TIMEOUT_S=300

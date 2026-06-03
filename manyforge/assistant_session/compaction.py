@@ -25,10 +25,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from openclaw_assistant_bridge.service import (  # noqa: F401
-    _bump_session_request_counter as bump_session_request_counter,
-    _should_fire_compact as should_fire_compact,
-)
+# Lazy import: openclaw_assistant_bridge.service imports fastapi+httpx
+# which are runtime dependencies that live in the bridge's venv. The
+# package smoke tests run outside that venv, so we defer the underlying
+# import to first call rather than module load. This keeps the package
+# importable for testing the dataclass surface without the full bridge
+# runtime stack.
+
+def bump_session_request_counter(session_key: str) -> int:
+    """Per-session-key request counter for compaction policy. Lazy import."""
+    from openclaw_assistant_bridge.service import _bump_session_request_counter as _impl
+    return _impl(session_key)
+
+
+def should_fire_compact(session_request_count: int) -> bool:
+    """Whether to fire `/compact` at this request count. Lazy import."""
+    from openclaw_assistant_bridge.service import _should_fire_compact as _impl
+    return _impl(session_request_count)
 
 
 @dataclass(frozen=True)

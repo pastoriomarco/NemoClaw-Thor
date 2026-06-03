@@ -636,9 +636,17 @@ from per-request `openclaw agent` shell-out to the persistent gateway's
   (`host.openshell.internal:8000` for vLLM and `:9000` for Composer),
   per [OpenShell policy schema](https://docs.nvidia.com/openshell/latest/reference/policy-schema.html)
   and `OpenShell/examples/private-ip-routing`.
-  The provisioner now removes the built-in `local-inference` preset and
-  applies our combined preset instead (see "Why local-inference is
-  removed" below).
+  **REVISED 2026-06-03**: the provisioner now applies BOTH
+  `local-inference` AND `manyforge-composer` (it used to remove
+  `local-inference` — see "Local-inference removal was wrong" below
+  for the empirical evidence that prompted the change).
+  Per [THREE-LANE-MIGRATION-PLAN.md §4.6](./THREE-LANE-MIGRATION-PLAN.md),
+  the canonical post-Phase-1 layout splits this into three files:
+  `manyforge-egress-shared.yaml` (egress rules only) + a per-lane
+  binary-whitelist overlay (`manyforge-openclaw.overlay.yaml` or
+  `manyforge-hermes.overlay.yaml`). The fused
+  `manyforge-composer.preset.yaml` is retained for backward
+  compatibility until Phase 5 retires it.
 - **Adapter**: [openclaw_assistant_bridge/adapter.py](../openclaw_assistant_bridge/adapter.py)
   has a gateway-HTTP path gated by `OPENCLAW_ASSISTANT_USE_GATEWAY=true`,
   using a host-side curl through the openshell port-forward tunnel
@@ -658,28 +666,32 @@ Same prompt ("Reply with just OK"), through the full canonical stack
 Composer audit log + OpenShell policy log show only allowed traffic;
 no SSRF DENY events fire on the canonical lane after the policy update.
 
-#### Why we remove `local-inference`
+#### Local-inference removal was wrong (REVISED 2026-06-03)
 
-OpenShell's SSRF guard blocks RFC 1918 destinations by default. The
-documented opt-in is the per-endpoint `allowed_ips` CIDR allowlist.
-The built-in `local-inference` preset declares `host.openshell.internal:8000`
-WITHOUT that field, and we observed empirically that the SSRF engine
-honors the **first matching endpoint** rather than the union of all
-applied presets. So leaving `local-inference` active causes the SSRF
-guard to consult an endpoint definition that has no `allowed_ips`, and
-the connection is rejected — even when a second preset (ours) declares
-the same endpoint with the field set correctly.
+The earlier theory — that `manyforge-composer` was a strict superset
+of `local-inference` and therefore the latter could be removed — turned
+out to be empirically wrong for the chat-completion POST path. With
+`local-inference` removed and only `manyforge-composer` active, the
+OpenShell network proxy (10.200.0.1:3128) denies sandbox→host:8000
+POSTs with `policy_denied`. Verified during the Phase 0 O-1 baseline
+investigation: see [PHASE-0-LANE-BASELINE.md](./PHASE-0-LANE-BASELINE.md)
+and [PIPELINE-TRACE-2026-06-03.md](./PIPELINE-TRACE-2026-06-03.md).
 
-The cleanest fix that uses ONLY official functionalities:
+The correct configuration is to apply BOTH presets:
 
-- ship a single combined preset (`manyforge-composer`) that declares
-  the same vLLM endpoint plus its Composer endpoint, both with
-  `allowed_ips: ["172.17.0.0/16"]` (the Docker-bridge CIDR that
-  hosts `host.openshell.internal` in this deployment),
-- have the provisioner remove `local-inference` before applying our
-  preset. Our preset is a strict superset of `local-inference`'s
-  surface (same trusted binaries, same vLLM endpoint, plus the
-  composer endpoint), so no functionality is lost.
+- `local-inference` (built-in) — covers the proxy's L7 allowlist for
+  the inference endpoint (this is the field whose absence was causing
+  the denials).
+- `manyforge-composer` (custom) — adds the Composer :9000 endpoint
+  with mode-scoped path rules and the `allowed_ips` for the SSRF guard.
+
+`setup-manyforge-assistant.sh` was updated to apply both — see the
+commit history for the `Step 1/5` change.
+
+The earlier SSRF reasoning still applies at the SSRF-guard layer, but
+the OpenShell proxy's L7 policy rejection (the new finding) is a
+different enforcer that requires the built-in preset's contribution
+to function. Both layers must be satisfied for the route to work.
 
 This is configure-only. No NemoClaw / OpenShell / OpenClaw upstream
 patches required. A future upstream improvement worth proposing would

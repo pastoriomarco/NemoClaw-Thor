@@ -170,9 +170,19 @@ curl -sS http://127.0.0.1:8200/healthz
 ```
 Expected: `{"status":"ok","provider":"openclaw","sandbox":"my-assistant",...}`.
 
-If `provider` is wrong, set `OPENCLAW_ASSISTANT_USE_GATEWAY=true`.
+**OPENCLAW_ASSISTANT_USE_GATEWAY is now `false` by default** as of the
+2026-06-03 route fix (see [PHASE-0-LANE-BASELINE.md](./PHASE-0-LANE-BASELINE.md)).
+OpenClaw 2026.5.22's HTTP server does not expose `/v1/chat/completions`,
+so the legacy `gateway_http` transport returns 404 in 50ms. The bridge
+now uses `cli_shell_out` (invokes `openclaw agent` via `nemoclaw exec`)
+which works against 2026.5.22. Set
+`OPENCLAW_ASSISTANT_USE_GATEWAY=true` only to force the legacy path
+(useful if upstream OpenClaw exposes `/v1/chat/completions` in a future
+release; currently broken).
+
 If timeouts hit ~120s, the service was started with the default
-`OPENCLAW_ASSISTANT_TIMEOUT_S=120` — restart with a higher value.
+`OPENCLAW_ASSISTANT_TIMEOUT_S=120` — restart with a higher value. The
+iter-32 production recipe sets `OPENCLAW_ASSISTANT_TIMEOUT_S=300`.
 
 ### Gate 4 — Gateway is running in the sandbox SSH netns
 
