@@ -339,12 +339,41 @@ MCP_PRINCIPAL="${MANYFORGE_PRINCIPAL:-openclaw-${SANDBOX}}"
 #
 # Proxy envs: OpenClaw spawns MCP servers with a SCRUBBED environment
 # (HOME, PATH, USER, SHELL, MANYFORGE_*, plus the keys listed here only).
-# host.openshell.internal:9000 is reachable only via OpenShell's egress
-# proxy at 10.200.0.1:3128, so we MUST forward the proxy envs explicitly
-# — without them urllib tries direct-connect to 172.17.0.1:9000 and
-# fails with [Errno 111] Connection refused (verified 2026-05-05).
+# host.openshell.internal:9000 is reachable from the sandbox; the
+# behavior of HTTP_PROXY for THAT route is the tricky bit:
+#
+#   - For inference traffic to host.openshell.internal:8000 (vllm-proxy)
+#     we WANT to go through OpenShell's egress proxy 10.200.0.1:3128 —
+#     that proxy enforces the local-inference policy preset and the
+#     manyforge-egress-shared preset, which together allow the route.
+#   - For MCP traffic to host.openshell.internal:9000 (Composer's
+#     mode-scoped /api/assistant/...) the proxy returns 403
+#     "policy_denied" because no preset whitelists that route. We MUST
+#     bypass the proxy for this host to reach Composer at all.
+#
+# Empirical confirmation 2026-06-03 from the live sandbox:
+#   curl WITHOUT host.openshell.internal in NO_PROXY → HTTP 403
+#     {"detail":"GET host.openshell.internal:9000/... not permitted by
+#      policy","error":"policy_denied"}
+#   curl WITH host.openshell.internal in NO_PROXY → HTTP 200, returns
+#     the full manyforge mode catalog as expected.
+#
+# Without this NO_PROXY entry the OpenClaw bundle-mcp spawner logs
+# `failed to start server "manyforge" ... HTTP 403` and the model sees
+# tool-search return "cataloged 1 tools" (only the OpenClaw core tools)
+# — every `tool_call("tree_draft_*", ...)` then fails with
+# "Unknown tool id" because the manyforge catalog never registered.
+# The MODEL is innocent; the MCP bridge never reached Composer.
 HTTP_PROXY_VAL="${HTTP_PROXY:-${http_proxy:-http://10.200.0.1:3128}}"
-NO_PROXY_VAL="${NO_PROXY:-${no_proxy:-127.0.0.1,localhost,::1}}"
+# CRITICAL: include host.openshell.internal so the manyforge MCP
+# bridge can reach Composer's mode endpoint without going through the
+# OpenShell egress proxy (which denies the route by policy).
+NO_PROXY_VAL="${NO_PROXY:-${no_proxy:-127.0.0.1,localhost,::1,host.openshell.internal}}"
+# Defensive: append host.openshell.internal if an inherited env had it
+# missing. Operators sometimes export a stricter NO_PROXY upstream.
+if [[ "${NO_PROXY_VAL}" != *"host.openshell.internal"* ]]; then
+    NO_PROXY_VAL="${NO_PROXY_VAL},host.openshell.internal"
+fi
 MCP_CONFIG_JSON=$(cat <<JSON
 {"command":"python3","args":["${MCP_BRIDGE_PATH}"],"env":{"MANYFORGE_COMPOSER_BASE":"${COMPOSER_BASE}","MANYFORGE_ASSISTANT_MODE":"${ASSISTANT_MODE}","MANYFORGE_PRINCIPAL":"${MCP_PRINCIPAL}","HTTP_PROXY":"${HTTP_PROXY_VAL}","HTTPS_PROXY":"${HTTP_PROXY_VAL}","NO_PROXY":"${NO_PROXY_VAL}","http_proxy":"${HTTP_PROXY_VAL}","https_proxy":"${HTTP_PROXY_VAL}","no_proxy":"${NO_PROXY_VAL}"}}
 JSON
@@ -637,25 +666,52 @@ else
 fi
 
 step "Sandbox-side reachability probe (manyforge-composer policy)"
-# 2026-06-03: retry the reachability probe with exponential backoff on
-# transient 403s. The sandbox network policy reload takes a few seconds
-# after the OpenShell daemon restart in earlier steps, and the first
-# probe hits the policy-not-yet-loaded window. A single fatal failure
-# at this step left the launcher in a half-provisioned state requiring
-# a full restart. Retry 5× with 2/4/8/16/32s backoff; accept transient
-# 403/connection-refused as recoverable; bail on persistent failure.
+# 2026-06-03 (REVISED): the probe MUST use the same proxy env that the
+# MCP bridge will see — HTTP_PROXY/NO_PROXY etc. — or it can pass while
+# the MCP bridge silently fails with 403. The other LLM's review
+# identified this exact masking failure: my previous "retry then
+# continue" version probed with default env, succeeded against direct
+# 127.0.0.1 access, and let the launcher proceed while the MCP bridge
+# in the gateway then failed to register the manyforge catalog at all.
+# We now (a) inject the EXACT MCP env, (b) keep the retry-with-backoff
+# for transient policy-reload windows, and (c) FAIL HARD on persistent
+# 403 because there is no recovery for it past this point — the model
+# will see an empty catalog and the smoke is invalid.
 set +e
+PROBE_PY="
+import os, urllib.request, sys
+os.environ['HTTP_PROXY']=\"${HTTP_PROXY_VAL}\"
+os.environ['HTTPS_PROXY']=\"${HTTP_PROXY_VAL}\"
+os.environ['NO_PROXY']=\"${NO_PROXY_VAL}\"
+os.environ['http_proxy']=\"${HTTP_PROXY_VAL}\"
+os.environ['https_proxy']=\"${HTTP_PROXY_VAL}\"
+os.environ['no_proxy']=\"${NO_PROXY_VAL}\"
+try:
+    r = urllib.request.urlopen(\"${MODE_URL}\", timeout=5)
+    print(r.read(400).decode('utf-8', 'replace'))
+    sys.exit(0)
+except Exception as e:
+    print(f'PROBE FAILED: {type(e).__name__}: {e}', file=sys.stderr)
+    sys.exit(2)
+"
 for attempt in 1 2 3 4 5; do
-    probe_out="$("${KEX_USER[@]}" "python3 -c 'import urllib.request; print(urllib.request.urlopen(\"${MODE_URL}\", timeout=5).read(400).decode(\"utf-8\", \"replace\"))'" 2>&1)"
+    probe_out="$("${KEX_USER[@]}" "python3 -c '$(printf '%s' "${PROBE_PY}" | sed "s/'/'\\\\''/g")'" 2>&1)"
     probe_rc=$?
     if [[ ${probe_rc} -eq 0 ]]; then
         echo "${probe_out}" | sed 's/^/    /'
         break
     fi
     if [[ ${attempt} -eq 5 ]]; then
-        echo "    WARN: sandbox reachability probe failed after 5 attempts (last error below). Continuing — supervisor will surface any real connectivity issue."
-        echo "${probe_out}" | tail -5 | sed 's/^/    /'
-        break
+        fail "sandbox reachability probe failed after 5 attempts (using MCP env)."
+        echo "${probe_out}" | tail -10 | sed 's/^/    /'
+        echo "    This means the manyforge MCP bridge will not register its catalog."
+        echo "    Smoke results past this point WILL be invalid (model sees only OpenClaw core tools)."
+        echo "    Most common cause: HTTP_PROXY forces traffic through OpenShell's egress proxy"
+        echo "    which denies host.openshell.internal:9000 by policy. Ensure NO_PROXY includes"
+        echo "    host.openshell.internal. Current values:"
+        echo "      HTTP_PROXY=${HTTP_PROXY_VAL}"
+        echo "      NO_PROXY=${NO_PROXY_VAL}"
+        exit 1
     fi
     backoff=$((2 ** attempt))
     echo "    attempt ${attempt}/5 failed (rc=${probe_rc}); retrying in ${backoff}s..."
