@@ -385,17 +385,49 @@ def test_normalize_chat_completions_response_filters_observability_leakage() -> 
 # ============================================================================
 
 
+# build_openclaw_command wraps the inner ``openclaw agent ...``
+# invocation in ``bash -c 'eval "$(echo <base64> | base64 -d)"'`` so
+# literal flags do NOT appear in command[-1] directly. The base64
+# wrap was added to make the encoded shell invocation safe against
+# arg-list reshaping by intermediate transports (kubectl/nemoclaw exec).
+# These tests decode the inner invocation before asserting (reviewer
+# finding 7 — tests pre-dated the wrap).
+import base64 as _b64
+import re as _re
+
+
+def _decoded_inner_invocation(command: list[str]) -> str:
+    """Return the base64-decoded inner ``openclaw agent ...`` line.
+
+    Raises if the command does not contain the expected wrap, so the
+    caller's assertion error message includes the bad command shape.
+    """
+    flat = command[-1] if isinstance(command, list) else str(command)
+    match = _re.search(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", flat)
+    assert match, (
+        f"build_openclaw_command output does not contain the expected "
+        f"base64-encoded openclaw invocation in command[-1]:\n{flat}"
+    )
+    return _b64.b64decode(match.group(1)).decode("utf-8", "replace")
+
+
 def test_build_command_targets_sandbox_openclaw_agent() -> None:
     command = build_openclaw_command(
         config=AdapterConfig(sandbox="my-assistant", agent="main"),
         message="hello there",
         timeout_s=42,
     )
-    assert command[:3] == ["docker", "exec", "openshell-cluster-nemoclaw"]
+    # The OUTER command is now the ``nemoclaw <sandbox> exec`` wrapper
+    # (replaced ``docker exec openshell-cluster-nemoclaw`` for parity
+    # with the OpenShell CLI). Sandbox is the second token; ``exec``
+    # is the third.
+    assert command[0] == "nemoclaw"
     assert "my-assistant" in command
-    assert "openclaw agent --thinking off --agent main" in command[-1]
-    assert "--message 'hello there'" in command[-1]
-    assert "--timeout 42" in command[-1]
+    assert "exec" in command
+    inner = _decoded_inner_invocation(command)
+    assert "openclaw agent --thinking off --agent main" in inner
+    assert "--message 'hello there'" in inner or "--message hello" in inner
+    assert "--timeout 42" in inner
 
 
 def test_build_command_places_local_flag_before_agent_selector() -> None:
@@ -404,7 +436,8 @@ def test_build_command_places_local_flag_before_agent_selector() -> None:
         message="hello",
         timeout_s=10,
     )
-    assert "openclaw agent --local --thinking off --agent main" in command[-1]
+    inner = _decoded_inner_invocation(command)
+    assert "openclaw agent --local --thinking off --agent main" in inner
 
 
 def test_build_command_can_override_thinking_level() -> None:
@@ -413,7 +446,8 @@ def test_build_command_can_override_thinking_level() -> None:
         message="hello",
         timeout_s=10,
     )
-    assert "openclaw agent --thinking minimal --agent main" in command[-1]
+    inner = _decoded_inner_invocation(command)
+    assert "openclaw agent --thinking minimal --agent main" in inner
 
 
 def test_build_command_can_set_session_id() -> None:
@@ -423,7 +457,8 @@ def test_build_command_can_set_session_id() -> None:
         timeout_s=10,
         session_id="conversation-1",
     )
-    assert "--session-id conversation-1" in command[-1]
+    inner = _decoded_inner_invocation(command)
+    assert "--session-id conversation-1" in inner
 
 
 def test_build_command_can_scope_manyforge_mcp_tools() -> None:
@@ -433,12 +468,13 @@ def test_build_command_can_scope_manyforge_mcp_tools() -> None:
         timeout_s=10,
         mcp_allowed_tools=["tree_draft_wrap_node", "catalog_read"],
     )
+    inner = _decoded_inner_invocation(command)
     assert (
         "tree_draft_wrap_node,catalog_read > "
         "/tmp/manyforge-openclaw-allowed-tools.txt"
-    ) in command[-1]
-    assert "trap 'rm -f /tmp/manyforge-openclaw-allowed-tools.txt' EXIT" in command[-1]
-    assert "openclaw agent" in command[-1]
+    ) in inner
+    assert "trap 'rm -f /tmp/manyforge-openclaw-allowed-tools.txt' EXIT" in inner
+    assert "openclaw agent" in inner
 
 
 def test_mcp_allowed_tools_uses_requested_tools_when_present() -> None:

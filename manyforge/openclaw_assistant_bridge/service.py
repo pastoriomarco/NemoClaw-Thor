@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import os
 import shlex
 import time
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -238,6 +240,143 @@ def _config_from_env() -> AdapterConfig:
     )
 
 
+# =========================================================================
+# Per-conversation tool-call history (cross-turn loop detector).
+# =========================================================================
+# FIX 5 originally read ``payload.get("messages")`` to find prior
+# assistant turns' tool_calls. That worked for the bridge's synthetic
+# probe path but is dead in production: Composer sends ONE prompt per
+# turn and never populates ``messages[]`` as an OpenAI-style history.
+# External review finding 9 (2026-06-03) made this concrete — the
+# real-traffic detector never fired.
+#
+# This module-level history is the production-correct path. We record
+# every observed tool call AFTER dispatch, keyed by
+# ``(conversationId, assistantMode)``. On each incoming request the
+# detector queries this history and short-circuits with a synthetic
+# loop break if the same fingerprint repeats above threshold.
+#
+# Bounds:
+# - ``_LOOP_HISTORY_MAX_CONVERSATIONS``: total conversations cached.
+#   LRU eviction (move_to_end on touch, popitem(last=False) on
+#   overflow). Conservative default 64 — covers concurrent demo
+#   sessions without unbounded growth.
+# - ``_LOOP_HISTORY_MAX_CALLS_PER_CONV``: ring-buffer depth per
+#   conversation. A deque(maxlen=...) drops oldest. Default 50
+#   covers many turns while keeping memory trivial.
+#
+# Concurrency: protected by ``_loop_history_lock`` because FastAPI
+# may serve multiple requests concurrently and a stale read between
+# update + check would let a true loop slip through.
+_LOOP_HISTORY_MAX_CONVERSATIONS = int(
+    os.environ.get("OPENCLAW_ASSISTANT_LOOP_HISTORY_MAX_CONVERSATIONS", "64") or "64"
+)
+_LOOP_HISTORY_MAX_CALLS_PER_CONV = int(
+    os.environ.get("OPENCLAW_ASSISTANT_LOOP_HISTORY_MAX_CALLS_PER_CONV", "50") or "50"
+)
+
+# (conversation_id, assistant_mode) → deque[fingerprint_str]
+# fingerprint = "<tool_name>::<canonical_args_json>"
+_loop_history: "OrderedDict[tuple[str, str], collections.deque[str]]" = OrderedDict()
+_loop_history_lock = asyncio.Lock()
+
+
+def _loop_conversation_key(payload: dict[str, Any], request_id: str) -> tuple[str, str]:
+    """Stable key for the per-conversation history.
+
+    ``conversationId`` is the load-bearing dimension; ``assistantMode``
+    is included because two concurrent lanes (e.g. composer-assistant
+    vs. scene-authoring) on the same Composer instance can share a
+    conversation id but have totally different tool surfaces, and we
+    must not cross-pollinate their histories.
+    """
+    conv_id = str(payload.get("conversationId") or request_id)
+    mode = str(payload.get("assistantMode") or "default")
+    return (conv_id, mode)
+
+
+def _canonicalize_tool_call_args(args: Any) -> str:
+    """JSON-encoded, sort-keyed, whitespace-stripped args string.
+
+    Equivalent fingerprints regardless of key order; falls back to
+    repr-equivalent for non-JSON-able payloads so we never crash on
+    history recording.
+    """
+    try:
+        if isinstance(args, str):
+            args_parsed = json.loads(args)
+        else:
+            args_parsed = args
+        return json.dumps(args_parsed, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        return str(args if args is not None else "").strip()
+
+
+def _fingerprint_tool_call(call: dict[str, Any]) -> str | None:
+    """Build a ``name::args`` fingerprint from a tool-call dict.
+
+    Accepts both the OpenAI-style ``{function: {name, arguments}}``
+    nesting and the bridge's normalized ``{name, arguments}`` /
+    ``{toolId, arguments}`` shapes — Composer's bridge response uses
+    the latter (toolId), older direct-OpenAI history items use the
+    former. Returns None if no usable name is present.
+    """
+    if not isinstance(call, dict):
+        return None
+    fn = call.get("function") if isinstance(call.get("function"), dict) else None
+    name = (fn.get("name") if fn else None) or call.get("name") or call.get("toolId")
+    if not name:
+        return None
+    raw_args = (fn.get("arguments") if fn else None)
+    if raw_args is None:
+        raw_args = call.get("arguments")
+    if raw_args is None:
+        raw_args = call.get("args")
+    return f"{name}::{_canonicalize_tool_call_args(raw_args)}"
+
+
+async def _loop_history_record(
+    conv_key: tuple[str, str], fingerprints: list[str]
+) -> None:
+    """Append observed fingerprints to the per-conversation history.
+
+    LRU-touches the conversation key, evicts cold conversations when
+    over the cap. Atomic under the module lock.
+    """
+    if not fingerprints:
+        return
+    async with _loop_history_lock:
+        bucket = _loop_history.get(conv_key)
+        if bucket is None:
+            bucket = collections.deque(maxlen=_LOOP_HISTORY_MAX_CALLS_PER_CONV)
+            _loop_history[conv_key] = bucket
+        else:
+            _loop_history.move_to_end(conv_key)
+        for fp in fingerprints:
+            bucket.append(fp)
+        while len(_loop_history) > _LOOP_HISTORY_MAX_CONVERSATIONS:
+            _loop_history.popitem(last=False)
+
+
+def _loop_history_snapshot(conv_key: tuple[str, str]) -> list[str]:
+    """Read-only snapshot of a conversation's fingerprint history.
+
+    Returned as a plain list so caller iteration cannot mutate the
+    underlying deque. Safe to call without the lock — Python list
+    iteration over a deque snapshot is atomic enough for our
+    read-then-decide use; the lock is reserved for write paths.
+    """
+    bucket = _loop_history.get(conv_key)
+    if bucket is None:
+        return []
+    return list(bucket)
+
+
+def _reset_loop_history_for_tests() -> None:
+    """Drop all per-conversation history. Test-only entry point."""
+    _loop_history.clear()
+
+
 app = FastAPI(
     title="ManyForge OpenClaw assistant-provider adapter",
     version="0.1.0",
@@ -444,17 +583,28 @@ async def assistant(request: Request) -> JSONResponse:
                     "requiresReview": False,
                 },
             )
+    # Compute the per-conversation key once; used both by the loop
+    # detector below AND by the post-dispatch history recorder near
+    # the end of the handler. Cheap (a couple of dict lookups), and
+    # hoisting it out of the conditional avoids a NameError when the
+    # thresholds are zeroed for diagnostic runs.
+    loop_conv_key = _loop_conversation_key(payload, request_id)
     # 2026-05-31 (round 8 — fail-fast retry-loop detector): we observed
     # cosmos-reason2-8b spending 25-28 turns retrying the same tool with
     # the same args after the same validator error. OpenClaw has a
     # per-turn budget (15 attempts) but the composer/smoke harness keeps
     # making new bridge requests, each starting OpenClaw's budget fresh.
-    # Result: per-case 275s timeouts cascade across chained PnP cases.
-    # Detector counts how many recent assistant turns in this request's
-    # `messages[]` history called the SAME tool. If >= 5 (well above
-    # OpenClaw's per-turn 15-cap so this only fires across-turns), return
-    # a synthetic stop message so the composer marks the case fail-fast.
-    # This is in addition to round 7's narrow-pattern synthetic clarif.
+    # Detector returns a synthetic stop message so the composer marks
+    # the case fail-fast.
+    #
+    # 2026-06-03 (external review finding 9): the prior implementation
+    # read ``payload.get("messages")`` for history, which is dead in
+    # production — Composer sends one prompt per turn with no OpenAI-
+    # style messages[]. The production-correct path is the per-
+    # conversation history maintained by this bridge module (recorded
+    # after every dispatch). We consult BOTH sources here so the
+    # synthetic probe path still works in tests, and the production
+    # path actually fires across real Composer turns.
     LOOP_TOOL_THRESHOLD = int(os.environ.get("OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD", "5") or "5")
     # FIX 5: also detect same-tool-SAME-ARGS repetition (tighter than
     # plain same-name). When the model emits identical args twice in a
@@ -463,96 +613,104 @@ async def assistant(request: Request) -> JSONResponse:
     # name-only detector since the signal is stronger.
     LOOP_ARGS_THRESHOLD = int(os.environ.get("OPENCLAW_ASSISTANT_LOOP_ARGS_THRESHOLD", "2") or "2")
     if LOOP_TOOL_THRESHOLD > 0 or LOOP_ARGS_THRESHOLD > 0:
+        tool_call_names: list[str] = []
+        tool_call_fingerprints: list[str] = []
+        # PRODUCTION PATH: per-conversation history (loop_conv_key
+        # is computed once at the top of this handler — see above).
+        bridge_history = _loop_history_snapshot(loop_conv_key)
+        for fp in bridge_history:
+            # Fingerprints are formatted "name::args_json".
+            # Defensively split — accept any well-formed entry.
+            head, sep, _tail = fp.partition("::")
+            if head and sep:
+                tool_call_names.append(head)
+                tool_call_fingerprints.append(fp)
+        # FALLBACK PATH (probes, legacy direct-OpenAI callers): the
+        # OpenAI-format messages[] in the payload itself. Production
+        # Composer never populates this, so in production this loop is
+        # a no-op; tests that build messages[] manually continue to
+        # work.
         msgs_in = payload.get("messages") or []
         if isinstance(msgs_in, list):
-            tool_call_names = []
-            tool_call_fingerprints = []  # (name, normalized_args_json)
             for m in msgs_in:
                 if not isinstance(m, dict): continue
                 if m.get("role") != "assistant": continue
                 for tc in (m.get("tool_calls") or []):
-                    if isinstance(tc, dict):
-                        fn = tc.get("function") or {}
-                        nm = fn.get("name") or tc.get("name")
-                        args_raw = fn.get("arguments") or tc.get("arguments") or ""
-                        if nm:
-                            tool_call_names.append(nm)
-                            # Normalize the args for fingerprinting:
-                            # parse as JSON if possible, sort keys, drop
-                            # whitespace. This makes "{a:1,b:2}" and
-                            # "{b:2,a:1}" register as the same call.
-                            try:
-                                args_parsed = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-                                args_fp = json.dumps(args_parsed, sort_keys=True, separators=(",", ":"))
-                            except Exception:
-                                args_fp = str(args_raw).strip()
-                            tool_call_fingerprints.append(f"{nm}::{args_fp}")
-            if tool_call_names:
-                from collections import Counter
-                # Same-tool-same-args check first (tighter).
-                fp_top_fp, fp_top_count = Counter(tool_call_fingerprints).most_common(1)[0]
-                # Same-tool-name check (existing behavior).
-                top_name, top_count = Counter(tool_call_names).most_common(1)[0]
-                trigger = None
-                if LOOP_ARGS_THRESHOLD > 0 and fp_top_count >= LOOP_ARGS_THRESHOLD + 1:
-                    # +1 because the same call repeats are counted relative
-                    # to the first appearance, not from zero. e.g.
-                    # threshold=2 means "fire after we've seen 3 identical
-                    # calls (1 original + 2 retries)".
-                    trigger = "same_args"
-                    repeated_tool = fp_top_fp.split("::", 1)[0]
-                    repeated_count = fp_top_count
-                elif LOOP_TOOL_THRESHOLD > 0 and top_count >= LOOP_TOOL_THRESHOLD:
-                    trigger = "same_name"
-                    repeated_tool = top_name
-                    repeated_count = top_count
-                if trigger:
-                    if trigger == "same_args":
-                        loop_msg = (
-                            f"I called `{repeated_tool}` {repeated_count} times "
-                            "with IDENTICAL arguments. The validator already "
-                            "told me what was wrong — I am not reading the "
-                            "error envelope's `diff` and `hint`. Stopping to "
-                            "prevent a runaway loop. Please clarify the "
-                            "request, or rename the keys per the diff hint, "
-                            "or pick a different tool."
-                        )
-                    else:
-                        loop_msg = (
-                            f"I have called `{repeated_tool}` {repeated_count} times in this "
-                            "conversation. The retries have not reached a 2xx response. "
-                            "I am stopping to prevent a runaway loop. Please refine the "
-                            "request with the specific missing field (e.g., `pose_goal` "
-                            "for `motion_type=pose_goal`), specify a different tool, or "
-                            "clarify the target node names."
-                        )
-                    _log_event(
-                        "bridge_synthetic_loop_break",
-                        requestId=request_id,
-                        repeatedTool=repeated_tool,
-                        repeatedCount=repeated_count,
-                        threshold=LOOP_TOOL_THRESHOLD if trigger == "same_name" else LOOP_ARGS_THRESHOLD,
-                        trigger=trigger,
+                    if not isinstance(tc, dict): continue
+                    fp = _fingerprint_tool_call(tc)
+                    if not fp: continue
+                    head, _sep, _tail = fp.partition("::")
+                    if head:
+                        tool_call_names.append(head)
+                        tool_call_fingerprints.append(fp)
+        if tool_call_names:
+            from collections import Counter
+            # Same-tool-same-args check first (tighter).
+            fp_top_fp, fp_top_count = Counter(tool_call_fingerprints).most_common(1)[0]
+            # Same-tool-name check (existing behavior).
+            top_name, top_count = Counter(tool_call_names).most_common(1)[0]
+            trigger = None
+            if LOOP_ARGS_THRESHOLD > 0 and fp_top_count >= LOOP_ARGS_THRESHOLD + 1:
+                # +1 because the same call repeats are counted relative
+                # to the first appearance, not from zero. e.g.
+                # threshold=2 means "fire after we've seen 3 identical
+                # calls (1 original + 2 retries)".
+                trigger = "same_args"
+                repeated_tool = fp_top_fp.split("::", 1)[0]
+                repeated_count = fp_top_count
+            elif LOOP_TOOL_THRESHOLD > 0 and top_count >= LOOP_TOOL_THRESHOLD:
+                trigger = "same_name"
+                repeated_tool = top_name
+                repeated_count = top_count
+            if trigger:
+                if trigger == "same_args":
+                    loop_msg = (
+                        f"I called `{repeated_tool}` {repeated_count} times "
+                        "with IDENTICAL arguments. The validator already "
+                        "told me what was wrong — I am not reading the "
+                        "error envelope's `diff` and `hint`. Stopping to "
+                        "prevent a runaway loop. Please clarify the "
+                        "request, or rename the keys per the diff hint, "
+                        "or pick a different tool."
                     )
-                    ACTIVE_REQUESTS.dec()
-                    _record_outcome("synthetic_loop_break", transport, time.perf_counter() - handler_started)
-                    return JSONResponse(
-                        status_code=200,
-                        content={
-                            "version": "v1",
-                            "schemaVersion": "1.0.0",
-                            "requestId": request_id,
-                            "message": loop_msg,
-                            "toolCalls": [],
-                            "proposals": [],
-                            "warnings": [
-                                f"loop_detected_stopped: tool={repeated_tool!r} repeated {repeated_count}x ({trigger})"
-                            ],
-                            "mutated": False,
-                            "draftMutated": False,
-                            "requiresReview": True,
-                        },
+                else:
+                    loop_msg = (
+                        f"I have called `{repeated_tool}` {repeated_count} times in this "
+                        "conversation. The retries have not reached a 2xx response. "
+                        "I am stopping to prevent a runaway loop. Please refine the "
+                        "request with the specific missing field (e.g., `pose_goal` "
+                        "for `motion_type=pose_goal`), specify a different tool, or "
+                        "clarify the target node names."
                     )
+                _log_event(
+                    "bridge_synthetic_loop_break",
+                    requestId=request_id,
+                    repeatedTool=repeated_tool,
+                    repeatedCount=repeated_count,
+                    threshold=LOOP_TOOL_THRESHOLD if trigger == "same_name" else LOOP_ARGS_THRESHOLD,
+                    trigger=trigger,
+                    conversationKey=list(loop_conv_key),
+                    historyDepth=len(bridge_history),
+                )
+                ACTIVE_REQUESTS.dec()
+                _record_outcome("synthetic_loop_break", transport, time.perf_counter() - handler_started)
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "version": "v1",
+                        "schemaVersion": "1.0.0",
+                        "requestId": request_id,
+                        "message": loop_msg,
+                        "toolCalls": [],
+                        "proposals": [],
+                        "warnings": [
+                            f"loop_detected_stopped: tool={repeated_tool!r} repeated {repeated_count}x ({trigger})"
+                        ],
+                        "mutated": False,
+                        "draftMutated": False,
+                        "requiresReview": True,
+                    },
+                )
     # Gateway path skips the prompt-augmentation work the CLI path needs.
     # The persistent gateway has the manyforge MCP server registered with
     # mode-scoped enforcement at provisioner time, so the model already sees
@@ -693,11 +851,20 @@ async def assistant(request: Request) -> JSONResponse:
                 # registry resolves `/compact` regardless of whether
                 # it's received as a slash-command on the chat-completion
                 # path or as a CLI message argument.
+                #
+                # CRITICAL — pass session_id so /compact targets the SAME
+                # OpenClaw session the real chat request uses below
+                # (see the build_openclaw_command call further down in
+                # this function — same session_id). Without this,
+                # /compact runs as a FRESH session and compacts nothing,
+                # rendering FIX 1 functionally moot in CLI mode.
+                # Reference: external review finding 8 (2026-06-03).
                 compact_command = build_openclaw_command(
                     config=cfg,
                     message="/compact",
                     timeout_s=_COMPACT_TIMEOUT_S,
                     mcp_allowed_tools=None,  # compaction doesn't need tools
+                    session_id=session_id,
                 )
             try:
                 await _run_agent(
@@ -863,6 +1030,18 @@ async def assistant(request: Request) -> JSONResponse:
     tool_calls = body.get("toolCalls") if isinstance(body, dict) else None
     if isinstance(tool_calls, list):
         TOOL_CALLS_TOTAL.labels(outcome="emitted").inc(len(tool_calls))
+        # Record every observed tool call into the per-conversation
+        # history so the loop-break detector at the head of the
+        # handler can see what THIS conversation has called before.
+        # This is the production path for FIX 5 — replaces the dead
+        # ``payload.messages[]`` read with a live observation stream
+        # (external review finding 9, 2026-06-03).
+        fingerprints = [
+            fp for fp in (_fingerprint_tool_call(tc) for tc in tool_calls if isinstance(tc, dict))
+            if fp
+        ]
+        if fingerprints:
+            await _loop_history_record(loop_conv_key, fingerprints)
     tool_warnings = body.get("toolCallWarnings") if isinstance(body, dict) else None
     if isinstance(tool_warnings, list) and tool_warnings:
         TOOL_CALLS_TOTAL.labels(outcome="warning").inc(len(tool_warnings))
