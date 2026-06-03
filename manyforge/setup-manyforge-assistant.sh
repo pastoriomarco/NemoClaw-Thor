@@ -134,30 +134,66 @@ if [[ -z "${PRECHECK_HASH}" ]]; then
 fi
 ok "composer mode '${PRECHECK_MODE}' reachable (catalogHash: ${PRECHECK_HASH:0:16}…)"
 
-step "Step 1/5: apply egress preset 'manyforge-composer' (replaces 'local-inference')"
-# Why we remove 'local-inference': OpenShell's SSRF guard rejects the
-# private-IP resolution of host.openshell.internal (172.17.0.1) by default.
-# The canonical workaround per OpenShell policy schema is the per-endpoint
-# `allowed_ips` field. The built-in 'local-inference' preset does not set
-# that field, and the SSRF engine appears to honor the first matching
-# endpoint rather than the union — so leaving 'local-inference' active
-# causes the persistent gateway lane (/v1/chat/completions) to fail with
-# `internal error` even when our preset DOES include `allowed_ips`. Our
-# 'manyforge-composer' preset is a strict superset of 'local-inference'
-# (same vLLM endpoint, plus the Composer endpoint, plus `allowed_ips` on
-# both), so removing 'local-inference' in favor of it loses no
-# functionality. This is the configure-only fix; no openshell or nemoclaw
-# upstream patches are required.
+step "Step 1/5: apply BOTH 'local-inference' AND 'manyforge-composer' egress presets"
+# REVISED 2026-06-03 per THREE-LANE-MIGRATION-PLAN route fix: keep
+# BOTH presets active. Prior versions of this script removed
+# 'local-inference' on the assumption that 'manyforge-composer' was a
+# strict superset for the inference path. Empirical evidence in the
+# Phase 0 O-1 baseline (PHASE-0-LANE-BASELINE.md) shows it is NOT —
+# without local-inference active, the OpenShell network proxy denies
+# sandbox→host:8000 with `policy_denied` for chat-completion POSTs.
+#
+# Both presets cover the same vLLM :8000 endpoint at the network
+# policy layer; the difference is in how the OpenShell network proxy
+# (10.200.0.1:3128) routes traffic. local-inference is required for
+# the proxy to allow the route; manyforge-composer adds the Composer
+# :9000 endpoint with mode-scoped path rules.
 if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*local-inference"; then
-  nemoclaw "${SANDBOX}" policy-remove local-inference --yes
-  ok "removed built-in 'local-inference' preset (superseded by manyforge-composer)"
+  ok "preset 'local-inference' already applied"
+else
+  nemoclaw "${SANDBOX}" policy-add local-inference --yes
+  ok "preset 'local-inference' applied"
 fi
 if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-composer"; then
   ok "preset 'manyforge-composer' already applied"
 else
   nemoclaw "${SANDBOX}" policy-add --from-file "${PRESET_PATH}" --yes
-  ok "preset applied"
+  ok "preset 'manyforge-composer' applied"
 fi
+
+step "Step 1b: patch openclaw.json inference baseUrl to bypass inference.local"
+# REVISED 2026-06-03 per THREE-LANE-MIGRATION-PLAN route fix. The
+# default OpenClaw config sets models.providers.inference.baseUrl to
+# https://inference.local/v1 — a TLS-terminating route routed via
+# OpenShell's network proxy. On OpenShell 0.0.44 this route does not
+# reliably reach our :8000 vllm-proxy (the proxy receives 0 POSTs).
+#
+# Bypass the inference.local hop by setting baseUrl directly to
+# http://host.openshell.internal:8000/v1 — which the proxy at
+# 10.200.0.1:3128 forwards via our :8000 proxy (with local-inference
+# preset above allowing the route). All four proxy mutations
+# (UNWRAP_TOOL_CALL_ARGS, PROMOTE_REASONING_TO_CONTENT,
+# NORMALIZE_TOOL_NAMES, TOOL_ERROR_REWRITE) are then applied to every
+# /chat/completions request.
+cat > /tmp/manyforge-patch-openclaw-baseurl.py <<'PY'
+import json, hashlib, pathlib
+p = pathlib.Path("/sandbox/.openclaw/openclaw.json")
+d = json.loads(p.read_text())
+inf = d.setdefault("models", {}).setdefault("providers", {}).setdefault("inference", {})
+old = inf.get("baseUrl")
+target = "http://host.openshell.internal:8000/v1"
+if old == target:
+    print(f"baseUrl already {target} — no change")
+else:
+    inf["baseUrl"] = target
+    p.write_text(json.dumps(d, indent=2))
+    h = hashlib.sha256(p.read_bytes()).hexdigest()
+    pathlib.Path("/sandbox/.openclaw/.config-hash").write_text(f"{h}  openclaw.json\n")
+    print(f"baseUrl: {old} -> {target}; hash refreshed")
+PY
+openshell sandbox upload "${SANDBOX}" /tmp/manyforge-patch-openclaw-baseurl.py /tmp/ >/dev/null
+nemoclaw "${SANDBOX}" exec --no-tty -- python3 /tmp/manyforge-patch-openclaw-baseurl.py 2>&1 | tail -1
+ok "openclaw.json baseUrl patched (will be picked up by gateway hot-reload or next recover)"
 
 step "Step 2/5: stage skill (resolves repo symlinks; no /tmp left in persistent state)"
 STAGING_DIR="$(mktemp -d -t manyforge-skill-XXXX)"
