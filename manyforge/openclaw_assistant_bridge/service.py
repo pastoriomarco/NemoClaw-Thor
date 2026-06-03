@@ -237,7 +237,45 @@ def _config_from_env() -> AdapterConfig:
         gateway_enable_thinking=_env_optional_bool(
             "OPENCLAW_ASSISTANT_GATEWAY_ENABLE_THINKING", None
         ),
+        tool_surface=_resolve_tool_surface(),
     )
+
+
+def _resolve_tool_surface() -> str:
+    """Resolve ``OPENCLAW_ASSISTANT_TOOL_SURFACE`` env to a primer key.
+
+    Accepted values: ``code`` (default), ``tools``. Unknown values
+    fall back to ``code`` and emit a one-shot INFO log so the
+    operator can spot the misconfig in the bridge stdout. The
+    proxy's drift check is the load-bearing surface-mismatch detector
+    (see scripts/proxy/vllm-proxy.py); this resolver is just the
+    bridge-prompt side of the contract.
+
+    The default is INFO rather than WARN because the well-configured
+    deployment path simply leaves OPENCLAW_ASSISTANT_TOOL_SURFACE
+    unset and gets ``code`` — making that produce a WARN every
+    request would be alarm-fatigue. Operators who want a hard
+    requirement on explicit setting can monitor the
+    ``bridge_tool_surface_default`` event.
+    """
+    raw = (os.environ.get("OPENCLAW_ASSISTANT_TOOL_SURFACE") or "").strip().lower()
+    if raw in {"code", "tools"}:
+        return raw
+    if raw == "":
+        _log_event(
+            "bridge_tool_surface_default",
+            configured=None,
+            defaultedTo="code",
+            note="OPENCLAW_ASSISTANT_TOOL_SURFACE unset; default 'code'",
+        )
+        return "code"
+    _log_event(
+        "bridge_tool_surface_unknown",
+        configured=raw,
+        defaultedTo="code",
+        accepted=["code", "tools"],
+    )
+    return "code"
 
 
 # =========================================================================
@@ -741,7 +779,11 @@ async def assistant(request: Request) -> JSONResponse:
         # mode catalog is the real authorization boundary, and the
         # narrow window was only ever a soft prompt-economy hint.
         allowed_mcp_tools = None
-        prompt = build_agent_prompt(payload, mcp_allowed_tools=allowed_mcp_tools)
+        prompt = build_agent_prompt(
+            payload,
+            mcp_allowed_tools=allowed_mcp_tools,
+            tool_surface=cfg.tool_surface,
+        )
     else:
         # CLI shell-out path: the per-request allowlist is written to
         # /tmp/manyforge-openclaw-allowed-tools.txt before openclaw
@@ -751,7 +793,11 @@ async def assistant(request: Request) -> JSONResponse:
             mcp_allowed_tools_from_payload(payload) if cfg.auto_tool_window else []
         )
         allowed_mcp_tools = inferred_mcp_tools or None
-        prompt = build_agent_prompt(payload, mcp_allowed_tools=allowed_mcp_tools)
+        prompt = build_agent_prompt(
+            payload,
+            mcp_allowed_tools=allowed_mcp_tools,
+            tool_surface=cfg.tool_surface,
+        )
     prompt_ms = (time.perf_counter() - prompt_started) * 1000.0
     REQUEST_DURATION.labels(stage="prompt_build", transport=transport).observe(prompt_ms / 1000.0)
     timeout_s = _request_timeout(payload, cfg.timeout_s)
@@ -1069,6 +1115,7 @@ async def assistant(request: Request) -> JSONResponse:
         agentRunMs=round(result.duration_ms, 1),
         allowedMcpTools=allowed_mcp_tools or [],
         promptChars=len(prompt),
+        toolSurface=cfg.tool_surface,
     )
     _record_outcome("success", transport, time.perf_counter() - handler_started)
     ACTIVE_REQUESTS.dec()

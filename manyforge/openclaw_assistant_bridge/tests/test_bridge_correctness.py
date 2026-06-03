@@ -402,3 +402,122 @@ def test_compact_command_passes_session_id() -> None:
         f"--session-id value missing or wrong in decoded inner "
         f"invocation:\n{decoded}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Dual-mode prompt selection (Commit C)
+# ---------------------------------------------------------------------------
+
+
+def _build_minimal_prompt_payload() -> dict:
+    """Smallest valid payload that exercises build_agent_prompt."""
+    return {
+        "requestId": "primer-probe",
+        "conversationId": "primer-conv",
+        "assistantMode": "composer-assistant",
+        "message": "x",
+        "modeManifest": {"toolCatalogHash": "abc"},
+    }
+
+
+def test_build_agent_prompt_includes_code_mode_primer_by_default() -> None:
+    """Default tool_surface='code' inserts the code-mode primer
+    (mentions tool_search_code wrapping)."""
+    from openclaw_assistant_bridge.adapter import build_agent_prompt
+    prompt = build_agent_prompt(_build_minimal_prompt_payload())
+    assert "Dispatch surface — code mode" in prompt
+    assert "tool_search_code" in prompt
+    # Tools-mode-specific phrasing must not appear.
+    assert "Dispatch surface — tools mode" not in prompt
+
+
+def test_build_agent_prompt_includes_tools_mode_primer_when_requested() -> None:
+    """Explicit tool_surface='tools' switches the primer."""
+    from openclaw_assistant_bridge.adapter import build_agent_prompt
+    prompt = build_agent_prompt(
+        _build_minimal_prompt_payload(),
+        tool_surface="tools",
+    )
+    assert "Dispatch surface — tools mode" in prompt
+    assert "tool_search" in prompt
+    assert "tool_describe" in prompt
+    assert "tool_call" in prompt
+    # Code-mode-specific phrasing must not appear (the primer constant
+    # itself; ``tool_search_code`` may appear elsewhere if Rule 8a
+    # still references it — but the primer text shouldn't bleed).
+    assert "Dispatch surface — code mode" not in prompt
+
+
+def test_build_agent_prompt_unknown_surface_falls_back_to_code() -> None:
+    """An unknown ``tool_surface`` value falls back to the code-mode
+    primer rather than crashing. Operators see the log event."""
+    from openclaw_assistant_bridge.adapter import build_agent_prompt
+    prompt = build_agent_prompt(
+        _build_minimal_prompt_payload(),
+        tool_surface="hermes-vNext-experimental",
+    )
+    assert "Dispatch surface — code mode" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Proxy drift-check classifier (the load-bearing detection logic)
+# ---------------------------------------------------------------------------
+
+
+def _classify(tools: list) -> str:
+    """Helper that imports the proxy classifier inline.
+
+    The proxy is a script, not an installed module — imported here
+    so test discovery doesn't trip on the import at collection time
+    (proxy imports heavyweight deps at module level).
+    """
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location(
+        "vllm_proxy_under_test",
+        _REPO_ROOT / "scripts" / "proxy" / "vllm-proxy.py",
+    )
+    if spec is None or spec.loader is None:
+        pytest.skip("vllm-proxy.py not importable in this environment")
+    mod = _ilu.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"vllm-proxy.py import failed: {exc}")
+    return mod._classify_tools_array(tools)
+
+
+def test_proxy_classifier_identifies_code_mode() -> None:
+    """A tools[] containing exactly tool_search_code classifies as
+    code mode."""
+    out = _classify([{"type": "function", "function": {"name": "tool_search_code"}}])
+    assert out == "code"
+
+
+def test_proxy_classifier_identifies_tools_mode() -> None:
+    """A tools[] containing the three discrete verbs classifies as
+    tools mode (extra entries beyond the three core verbs do not
+    disqualify — the classifier requires the three to be a subset)."""
+    out = _classify([
+        {"type": "function", "function": {"name": "tool_search"}},
+        {"type": "function", "function": {"name": "tool_describe"}},
+        {"type": "function", "function": {"name": "tool_call"}},
+    ])
+    assert out == "tools"
+
+
+def test_proxy_classifier_returns_unknown_for_arbitrary_tools() -> None:
+    """A probe with real OpenAI-shaped tools (not an OpenClaw surface)
+    must NOT be classified as code or tools — operators don't get a
+    drift warning for unrelated traffic."""
+    out = _classify([
+        {"type": "function", "function": {"name": "tree_draft_wrap_node"}},
+        {"type": "function", "function": {"name": "scene_draft_add_object"}},
+    ])
+    assert out == "unknown"
+
+
+def test_proxy_classifier_returns_unknown_for_empty_or_missing_tools() -> None:
+    """Defensive: empty / non-list / missing tools[] → unknown, no
+    drift fired."""
+    assert _classify([]) == "unknown"
+    assert _classify(None) == "unknown"  # type: ignore[arg-type]

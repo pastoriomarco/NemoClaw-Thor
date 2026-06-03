@@ -93,6 +93,7 @@ the production-shaped recipe rather than a pure debug tool.
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import http.client
 import json
@@ -199,6 +200,163 @@ _UPSTREAM_HOST = "127.0.0.1"
 _UPSTREAM_PORT = 18789
 _UPSTREAM_SCHEME = "http"
 _LISTEN_PORT = 18790
+
+# =========================================================================
+# Tool-surface drift check (Commit C, 2026-06-03).
+# =========================================================================
+#
+# The bridge prompt teaches the model to dispatch via either
+# ``tool_search_code`` (code mode) or ``tool_search``/``tool_describe``/
+# ``tool_call`` (tools mode). The active surface is determined by
+# sandbox-side OpenClaw config, NOT by the bridge — so if the operator
+# sets ``OPENCLAW_ASSISTANT_TOOL_SURFACE=tools`` at the bridge but
+# OpenClaw still ships only ``tool_search_code``, the model gets a
+# tools-mode primer for a code-mode surface and refuses to dispatch.
+#
+# The bridge cannot directly observe ``tools[]`` (in CLI shell-out mode
+# it does not sit on the chat-completions path). The PROXY can —
+# every chat-completions request flows through here. We compare the
+# observed ``tools[]`` to the operator-declared surface and emit one
+# warning per session if they disagree.
+#
+# Implementation:
+# - ``OPENCLAW_PROXY_TOOL_SURFACE`` env (default empty = drift check
+#   disabled, preserving backwards compatibility for proxy deployments
+#   that do not run the lane-aware bridge).
+# - Session key: the bridge passes ``X-OpenClaw-Conversation`` /
+#   ``X-OpenClaw-Request`` headers in production; fall back to a
+#   process-lifetime "default" key when absent so probes still warn.
+# - Dedup: ``_TOOL_SURFACE_SEEN_SESSIONS`` set, bounded LRU. We warn
+#   the first time we see a session, then stay quiet — operators
+#   want signal, not a per-request flood.
+_TOOL_SURFACE_EXPECTED: str = ""  # "code" | "tools" | "" (disabled)
+_TOOL_SURFACE_SEEN_SESSIONS: collections.OrderedDict = None  # type: ignore[assignment]
+_TOOL_SURFACE_SESSIONS_MAX: int = 256
+_TOOL_SURFACE_LOCK = threading.Lock()
+
+
+_CODE_MODE_TOOL_NAMES = frozenset({"tool_search_code"})
+_TOOLS_MODE_TOOL_NAMES = frozenset({"tool_search", "tool_describe", "tool_call"})
+
+
+def _classify_tools_array(tools: object) -> str:
+    """Return ``"code"`` / ``"tools"`` / ``"unknown"`` based on names.
+
+    Returns "code" if the observed names match the code-mode surface
+    exactly (single ``tool_search_code``), "tools" if they include
+    the three tools-mode verbs, "unknown" for anything else (an
+    OpenClaw build we don't yet know about, or a probe with real
+    tools[]).
+    """
+    if not isinstance(tools, list):
+        return "unknown"
+    names: list[str] = []
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") or {}
+        n = fn.get("name") or t.get("name")
+        if isinstance(n, str) and n:
+            names.append(n)
+    name_set = set(names)
+    if name_set == _CODE_MODE_TOOL_NAMES:
+        return "code"
+    if _TOOLS_MODE_TOOL_NAMES.issubset(name_set):
+        return "tools"
+    return "unknown"
+
+
+def _tool_surface_session_key(headers: object, body: object) -> str:
+    """Stable per-session key for drift-check dedup.
+
+    Prefers an OpenClaw-supplied conversation header if present;
+    falls back to a body-level conversation id; finally a process-
+    lifetime sentinel so probes still warn once.
+    """
+    if hasattr(headers, "get"):
+        for h in ("X-OpenClaw-Conversation", "x-openclaw-conversation",
+                  "X-Request-ID", "x-request-id"):
+            v = headers.get(h)  # type: ignore[attr-defined]
+            if v:
+                return str(v)
+    if isinstance(body, dict):
+        for k in ("conversationId", "conversation_id", "session_id"):
+            v = body.get(k)
+            if v:
+                return str(v)
+    return "__no_session__"
+
+
+def _check_tool_surface_drift(
+    *, path: str, headers: object, body: object, log_extra: dict
+) -> None:
+    """Emit a one-shot ``tool_surface_mismatch`` warning per session
+    if the observed tools[] surface does not match the operator's
+    configured ``OPENCLAW_PROXY_TOOL_SURFACE``. Cheap — runs on
+    every chat-completions but the dedup keeps the log clean."""
+    if not _TOOL_SURFACE_EXPECTED:
+        return  # drift check disabled
+    if not path.endswith("/v1/chat/completions"):
+        return
+    if not isinstance(body, dict):
+        return
+    observed = _classify_tools_array(body.get("tools"))
+    if observed == "unknown":
+        # Probe with no recognizable surface — nothing to enforce.
+        return
+    expected = _TOOL_SURFACE_EXPECTED
+    if observed == expected:
+        return
+    session = _tool_surface_session_key(headers, body)
+    # Dedup: warn once per session.
+    global _TOOL_SURFACE_SEEN_SESSIONS
+    with _TOOL_SURFACE_LOCK:
+        if _TOOL_SURFACE_SEEN_SESSIONS is None:
+            _TOOL_SURFACE_SEEN_SESSIONS = collections.OrderedDict()
+        if session in _TOOL_SURFACE_SEEN_SESSIONS:
+            _TOOL_SURFACE_SEEN_SESSIONS.move_to_end(session)
+            return
+        _TOOL_SURFACE_SEEN_SESSIONS[session] = True
+        while len(_TOOL_SURFACE_SEEN_SESSIONS) > _TOOL_SURFACE_SESSIONS_MAX:
+            _TOOL_SURFACE_SEEN_SESSIONS.popitem(last=False)
+    # Per the external-review suggestion: warning carries configured,
+    # observed, request/session id, and exact observed tool names.
+    observed_names = []
+    tools = body.get("tools") or []
+    if isinstance(tools, list):
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            fn = t.get("function") or {}
+            n = fn.get("name") or t.get("name")
+            if isinstance(n, str) and n:
+                observed_names.append(n)
+    payload = {
+        "event": "tool_surface_mismatch",
+        "configured_surface": expected,
+        "observed_surface": observed,
+        "observed_tool_names": observed_names,
+        "session_key": session,
+        "request_id": log_extra.get("request_id"),
+    }
+    try:
+        with _LOG_LOCK:
+            with open(_LOG_PATH, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+    # Also surface to stderr so operators watching logs in real time
+    # see it immediately (the JSONL is for replay/audit).
+    try:
+        import sys as _sys
+        print(
+            f"openclaw-proxy: tool_surface_mismatch "
+            f"configured={expected!r} observed={observed!r} "
+            f"session={session!r} tools={observed_names!r}",
+            file=_sys.stderr, flush=True,
+        )
+    except Exception:
+        pass
 
 # 2026-05-09: optional outbound mutation. Activated only when env vars
 # below are set, so the proxy stays a pure logger by default. The
@@ -1656,6 +1814,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
         mutated_body, mutation_record = _maybe_mutate_request(path, body)
         body = mutated_body  # forwarded body == possibly mutated body
 
+        # Tool-surface drift check. Read-only — emits a JSONL+stderr
+        # warning if the observed tools[] does not match the operator-
+        # declared OPENCLAW_PROXY_TOOL_SURFACE. Cheap (parse-once,
+        # dedup per session). Inert when the env var is unset.
+        if _TOOL_SURFACE_EXPECTED and path.endswith("/v1/chat/completions"):
+            try:
+                parsed_body = json.loads(body.decode("utf-8", errors="replace"))
+            except (ValueError, UnicodeDecodeError):
+                parsed_body = None
+            if isinstance(parsed_body, dict):
+                _check_tool_surface_drift(
+                    path=path,
+                    headers=self.headers,
+                    body=parsed_body,
+                    log_extra={"request_id": self.headers.get("X-Request-ID")},
+                )
+
         # 2026-06-01 (round 10 — cascading loop break):
         # Two-stage defense against same-tool-same-error runaway:
         #   1. At _REFLECT_AT same-tool calls: INJECT a synthetic user
@@ -1947,6 +2122,7 @@ def main() -> None:
     global _OVERRIDE_MAX_TOKENS, _OVERRIDE_TOP_P
     global _USER_MESSAGE_SUFFIX, _USER_SUFFIX_FIRST_TURN_ONLY
     global _FORCE_ENABLE_THINKING, _THINKING_TOKEN_BUDGET
+    global _TOOL_SURFACE_EXPECTED
 
     cfg = _resolve_config()
     parsed = urllib.parse.urlparse(cfg.upstream)
@@ -1969,6 +2145,23 @@ def main() -> None:
     fet = (cfg.force_enable_thinking or "").strip()
     _FORCE_ENABLE_THINKING = fet if fet else None
     _THINKING_TOKEN_BUDGET = _parse_optional_int(cfg.thinking_token_budget)
+
+    # Tool-surface drift check (Commit C, 2026-06-03). Inert when
+    # the env var is unset, preserving back-compat for proxy
+    # deployments that don't run the lane-aware bridge.
+    tool_surface_expected = (
+        os.environ.get("OPENCLAW_PROXY_TOOL_SURFACE")
+        or os.environ.get("OPENCLAW_ASSISTANT_TOOL_SURFACE")
+        or ""
+    ).strip().lower()
+    if tool_surface_expected and tool_surface_expected not in ("code", "tools"):
+        sys.stderr.write(
+            f"openclaw-proxy: OPENCLAW_PROXY_TOOL_SURFACE="
+            f"{tool_surface_expected!r} not in {{'code','tools'}}; "
+            "drift check disabled.\n"
+        )
+        tool_surface_expected = ""
+    _TOOL_SURFACE_EXPECTED = tool_surface_expected
 
     # Truncate prior log so each session starts fresh; harness handles
     # offset-from-baseline anyway, but a clean file on launch is

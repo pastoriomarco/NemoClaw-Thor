@@ -43,6 +43,88 @@ _TAIL_CHECKLIST_BODY = (
 )
 
 
+# =========================================================================
+# Discovery-protocol primers (one per OpenClaw tool surface).
+# =========================================================================
+#
+# OpenClaw exposes one of two surfaces to the model, determined by
+# sandbox-side OpenClaw config. The bridge prompt MUST match the active
+# surface or the model can't dispatch — wrong primer = the well-known
+# "I can't use the tool because it isn't available" refusal pattern.
+#
+# The bridge does NOT detect which surface is active. The operator sets
+# ``OPENCLAW_ASSISTANT_TOOL_SURFACE`` (env → AdapterConfig.tool_surface),
+# the prompt builder picks the matching primer, and the vLLM proxy emits
+# a ``tool_surface_mismatch`` warning if the observed ``tools[]`` does
+# not match the configured surface (see scripts/proxy/vllm-proxy.py).
+#
+# Both primers leave Rule 8a (argument-shape correctness) intact —
+# camelCase + nested-object rules are surface-agnostic.
+
+_PRIMER_CODE_MODE = (
+    "0. **Dispatch surface — code mode.** Your tools[] contains a "
+    "single verb `tool_search_code`. Real ManyForge tools (e.g. "
+    "`tree_draft_wrap_node`, `program_read`) are NOT in tools[]; "
+    "they are available via a `tools` namespace inside the body of "
+    "tool_search_code. Invoke them by emitting "
+    "`tool_search_code({code: \"const r = await "
+    "tools.<tool_name>({...args}); return r;\"})`. The code body is "
+    "JavaScript-like; `await` every real tool call; return the "
+    "result. Do NOT call real tools as if they were top-level "
+    "entries in tools[] — they are NOT, and the gateway will refuse. "
+    "Do NOT say 'the tool isn't available' — it IS, via "
+    "tool_search_code. Argument shapes in the body are camelCase + "
+    "nested objects (see Rule 8a below)."
+)
+
+_PRIMER_TOOLS_MODE = (
+    "0. **Dispatch surface — tools mode.** Your tools[] contains "
+    "three discovery verbs: `tool_search`, `tool_describe`, "
+    "`tool_call`. Real ManyForge tools (e.g. `tree_draft_wrap_node`, "
+    "`program_read`) are NOT in tools[] directly; they are "
+    "discovered through these verbs and invoked via `tool_call`. "
+    "Efficient flow when you know the tool name: skip "
+    "`tool_search`, optionally `tool_describe({id: \"<tool>\"})` to "
+    "fetch the parameter schema once per conversation, then "
+    "`tool_call({id: \"<tool>\", args: {...}})` to dispatch. The "
+    "real tool result is in the `.result` field of `tool_call`'s "
+    "return; the `.tool` wrapper is informational. Argument shapes "
+    "are camelCase + nested objects (see Rule 8a below)."
+)
+
+# Maps tool_surface value → primer string. Module-level so callers
+# (build_agent_prompt + tests) can introspect.
+_TOOL_SURFACE_PRIMERS: dict[str, str] = {
+    "code": _PRIMER_CODE_MODE,
+    "tools": _PRIMER_TOOLS_MODE,
+}
+
+
+def _primer_for_tool_surface(tool_surface: str) -> str:
+    """Return the dispatch-surface primer for ``tool_surface``.
+
+    Falls back to the code-mode primer on an unknown value, with a
+    structured log line so operators can find it. The bridge does
+    not crash on misconfig — it prompts as if for the default and
+    relies on the proxy's drift check to surface the operator error.
+    """
+    primer = _TOOL_SURFACE_PRIMERS.get(tool_surface)
+    if primer is not None:
+        return primer
+    # Defer the log import to avoid a circular dep at module load.
+    try:
+        from .service import _log_event  # type: ignore[attr-defined]
+        _log_event(
+            "bridge_tool_surface_unknown",
+            configured=tool_surface,
+            fallback="code",
+            accepted=sorted(_TOOL_SURFACE_PRIMERS.keys()),
+        )
+    except Exception:
+        pass
+    return _PRIMER_CODE_MODE
+
+
 @dataclass(frozen=True)
 class AdapterConfig:
     """Runtime configuration for invoking OpenClaw inside a sandbox."""
@@ -106,6 +188,29 @@ class AdapterConfig:
     # path. Kept for back-compat; do not rely on it for the standard
     # OpenClaw lane.
     gateway_enable_thinking: bool | None = None
+
+    # Tool surface OpenClaw exposes to the model. Set by the
+    # operator via OPENCLAW_ASSISTANT_TOOL_SURFACE (see
+    # service.AdapterConfig.from_env). Two values currently used:
+    #
+    #   "code"  — OpenClaw 2026.5.6+ default: tools[] contains the
+    #             single ``tool_search_code`` verb. Model must wrap
+    #             real tool calls in ``tool_search_code({code:
+    #             "...await tools.<name>(...)..."})``. Requires the
+    #             code-mode primer in the bridge prompt.
+    #   "tools" — Discrete control verbs: tools[] contains
+    #             ``tool_search``, ``tool_describe``, ``tool_call``.
+    #             Model dispatches via tool_call({id, args}). Matches
+    #             what iter-32 (51/66) ran against. Requires the
+    #             tools-mode primer.
+    #
+    # The bridge does NOT control which surface OpenClaw exposes —
+    # that's a sandbox-side OpenClaw config — but the prompt MUST
+    # match the active surface or the model can't dispatch. Drift is
+    # detected by the vLLM proxy (see scripts/proxy/vllm-proxy.py),
+    # not by the bridge, because the bridge does not sit on the
+    # chat-completions path in CLI shell-out mode.
+    tool_surface: str = "code"
 
 
 @dataclass(frozen=True)
@@ -368,6 +473,7 @@ def build_agent_prompt(
     payload: dict[str, Any],
     *,
     mcp_allowed_tools: list[str] | None = None,
+    tool_surface: str = "code",
 ) -> str:
     """Build the OpenClaw prompt for one ManyForge assistant request.
 
@@ -464,6 +570,13 @@ def build_agent_prompt(
     rules_block = "\n".join(
         [
             "RULES (do not violate):",
+            # Rule 0 is the dispatch-surface primer. It teaches the
+            # model HOW to invoke real tools given the active
+            # OpenClaw surface (code mode via tool_search_code, or
+            # tools mode via tool_search/tool_describe/tool_call).
+            # The argument-shape rules below (8a) are surface-
+            # agnostic and apply identically in both modes.
+            _primer_for_tool_surface(tool_surface),
             "1. Catalog ids are immutable. Use only the literal id from "
             "the nodeCatalog or skillCatalog below. Never invent ids by "
             "composing a kind id with an object name (e.g. NEVER "
