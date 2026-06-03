@@ -528,26 +528,70 @@ def test_proxy_classifier_returns_unknown_for_empty_or_missing_tools() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_code_mode_primer_teaches_both_named_and_call_dispatch() -> None:
-    """Per OpenClaw's code-mode worker (verified against
-    /usr/local/lib/node_modules/openclaw/dist/agents/code-mode.worker.js,
-    lines 105-129): the ``tools`` namespace in tool_search_code's body
-    exposes BOTH the three control verbs (search/describe/call) AND
-    auto-bound named convenience entries (tools.<name>). Our primer
-    must teach both forms, with tools.call as the explicit fallback
-    when the named binding is unavailable (e.g. duplicate names)."""
+def test_code_mode_primer_uses_openclaw_tools_namespace() -> None:
+    """OpenClaw 2026.5.22's `tool_search_code` runs in an isolated
+    Node subprocess where the bridge is exposed as `openclaw.tools`
+    — NOT the bare `tools` namespace.
+
+    Verified two ways:
+    (1) The OpenClaw tool description text the model sees says:
+        "Run JavaScript in an isolated Node subprocess with
+        openclaw.tools.search, openclaw.tools.describe, and
+        openclaw.tools.call for large tool catalogs." (source:
+        /usr/local/lib/node_modules/openclaw/dist/pi-tools-iVT6BGHc.js:1017)
+    (2) OpenClaw's own code-body parser regexes for
+        `openclaw\\.tools\\.call`, `openclaw\\.tools\\.describe`,
+        `openclaw\\.tools\\.search` (source:
+        control-ui/assets/index-BtIuF4zW.js, functions lA/dA).
+
+    The QuickJS code-mode.worker.js (which exposes `globalThis.tools`)
+    is a DIFFERENT execution path used only when `--permission`
+    support is policy-permitted in QuickJS mode — not the active
+    path on this build. A primer that teaches `tools.<x>` produces
+    `ReferenceError: tools is not defined` (verified in live logs
+    2026-06-03)."""
     from openclaw_assistant_bridge.adapter import _PRIMER_CODE_MODE
-    # Both dispatch patterns must be present.
-    assert "tools.call(" in _PRIMER_CODE_MODE, (
-        "code-mode primer must teach the explicit tools.call(<name>, ...) "
-        "form for tools whose named binding is unavailable"
+    # The canonical dispatch form MUST be present.
+    assert "openclaw.tools.call(" in _PRIMER_CODE_MODE, (
+        "code-mode primer must teach the canonical "
+        "openclaw.tools.call(<name>, args) dispatch form"
     )
-    assert "tools.<tool_name>" in _PRIMER_CODE_MODE or "tools.tree_draft" in _PRIMER_CODE_MODE, (
-        "code-mode primer must teach the convenience tools.<name>(...) form"
+    assert "openclaw.tools.describe(" in _PRIMER_CODE_MODE, (
+        "code-mode primer must teach openclaw.tools.describe(<name>)"
     )
-    # Discovery verbs must be present.
-    assert "tools.search(" in _PRIMER_CODE_MODE
-    assert "tools.describe(" in _PRIMER_CODE_MODE
+    assert "openclaw.tools.search(" in _PRIMER_CODE_MODE, (
+        "code-mode primer must teach openclaw.tools.search(<query>)"
+    )
+    # The wrong patterns the model has historically emitted MUST be
+    # called out as DO NOT — these are the failure modes captured
+    # in the OpenClaw logs on 2026-06-03.
+    assert "tools is not defined" in _PRIMER_CODE_MODE, (
+        "primer must warn about ReferenceError: tools is not defined"
+    )
+    assert "window is not defined" in _PRIMER_CODE_MODE, (
+        "primer must warn about ReferenceError: window is not defined"
+    )
+    # Negative case: the primer must NOT teach the bare `tools.call(...)`
+    # form as a POSITIVE pattern. It IS allowed to mention `tools.call(...)`
+    # inside DO-NOT warnings (and we want those warnings). The
+    # distinction: a positive pattern is `await tools.call(...)` (the
+    # exact construction the model would copy). A DO-NOT warning has
+    # context like "DO NOT write" or "will fail with" preceding it.
+    import re
+    for m in re.finditer(r"\btools\.call\(", _PRIMER_CODE_MODE):
+        start = m.start()
+        # Look at a wider window before the match for DO-NOT context.
+        window = _PRIMER_CODE_MODE[max(0, start - 60):start]
+        if "openclaw." in window[-15:]:
+            # Properly prefixed; canonical.
+            continue
+        if "DO NOT" in window or "ReferenceError" in window or "will fail" in window:
+            # DO-NOT warning; this is the desired didactic.
+            continue
+        raise AssertionError(
+            f"Found `tools.call(` not preceded by `openclaw.` and not "
+            f"inside a DO-NOT warning: window={window!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
