@@ -169,6 +169,25 @@ cases:
       "scene.objects[*].shape.box_dims": "contains [1.0, 0.02, 0.25]"
     answer_must_contain: ["box", "added"]
 
+- id: P2b_scene_add_cylinder_diameter
+  category: scene_add
+  detail_level: specific
+  # Exercises the cylinder/diameter branch of scene_draft_add_object. The
+  # alias matcher accepts both `diameter` (model-friendly flat alias
+  # documented in spec 485) and the canonical `shape.diameter_m` form.
+  # `height` and `height_m` are likewise both accepted.
+  prompt: "add a cylinder of diameter 0.08 and height 0.20 at position 0.30, 0.10, 0.05"
+  expected:
+    tools_called:
+      - name: scene_draft_add_object
+        alt_names: [scene_draft_upsert_objects]
+        args_contain:
+          shape.type: cylinder
+          shape.diameter: 0.08
+          shape.height: 0.20
+          pose.position: [0.30, 0.10, 0.05]
+    answer_must_contain: ["cylinder", "added"]
+
 - id: P3_tree_insert_runtime_obj_specific
   category: tree_insert_runtime_obj
   detail_level: specific

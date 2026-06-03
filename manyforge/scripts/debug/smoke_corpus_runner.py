@@ -301,8 +301,29 @@ def _resolve_path(state: Any, path: str) -> Any:
                 cur = cur.get(key)
             if not isinstance(cur, list):
                 return "<MISSING>"
-            # Project: keep list. Later segments can run on each element.
-            return cur
+            # 2026-06-03: actually PROJECT remaining segments per element.
+            # The legacy behavior was `return cur` immediately, which left
+            # the whole list of dicts in the result; downstream `contains X`
+            # matches then ran as substring checks against repr(list),
+            # producing false-positives when X appeared anywhere inside any
+            # element (e.g. `[1.0, 0.02, 0.25]` could match against
+            # `pose.position_m=[1.0, 0.02, 0.25]` even though the corpus
+            # intended `shape.box_dimensions_m`).
+            #
+            # Walk the rest of the path against each element, collect the
+            # per-element resolutions, and return them as a list of values.
+            # Downstream `_value_matches`'s `contains X` rule already
+            # handles list inputs (iterates and substring-matches), so the
+            # net effect is a properly-projected per-element check.
+            remaining_idx = _split_path(path).index(seg) + 1
+            remaining_segs = _split_path(path)[remaining_idx:]
+            if not remaining_segs:
+                return cur
+            sub_path = ".".join(remaining_segs)
+            projected: list[Any] = []
+            for item in cur:
+                projected.append(_resolve_path(item, sub_path))
+            return projected
         else:
             if isinstance(cur, dict):
                 cur = cur.get(seg, "<MISSING>")
@@ -389,6 +410,21 @@ _ARG_PATH_ALIASES: dict[str, list[str]] = {
                          "sceneResource.shape.box_dimensions_m",
                          "sceneResource.shape.size",
                          "size"],
+    # Cylinder/sphere primitives — spec 485 line 420 lists `diameter` as
+    # a model-friendly flat alias for the canonical SI-suffixed nested
+    # form `sceneResource.shape.diameter_m`. Same shape for `height`.
+    "shape.diameter":   ["shape.diameter_m",
+                         "sceneResource.shape.diameter_m",
+                         "sceneResource.shape.diameter",
+                         "diameter"],
+    "shape.height":     ["shape.height_m",
+                         "sceneResource.shape.height_m",
+                         "sceneResource.shape.height",
+                         "height"],
+    "shape.radius":     ["shape.radius_m",
+                         "sceneResource.shape.radius_m",
+                         "sceneResource.shape.radius",
+                         "radius"],
     "pose.position":    ["pose.position_m",
                          "sceneResource.pose.position_m",
                          "sceneResource.pose.position",
@@ -411,11 +447,29 @@ _ARG_PATH_ALIASES: dict[str, list[str]] = {
     # the matcher accept `afterName` as a name surrogate for parentName
     # when the corpus is checking the former.
     "parentName":       ["afterName", "beforeName"],
+    # Tree-insert positional index — corpus was authored against an
+    # older schema where the field was `position`. Current
+    # tree_draft_insert_node exposes `index` (integer). Verified
+    # 2026-06-03 against the live manifest `inputSchema.properties`.
+    # Without this alias a model that correctly emits `index: 0`
+    # would fail args_contain[position: 0]. The `position=-1` special
+    # case in `_match_args_contain` handles the end-insertion variant.
+    "position":         ["index"],
+    # tree_draft_replace_subtree was renamed: the wrapper field used
+    # to be `subtree_root` (with a nested `kind` discriminator), now
+    # it is `subtree` (with `id` as the discriminator). Live manifest
+    # for tree_draft_replace_subtree exposes only `subtree`. Active
+    # corpus cases at smoke_corpus.yaml lines 353, 577, 1027 still
+    # use `subtree_root.kind`.
+    "subtree_root.kind": ["subtree.id"],
+    "subtree_root":     ["subtree"],
 }
 
 
 def _match_args_contain(
-    expected_flat: dict[str, Any], actual_args: dict[str, Any]
+    expected_flat: dict[str, Any],
+    actual_args: dict[str, Any],
+    pre_state: dict[str, Any] | None = None,
 ) -> list[str]:
     """Validate `args_contain` against the model's emitted arguments,
     tolerating the field-name drift between corpus and live manifest.
@@ -462,19 +516,45 @@ def _match_args_contain(
         if leaf_hit:
             continue
         # Tree-insert end-position equivalence: when the corpus expects
-        # `position: -1` (end insertion by index) the model may legitimately
-        # express end-insertion in three other ways:
+        # `position: -1` (end insertion by index) the model may
+        # legitimately express end-insertion in three other ways:
         #   a) `afterName: <last_child>`     — end by named anchor
         #   b) `parentName: <parent>` only   — composer default IS end
         #   c) `position: -1` literally      — direct match (handled above)
         # Without post-state we accept (a) and (b) as semantic matches.
-        # Combined with the other args_contain entries (node.id,
-        # node.params.*), false-positive risk stays low — a model that
-        # picks a bogus parent or anchor would still fail on the
-        # node-content assertions.
+        # 2026-06-03 tightening (per reviewer): reject the lenient
+        # parentName-only fallback when the model also emitted an
+        # explicit `index` value other than -1 — that's a conflicting
+        # ordering choice, not an end-insertion. Combined with the
+        # other args_contain entries (node.id, node.params.*),
+        # false-positive risk stays low.
         if legacy_path == "position" and expected_value == -1:
-            if flat.get("afterName") or flat.get("parentName"):
+            explicit_idx = flat.get("index")
+            has_conflicting_index = (
+                isinstance(explicit_idx, int) and explicit_idx != -1
+            )
+            if has_conflicting_index:
+                # Model emitted `index: 5` (or similar). That is NOT an
+                # end insertion regardless of parentName/afterName.
+                pass
+            elif flat.get("afterName") or flat.get("parentName"):
                 continue
+        # @root literal resolution for tree edits — spec 485 §tree-edit
+        # documents `targetName: "@root"` (and `parentName: "@root"`,
+        # `newParentName: "@root"`) as a literal alias for the current
+        # root, accepted on wrap_node / replace_subtree / update_node_params
+        # / insert_node's parentName / move_node's newParentName. When the
+        # corpus expects e.g. `targetName: pick_and_place` and the model
+        # emitted `targetName: "@root"`, accept iff pre_state proves
+        # `pick_and_place` IS the current root.
+        if legacy_path in ("targetName", "parentName", "newParentName"):
+            actual = flat.get(legacy_path)
+            if actual == "@root" and isinstance(pre_state, dict):
+                root_id = (
+                    (pre_state.get("program") or {}).get("tree", {}).get("id")
+                )
+                if root_id and root_id == expected_value:
+                    continue
         failures.append(
             f"args_contain[{legacy_path}] expected {expected_value!r}, "
             f"got {av!r} (also tried aliases: {aliases or '[]'})"
@@ -494,7 +574,9 @@ class CaseResult:
     skip_reason: str = ""
 
 
-def assert_tools(case: dict, observed: list[dict], failures: list[str], soft_failures: list[str] | None = None) -> None:
+def assert_tools(case: dict, observed: list[dict], failures: list[str],
+                 soft_failures: list[str] | None = None,
+                 pre_state: dict[str, Any] | None = None) -> None:
     expected = case.get("expected", {})
     # Distinguish three semantics:
     #   - `tools_called` MISSING        → don't check tool sequence at all
@@ -590,7 +672,7 @@ def assert_tools(case: dict, observed: list[dict], failures: list[str], soft_fai
                 # legacy strict `flat.get(k)` matcher generated false
                 # negatives even when the model called the tool correctly.
                 expected_flat = _flatten(args_contain)
-                for msg in _match_args_contain(expected_flat, actual_args):
+                for msg in _match_args_contain(expected_flat, actual_args, pre_state):
                     failures.append(f"{msg} on tool '{name}'")
 
     forbidden = case.get("expected", {}).get("forbidden_tools") or []
@@ -888,10 +970,17 @@ def run_case(case: dict, composer: str, default_pre: dict,
     if code != 200:
         failures.append(f"chat HTTP {code}")
     else:
-        assert_tools(case, observed, failures, soft_failures)
-        # state_after is best-effort: capture once after the call.
-        post_state = capture_state(composer)
-        assert_state(case, post_state, failures)
+        # Capture state ONCE: serves both as pre_state for `@root`-like
+        # alias resolution AND as the post_state for state_after asserts.
+        # Note this is "state observed after the chat returns" — the
+        # composer has already applied any mutations the model invoked.
+        # For `@root` resolution we trust that the program tree root id
+        # was stable across the brief chat window (program load happens
+        # before the chat fires; mutations don't rename the root).
+        observed_state = capture_state(composer)
+        assert_tools(case, observed, failures, soft_failures,
+                     pre_state=observed_state)
+        assert_state(case, observed_state, failures)
 
     assert_answer(case, answer, soft_failures)
 
@@ -921,8 +1010,9 @@ def run_case(case: dict, composer: str, default_pre: dict,
                 # Re-run asserts on the augmented observed; reset failure
                 # list so we are evaluating the post-recovery state.
                 retry_failures: list[str] = []
-                assert_tools(case, observed, retry_failures)
                 post_state2 = capture_state(composer)
+                assert_tools(case, observed, retry_failures,
+                             pre_state=post_state2)
                 assert_state(case, post_state2, retry_failures)
                 if not retry_failures:
                     recovered = True
