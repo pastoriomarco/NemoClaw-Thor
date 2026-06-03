@@ -65,10 +65,22 @@ Probes run on cosmos-reason2-8b with the proxy in path (8000 → 8050) and direc
 
 Probes run on cosmos-reason2-8b through the OpenClaw sandbox (gateway `:18789` host-forwarded, bridge `:8200`).
 
-### Probe O-1 — iter-32 baseline reproduction
+### Probe O-1 — iter-32 baseline reproduction (FIXED 2026-06-03)
+
+**Route fix landed**: the launcher's default `OPENCLAW_ASSISTANT_USE_GATEWAY=true` made the bridge POST to `http://127.0.0.1:18789/v1/chat/completions` — but OpenClaw 2026.5.22 **does not expose `/v1/chat/completions` at all** (its HTTP server only registers `/v1/responses`, `/v1/embeddings`, `/v1/models`, `/v1/token`). The bridge therefore got "Not Found" in 50ms on every call without the gateway ever touching the LLM.
+
+**Fix**: switch the bridge to CLI shell-out mode (`OPENCLAW_ASSISTANT_USE_GATEWAY=false`). The bridge then invokes `openclaw agent --agent manyforge-composer ...` via `nemoclaw exec` inside the sandbox, which uses OpenClaw's internal agent runner — that path DOES reach the inference provider and our `:8000` proxy.
+
+Additional fixes required to make the route work:
+1. **Enable `local-inference` preset alongside `manyforge-composer`** — without local-inference, the OpenShell network proxy denies sandbox→host:8000 with `policy_denied`. `setup-manyforge-assistant.sh` removes local-inference assuming manyforge-composer is a strict superset; it is not for the inference path.
+2. **Patch `openclaw.json` `models.providers.inference.baseUrl`** from the default `https://inference.local/v1` to `http://host.openshell.internal:8000/v1` (skipping the inference.local TLS-proxy hop and going directly through our proxy).
+
+After both fixes: proxy log captures POST `/chat/completions` entries (all 200 OK, durations 4-6s), gateway log shows `tool-search: cataloged 26 tools behind compact prompt surface` and real agent turns.
+
+### Probe O-1 (original — before route fix; kept for forensics)
 - **Procedure**: Run the chain-on production recipe against the OpenClaw lane.
 - **Pass criteria**: ≥49/66 (51/66 baseline ±2).
-- **Result**: ❌ **FAIL — 14/66 effective (21.2%), 1/66 first-try (1.5%)**.
+- **Result (before fix)**: ❌ **FAIL — 14/66 effective (21.2%), 1/66 first-try (1.5%)**.
   - 1 pass, 13 soft-pass, 52 fail, 8 future-tagged skips.
   - **Root cause**: vLLM landed on `:8000` directly (no proxy in path) because the launcher was restarted with `START_VLLM_PROXY=false` to avoid the stale-proxy race condition documented in Phase 0 setup. Without the proxy in path:
     - `UNWRAP_TOOL_CALL_ARGS` mutation is not applied — the hermes tool-call parser's `<tool_call>` XML wrap leaks into `assistant.tool_calls[*].arguments`, breaking the next round's JSON parse.
