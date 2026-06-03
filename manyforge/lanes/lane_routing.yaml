@@ -1,0 +1,47 @@
+# Composer-side lane router config — Phase 5 of THREE-LANE-MIGRATION-PLAN.md.
+#
+# The Composer's assistant route consumes this file and dispatches
+# requests to the lane that best matches the request shape. Users can
+# pin a lane manually (UI dropdown or chat command); the rules below
+# only apply when no manual pin is in effect.
+#
+# Phase 5 status: this is a STARTING DEFAULT, NOT a production
+# decision. The actual production default is set after Phase 3 + Phase 4
+# bake-offs land their numbers (see PHASE-5-PRODUCTION-DECISION.md).
+#
+# Today's empirical evidence (from Phase 0 D-1 baseline on
+# cosmos-reason2-8b):
+#   - Direct lane: 28/66 effective. Failure mode: <MISSING> args.
+#   - OpenClaw lane: 51/66 effective (iter-32 baseline).
+#   - Hermes lane: not yet measured (Phase 4).
+#
+# So today the default is OpenClaw. Phase 5 may change this after the
+# discovery-protocol skill rewrite is measured against the iter-32
+# baseline (Phase 3 gate ≥46/66) and Hermes longitudinal results.
+
+default_lane: openclaw
+
+overrides:
+  # Latency-sensitive requests prefer Direct lane: it skips OpenClaw's
+  # 3-trip discovery overhead at the cost of model-quality on cosmos.
+  # Suitable for known-workflow operators or simple read-only queries.
+  - match:
+      request_shape: known_workflow_simple
+      time_budget_ms_lt: 5000
+    lane: direct
+
+  # Long-running multi-session interactions where memory + skills can
+  # accumulate go to Hermes (when enabled).
+  - match:
+      request_shape: long_running
+      conversation_turns_gt: 3
+    lane: hermes
+    requires: HERMES_LANE_PHASE4_ENABLED
+
+  # User-pinned lanes always win (handled in route handler, not via
+  # rule match — this comment is informative).
+
+# Rollback flag: set this to one of the lane ids to override every
+# rule + pin and force production back to a known-good lane in <60s.
+# Used by SRE as the emergency lever. Empty string = rules apply.
+rollback_force: ""
