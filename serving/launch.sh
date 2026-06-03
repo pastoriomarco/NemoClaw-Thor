@@ -509,7 +509,21 @@ prepare_thor_launch_profile() {
             #   vllm: --quantization modelopt --moe-backend marlin
             #         (rest matches iter-3 RedHat recipe)
             THOR_LAUNCH_MODEL_SOURCE="nvidia/Qwen3.6-35B-A3B-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.85}"
+            # 2026-06-03: dropped from 0.85 to 0.55. The 0.85 default was
+            # carried over from the earlier max-concurrency-per-dollar
+            # profile but oversubscribed Thor's 122 GiB unified memory
+            # for the single-bridge-invocation workflow we actually
+            # run in production (smoke harness + composer driving one
+            # session at a time). Sizing:
+            #   weights:        ~22 GiB (NVFP4 quant)
+            #   KV @ 256K FP8:  ~24-32 GiB per sequence
+            #   activations:    ~8-10 GiB
+            # 0.55 (~67 GiB allocated) leaves comfortable headroom AND
+            # supports up to ~2 concurrent 256K sequences at peak. Pair
+            # with --max-num-seqs 4 (set in config.sh under
+            # THOR_TARGET_MAX_NUM_SEQS) which caps the KV pool to a
+            # realistic working set without ever exhausting memory.
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.55}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen-fixed-froggeric.jinja"
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen-fixed-froggeric.jinja"
             THOR_DOCKER_ENV_ARGS+=(

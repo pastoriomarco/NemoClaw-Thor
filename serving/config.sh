@@ -310,7 +310,20 @@ resolve_model_profile() {
             THOR_MODEL_ID_DEFAULT="qwen3.6-35b-a3b-nvfp4-nvidia"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="5"
+            # 2026-06-03: revised from MAX_NUM_SEQS=5, GPU_MEM_UTIL=0.85
+            # which oversubscribed Thor's 122 GiB unified memory (we
+            # were running with only ~7-8 GiB free during a single
+            # diagnostic probe). For a single 256K FP8 KV instance the
+            # working set is ~54-64 GiB (22 weights + 24-32 KV per seq +
+            # 8-10 activations). 0.55 utilization (~67 GiB) leaves
+            # comfortable headroom; max_num_seqs=4 is enough for the
+            # composer-driven workflow (we never run >1 concurrent
+            # bridge invocation in production) and still permits the
+            # scheduler enough draft tokens for MTP without pushing
+            # the budget. Lower max_num_seqs alone would let the
+            # remaining KV pool serve longer single sessions.
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_GPU_MEMORY_UTILIZATION="0.55"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
