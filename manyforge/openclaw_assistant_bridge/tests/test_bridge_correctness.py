@@ -521,3 +521,176 @@ def test_proxy_classifier_returns_unknown_for_empty_or_missing_tools() -> None:
     drift fired."""
     assert _classify([]) == "unknown"
     assert _classify(None) == "unknown"  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Code-mode primer correctness (Finding 1)
+# ---------------------------------------------------------------------------
+
+
+def test_code_mode_primer_teaches_both_named_and_call_dispatch() -> None:
+    """Per OpenClaw's code-mode worker (verified against
+    /usr/local/lib/node_modules/openclaw/dist/agents/code-mode.worker.js,
+    lines 105-129): the ``tools`` namespace in tool_search_code's body
+    exposes BOTH the three control verbs (search/describe/call) AND
+    auto-bound named convenience entries (tools.<name>). Our primer
+    must teach both forms, with tools.call as the explicit fallback
+    when the named binding is unavailable (e.g. duplicate names)."""
+    from openclaw_assistant_bridge.adapter import _PRIMER_CODE_MODE
+    # Both dispatch patterns must be present.
+    assert "tools.call(" in _PRIMER_CODE_MODE, (
+        "code-mode primer must teach the explicit tools.call(<name>, ...) "
+        "form for tools whose named binding is unavailable"
+    )
+    assert "tools.<tool_name>" in _PRIMER_CODE_MODE or "tools.tree_draft" in _PRIMER_CODE_MODE, (
+        "code-mode primer must teach the convenience tools.<name>(...) form"
+    )
+    # Discovery verbs must be present.
+    assert "tools.search(" in _PRIMER_CODE_MODE
+    assert "tools.describe(" in _PRIMER_CODE_MODE
+
+
+# ---------------------------------------------------------------------------
+# Loop-history error path (Finding 2)
+# ---------------------------------------------------------------------------
+
+
+def test_record_history_from_result_handles_empty_stdout(fresh_history) -> None:
+    """The helper returns 0 (no records appended) on empty stdout —
+    the timeout case where _run_agent re-raises before populating
+    result.stdout. No exception, no history pollution."""
+    service = fresh_history
+
+    async def run() -> int:
+        return await service._record_history_from_result(
+            conv_key=("c", "m"),
+            result_stdout="",
+            use_gateway=False,
+            payload={"requestId": "x"},
+        )
+
+    n = asyncio.get_event_loop().run_until_complete(run())
+    assert n == 0
+    assert service._loop_history_snapshot(("c", "m")) == []
+
+
+def test_record_history_from_result_handles_malformed_stdout(fresh_history) -> None:
+    """Best-effort: parsing garbage produces 0 records, no exception."""
+    service = fresh_history
+
+    async def run() -> int:
+        return await service._record_history_from_result(
+            conv_key=("c", "m"),
+            result_stdout="not a json or openclaw envelope",
+            use_gateway=False,
+            payload={"requestId": "x"},
+        )
+
+    n = asyncio.get_event_loop().run_until_complete(run())
+    assert n == 0
+
+
+# ---------------------------------------------------------------------------
+# Proxy drift pair-based dedup (Finding 3 — session header absent in
+# real OpenClaw traffic, so we dedup by (expected, observed) pair globally)
+# ---------------------------------------------------------------------------
+
+
+def test_proxy_drift_dedup_is_pair_based(fresh_history) -> None:
+    """The proxy drift detector now dedups by (expected, observed)
+    pair globally rather than by session key, because real OpenClaw
+    traffic carries no session header. We verify by simulating the
+    dedup logic against the module-level memo: two identical pairs
+    add only once."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location(
+        "vllm_proxy_under_test_dedup",
+        _REPO_ROOT / "scripts" / "proxy" / "vllm-proxy.py",
+    )
+    if spec is None or spec.loader is None:
+        pytest.skip("vllm-proxy.py not importable in this environment")
+    mod = _ilu.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as exc:
+        pytest.skip(f"vllm-proxy.py import failed: {exc}")
+    # Reset the global memo so prior tests don't pollute.
+    mod._TOOL_SURFACE_WARNED_PAIRS.clear()
+    mod._TOOL_SURFACE_EXPECTED = "code"
+    # Use a body that classifies "tools" — twice. Both invocations
+    # would warn on a per-session model; only the FIRST warns on the
+    # per-pair model.
+    body = {
+        "tools": [
+            {"type": "function", "function": {"name": "tool_search"}},
+            {"type": "function", "function": {"name": "tool_describe"}},
+            {"type": "function", "function": {"name": "tool_call"}},
+        ],
+    }
+    mod._check_tool_surface_drift(
+        path="/v1/chat/completions",
+        headers={},  # no headers — simulates real OpenClaw traffic
+        body=body,
+        log_extra={},
+    )
+    mod._check_tool_surface_drift(
+        path="/v1/chat/completions",
+        headers={},
+        body=body,
+        log_extra={},
+    )
+    assert ("code", "tools") in mod._TOOL_SURFACE_WARNED_PAIRS
+    # Still just one pair memoized — the second invocation hit the
+    # dedup gate and did NOT add a new entry.
+    assert len(mod._TOOL_SURFACE_WARNED_PAIRS) == 1
+
+
+# ---------------------------------------------------------------------------
+# Proxy warn-on-unknown opt-in (Finding 4)
+# ---------------------------------------------------------------------------
+
+
+def test_proxy_warn_on_unknown_opt_in() -> None:
+    """When OPENCLAW_PROXY_WARN_ON_UNKNOWN is on, classifier="unknown"
+    ALSO fires the drift warning (catches direct-real-tools traffic
+    on an OpenClaw-only proxy). Default off preserves the
+    quiet-on-unrelated behavior."""
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location(
+        "vllm_proxy_under_test_unknown",
+        _REPO_ROOT / "scripts" / "proxy" / "vllm-proxy.py",
+    )
+    if spec is None or spec.loader is None:
+        pytest.skip("vllm-proxy.py not importable in this environment")
+    mod = _ilu.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as exc:
+        pytest.skip(f"vllm-proxy.py import failed: {exc}")
+
+    # Default off → unknown surface doesn't fire.
+    mod._TOOL_SURFACE_WARNED_PAIRS.clear()
+    mod._TOOL_SURFACE_EXPECTED = "code"
+    mod._TOOL_SURFACE_WARN_ON_UNKNOWN = False
+    body = {
+        "tools": [
+            {"type": "function", "function": {"name": "tree_draft_wrap_node"}},
+        ],
+    }
+    mod._check_tool_surface_drift(
+        path="/v1/chat/completions",
+        headers={},
+        body=body,
+        log_extra={},
+    )
+    assert len(mod._TOOL_SURFACE_WARNED_PAIRS) == 0  # quiet on unknown
+
+    # Opt-in on → unknown surface fires.
+    mod._TOOL_SURFACE_WARN_ON_UNKNOWN = True
+    mod._check_tool_surface_drift(
+        path="/v1/chat/completions",
+        headers={},
+        body=body,
+        log_extra={},
+    )
+    assert ("code", "unknown") in mod._TOOL_SURFACE_WARNED_PAIRS

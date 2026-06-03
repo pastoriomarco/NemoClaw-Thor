@@ -226,13 +226,28 @@ _LISTEN_PORT = 18790
 # - Session key: the bridge passes ``X-OpenClaw-Conversation`` /
 #   ``X-OpenClaw-Request`` headers in production; fall back to a
 #   process-lifetime "default" key when absent so probes still warn.
-# - Dedup: ``_TOOL_SURFACE_SEEN_SESSIONS`` set, bounded LRU. We warn
+# - Dedup: ``_TOOL_SURFACE_WARNED_PAIRS`` set (per (expected, observed)
+#   pair, globally for the proxy lifetime). The previous per-session
+#   dedup was changed to per-pair after empirical evidence (2026-06-03)
+#   that real OpenClaw → vLLM traffic carries no session header — the
+#   session-key would degenerate to a process sentinel and dedup would
+#   collapse to one warning total. See _check_tool_surface_drift. We warn
 #   the first time we see a session, then stay quiet — operators
 #   want signal, not a per-request flood.
 _TOOL_SURFACE_EXPECTED: str = ""  # "code" | "tools" | "" (disabled)
-_TOOL_SURFACE_SEEN_SESSIONS: collections.OrderedDict = None  # type: ignore[assignment]
-_TOOL_SURFACE_SESSIONS_MAX: int = 256
+# Dedup model (revised 2026-06-03): real OpenClaw traffic carries no
+# session header, so per-session dedup degenerates. We instead memo
+# the (expected, observed) pairs we have already warned on — see
+# _TOOL_SURFACE_WARNED_PAIRS defined below the helper functions.
 _TOOL_SURFACE_LOCK = threading.Lock()
+# When True, classifier="unknown" ALSO fires the drift warning. Off
+# by default so the proxy stays quiet on direct-lane traffic (where
+# tools[] is the real manyforge catalog, classified "unknown" from
+# the surface-detection perspective). Operators of OpenClaw-only
+# proxies can set OPENCLAW_PROXY_WARN_ON_UNKNOWN=true to catch
+# direct-lane drift or malformed-tool requests (external review
+# finding 4, 2026-06-03).
+_TOOL_SURFACE_WARN_ON_UNKNOWN: bool = False
 
 
 _CODE_MODE_TOOL_NAMES = frozenset({"tool_search_code"})
@@ -267,15 +282,23 @@ def _classify_tools_array(tools: object) -> str:
 
 
 def _tool_surface_session_key(headers: object, body: object) -> str:
-    """Stable per-session key for drift-check dedup.
+    """Best-effort session key for the audit log payload.
 
-    Prefers an OpenClaw-supplied conversation header if present;
-    falls back to a body-level conversation id; finally a process-
-    lifetime sentinel so probes still warn once.
+    Reality check (verified 2026-06-03 by inspecting real OpenClaw →
+    vLLM traffic): the OpenAI JS SDK that OpenClaw uses does NOT
+    forward a conversation/session header to vLLM. Headers present
+    are ``User-Agent: OpenAI/JS``, ``X-Stainless-*``, ``traceparent``,
+    ``Authorization`` — none stable per conversation. Body is the
+    plain ``/v1/chat/completions`` envelope with no session field.
+    So this function will return ``__no_session__`` for almost all
+    real traffic; the dedup logic below is now (expected, observed)-
+    pair based, NOT session-keyed, precisely because of this. The
+    session key is still recorded in the warning payload for any
+    test/probe context that DOES set a header.
     """
     if hasattr(headers, "get"):
         for h in ("X-OpenClaw-Conversation", "x-openclaw-conversation",
-                  "X-Request-ID", "x-request-id"):
+                  "X-Request-ID", "x-request-id", "traceparent"):
             v = headers.get(h)  # type: ignore[attr-defined]
             if v:
                 return str(v)
@@ -287,13 +310,33 @@ def _tool_surface_session_key(headers: object, body: object) -> str:
     return "__no_session__"
 
 
+# Module-level dedup memo: ``frozenset[(expected, observed)]``.
+# Operator misconfig (e.g. configured=code, observed=tools) is a
+# global condition — one warning is what the operator needs to
+# diagnose, not per-session repetition. This memo is reset on
+# proxy restart (a config change requires a restart, so the
+# operator sees the warning again if the misconfig persists).
+_TOOL_SURFACE_WARNED_PAIRS: set = set()
+
+
 def _check_tool_surface_drift(
     *, path: str, headers: object, body: object, log_extra: dict
 ) -> None:
-    """Emit a one-shot ``tool_surface_mismatch`` warning per session
-    if the observed tools[] surface does not match the operator's
-    configured ``OPENCLAW_PROXY_TOOL_SURFACE``. Cheap — runs on
-    every chat-completions but the dedup keeps the log clean."""
+    """Emit a ``tool_surface_mismatch`` warning ONCE per unique
+    (configured, observed) pair if the observed tools[] surface
+    does not match the operator's configured
+    ``OPENCLAW_PROXY_TOOL_SURFACE``.
+
+    Dedup model (revised 2026-06-03 after finding that real OpenClaw
+    traffic carries no session header — see _tool_surface_session_key
+    docstring): we warn ONCE PER UNIQUE (expected, observed) PAIR
+    for the proxy's lifetime. Operator misconfig is global. Tools
+    mode and code mode produce a single warning each if both fire.
+    A future build introducing a third surface produces one more.
+    No per-session repetition, no per-session flood.
+
+    Cheap (one set lookup per chat-completions).
+    """
     if not _TOOL_SURFACE_EXPECTED:
         return  # drift check disabled
     if not path.endswith("/v1/chat/completions"):
@@ -301,24 +344,20 @@ def _check_tool_surface_drift(
     if not isinstance(body, dict):
         return
     observed = _classify_tools_array(body.get("tools"))
-    if observed == "unknown":
-        # Probe with no recognizable surface — nothing to enforce.
+    if observed == "unknown" and not _TOOL_SURFACE_WARN_ON_UNKNOWN:
+        # Probe with no recognizable surface — nothing to enforce
+        # unless the operator opted into strict-unknown mode.
         return
     expected = _TOOL_SURFACE_EXPECTED
     if observed == expected:
         return
-    session = _tool_surface_session_key(headers, body)
-    # Dedup: warn once per session.
-    global _TOOL_SURFACE_SEEN_SESSIONS
+    pair = (expected, observed)
+    # Dedup: warn ONCE per (expected, observed) pair globally.
     with _TOOL_SURFACE_LOCK:
-        if _TOOL_SURFACE_SEEN_SESSIONS is None:
-            _TOOL_SURFACE_SEEN_SESSIONS = collections.OrderedDict()
-        if session in _TOOL_SURFACE_SEEN_SESSIONS:
-            _TOOL_SURFACE_SEEN_SESSIONS.move_to_end(session)
+        if pair in _TOOL_SURFACE_WARNED_PAIRS:
             return
-        _TOOL_SURFACE_SEEN_SESSIONS[session] = True
-        while len(_TOOL_SURFACE_SEEN_SESSIONS) > _TOOL_SURFACE_SESSIONS_MAX:
-            _TOOL_SURFACE_SEEN_SESSIONS.popitem(last=False)
+        _TOOL_SURFACE_WARNED_PAIRS.add(pair)
+    session = _tool_surface_session_key(headers, body)
     # Per the external-review suggestion: warning carries configured,
     # observed, request/session id, and exact observed tool names.
     observed_names = []
@@ -2122,7 +2161,7 @@ def main() -> None:
     global _OVERRIDE_MAX_TOKENS, _OVERRIDE_TOP_P
     global _USER_MESSAGE_SUFFIX, _USER_SUFFIX_FIRST_TURN_ONLY
     global _FORCE_ENABLE_THINKING, _THINKING_TOKEN_BUDGET
-    global _TOOL_SURFACE_EXPECTED
+    global _TOOL_SURFACE_EXPECTED, _TOOL_SURFACE_WARN_ON_UNKNOWN
 
     cfg = _resolve_config()
     parsed = urllib.parse.urlparse(cfg.upstream)
@@ -2162,6 +2201,12 @@ def main() -> None:
         )
         tool_surface_expected = ""
     _TOOL_SURFACE_EXPECTED = tool_surface_expected
+    _TOOL_SURFACE_WARN_ON_UNKNOWN = (
+        os.environ.get("OPENCLAW_PROXY_WARN_ON_UNKNOWN", "")
+        .strip()
+        .lower()
+        in ("1", "true", "yes", "on")
+    )
 
     # Truncate prior log so each session starts fresh; harness handles
     # offset-from-baseline anyway, but a clean file on launch is

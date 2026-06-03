@@ -415,6 +415,78 @@ def _reset_loop_history_for_tests() -> None:
     _loop_history.clear()
 
 
+async def _record_history_from_result(
+    *,
+    conv_key: tuple[str, str],
+    result_stdout: str,
+    use_gateway: bool,
+    payload: dict[str, Any],
+) -> int:
+    """Parse stdout for tool calls and append fingerprints to history.
+
+    Used on EVERY exit path that has captured stdout — success, nonzero
+    exit, and (eventually) partial-buffer paths — so the per-conversation
+    loop detector sees every observation, not just clean successes
+    (external review finding 2, 2026-06-03).
+
+    Defensively parses: if the stdout is malformed or empty, returns 0
+    and emits nothing. Never raises — the caller's error path proceeds
+    as before, just with the bonus of having captured what tool calls
+    the model attempted before the failure.
+
+    Note on timeout-path limitation: ``asyncio.wait_for`` cancels
+    ``proc.communicate()`` on timeout, which closes the pipes before we
+    can read the buffer. Genuinely-timed-out invocations therefore lose
+    their partial stdout and we cannot record what the model tried.
+    Switching to a streaming reader would unblock this; deferred to a
+    future refactor.
+
+    Returns the number of fingerprints appended (for tests + log
+    visibility).
+    """
+    if not result_stdout:
+        return 0
+    try:
+        if use_gateway:
+            response_json, _ = parse_chat_completions_response(result_stdout)
+            if not isinstance(response_json, dict):
+                return 0
+            tmp_body = normalize_chat_completions_response(
+                payload=payload,
+                response_json=response_json,
+                stdout=result_stdout,
+                stderr="",
+                parse_warnings=[],
+            )
+        else:
+            agent_json, _ = parse_openclaw_json(result_stdout)
+            if agent_json is None:
+                return 0
+            tmp_body = normalize_agent_response(
+                payload=payload,
+                agent_json=agent_json,
+                stdout=result_stdout,
+                stderr="",
+                parse_warnings=[],
+            )
+    except Exception:
+        # Best-effort: parse failures on the error path are not fatal.
+        return 0
+    if not isinstance(tmp_body, dict):
+        return 0
+    tool_calls = tmp_body.get("toolCalls")
+    if not isinstance(tool_calls, list):
+        return 0
+    fingerprints = [
+        fp for fp in (_fingerprint_tool_call(tc) for tc in tool_calls if isinstance(tc, dict))
+        if fp
+    ]
+    if not fingerprints:
+        return 0
+    await _loop_history_record(conv_key, fingerprints)
+    return len(fingerprints)
+
+
 app = FastAPI(
     title="ManyForge OpenClaw assistant-provider adapter",
     version="0.1.0",
@@ -1019,6 +1091,27 @@ async def assistant(request: Request) -> JSONResponse:
             f"OpenClaw agent exited with code {result.returncode}: "
             f"{(result.stderr or result.stdout)[:1000]}"
         )
+        # FIX (external review finding 2, 2026-06-03): record any tool
+        # calls the model produced before the nonzero exit into the
+        # per-conversation loop history. The model may have looped on a
+        # bad tool 3 times and THEN crashed — we want the next request to
+        # see those 3 attempts and fire same_args. Best-effort; parse
+        # failures don't block the error envelope return.
+        try:
+            recorded = await _record_history_from_result(
+                conv_key=loop_conv_key,
+                result_stdout=result.stdout or "",
+                use_gateway=cfg.use_gateway,
+                payload=payload,
+            )
+            if recorded:
+                _log_event(
+                    "openclaw_error_path_history_recorded",
+                    requestId=request_id,
+                    recordedFingerprints=recorded,
+                )
+        except Exception:
+            pass
         # Log the actual error so we can diagnose 502s without re-running.
         _log_event(
             "openclaw_request_exit_nonzero",
@@ -1081,7 +1174,10 @@ async def assistant(request: Request) -> JSONResponse:
         # handler can see what THIS conversation has called before.
         # This is the production path for FIX 5 — replaces the dead
         # ``payload.messages[]`` read with a live observation stream
-        # (external review finding 9, 2026-06-03).
+        # (external review finding 9, 2026-06-03). Same recording is
+        # also invoked from the nonzero-exit error path above
+        # (external review finding 2) so a loop that crashes the
+        # subprocess still populates history for the next request.
         fingerprints = [
             fp for fp in (_fingerprint_tool_call(tc) for tc in tool_calls if isinstance(tc, dict))
             if fp
