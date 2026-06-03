@@ -134,7 +134,7 @@ if [[ -z "${PRECHECK_HASH}" ]]; then
 fi
 ok "composer mode '${PRECHECK_MODE}' reachable (catalogHash: ${PRECHECK_HASH:0:16}…)"
 
-step "Step 1/5: apply lane presets (local-inference + manyforge-egress-shared + manyforge-openclaw overlay)"
+step "Step 1/5: apply lane presets (local-inference + manyforge-composer merged)"
 # REVISED 2026-06-03 per THREE-LANE-MIGRATION-PLAN route fix: keep
 # 'local-inference' active alongside the manyforge stack. Prior versions
 # of this script removed 'local-inference' on the assumption that the
@@ -144,52 +144,66 @@ step "Step 1/5: apply lane presets (local-inference + manyforge-egress-shared + 
 # proxy denies sandbox→host:8000 with `policy_denied` for chat-completion
 # POSTs.
 #
-# 2026-06-03 (EXTRA #5): the fused `manyforge-composer.preset.yaml`
-# (which contained network rules + binary subject whitelist for OpenClaw
-# binaries) is now split into two files:
-#   - manyforge-egress-shared.yaml: lane-agnostic network rules
-#   - manyforge-openclaw.overlay.yaml: OpenClaw lane subject whitelist
-# This script applies the split files in order — shared FIRST so the
-# overlay's subject rules attach to the right policy. The legacy fused
-# preset file remains in `policies/` for back-compat with older bring-up
-# but should no longer be referenced from new automation.
-SHARED_PRESET_PATH="${SCRIPT_DIR}/policies/manyforge-egress-shared.yaml"
-OPENCLAW_OVERLAY_PATH="${SCRIPT_DIR}/policies/manyforge-openclaw.overlay.yaml"
-# 2026-06-03: ALWAYS reapply the policies even if `policy-list` says
-# they're active. We observed today that the live sandbox showed only
-# `local-inference` active even though prior provisioning runs had
-# applied `manyforge-egress-shared` and `manyforge-openclaw-overlay`
-# — likely a race between policy-state cache and the OpenShell daemon's
-# active-policy view. The cost of re-applying is one no-op
-# `policy-add` (the daemon detects unchanged content and emits
-# "Policy unchanged"), so the safe choice is to ALWAYS apply.
-# The check-then-apply pattern was actively harmful: it skipped
-# the apply on a stale-cache hit, leaving the MCP bridge unable to
-# reach Composer because the route policy wasn't loaded, and the
-# operator never sees a clear error — just "Unknown tool id" from
-# the model and "policy_denied" deep in the gateway log.
+# 2026-06-03 (LATE-DAY): the split-file approach (shared FIRST, overlay
+# SECOND) is BROKEN by current `nemoclaw policy-add` semantics. Applying
+# the overlay does NOT additively merge the `network_policies.manyforge_composer`
+# block — it REPLACES the block, dropping the endpoints from the shared
+# preset and leaving only `binaries`. Result: the MCP bridge's proxy
+# request to host.openshell.internal:9000 returns HTTP 403 ("not permitted
+# by policy") and `bundle-mcp` logs "Request timed out" because the
+# tools/list handler can never fetch the mode manifest. Verified
+# end-to-end 2026-06-03 by reading `openshell policy get my-assistant
+# --full` after each apply step — endpoints present at v18 (shared only),
+# gone at v19 (overlay applied on top), present again at v20 with the
+# merged file. We now apply a SINGLE merged file that contains both the
+# endpoints AND the binary subject whitelist (including the versioned
+# Python interpreter `/usr/bin/python3.13` that `readlink /proc/<pid>/exe`
+# resolves to on the OpenShell `my-assistant` base image — the un-versioned
+# `/usr/bin/python3` symlink alone does NOT satisfy the policy enforcer).
+# The split files remain in `policies/` for documentation and Hermes-lane
+# composition; bring-up uses the merged file as the source of truth.
+MERGED_PRESET_PATH="${SCRIPT_DIR}/policies/manyforge-composer.merged.yaml"
+# ALWAYS reapply (no policy-list check). The daemon detects unchanged
+# content and emits "Policy unchanged" if at the latest version, otherwise
+# it loads the new version. Both outcomes are safe. Skipping based on
+# `policy-list` output is actively harmful — we observed today that the
+# live sandbox sometimes shows the preset as active (●) while the actual
+# loaded policy has stale or partial rules; only a fresh apply guarantees
+# the merge order is correct.
 if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*local-inference"; then
   ok "preset 'local-inference' already applied"
 else
   nemoclaw "${SANDBOX}" policy-add local-inference --yes
   ok "preset 'local-inference' applied"
 fi
-nemoclaw "${SANDBOX}" policy-add --from-file "${SHARED_PRESET_PATH}" --yes 2>&1 | tail -2 | sed 's/^/    /'
-ok "preset 'manyforge-egress-shared' applied (or already at latest version)"
-# Same logic as the shared preset: ALWAYS reapply. The daemon
-# detects content unchanged and emits "Policy unchanged" if at the
-# latest version, otherwise it loads the new version. Both outcomes
-# are safe; skipping based on policy-list output is not (see comment
-# above).
-nemoclaw "${SANDBOX}" policy-add --from-file "${OPENCLAW_OVERLAY_PATH}" --yes 2>&1 | tail -2 | sed 's/^/    /'
-ok "overlay 'manyforge-openclaw-overlay' applied (or already at latest version)"
-# Remove the legacy fused preset if it's still active so we don't have
-# duplicate rules competing. Skip silently if not present.
-if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-composer"; then
-  nemoclaw "${SANDBOX}" policy-remove manyforge-composer --yes 2>/dev/null \
-    && ok "legacy fused preset 'manyforge-composer' removed (split files now active)" \
-    || echo "    WARN: legacy 'manyforge-composer' preset still present; remove manually if needed"
+nemoclaw "${SANDBOX}" policy-add --from-file "${MERGED_PRESET_PATH}" --yes 2>&1 | tail -2 | sed 's/^/    /'
+ok "preset 'manyforge-composer-merged' applied (or already at latest version)"
+# Verify the merged policy actually carries both port-9000 endpoints and
+# the python3.13 binary. If either is missing the merge failed silently
+# and the bridge will fail to register its catalog; fail loudly here
+# rather than leave the operator chasing a "Unknown tool id" error.
+ACTIVE_POLICY="$(openshell policy get "${SANDBOX}" --full 2>/dev/null || true)"
+if ! echo "${ACTIVE_POLICY}" | grep -q "port: 9000"; then
+  echo "    ERROR: active policy missing port:9000 endpoint after merged-preset apply"
+  echo "    Run 'openshell policy get ${SANDBOX} --full' to inspect"
+  exit 1
 fi
+if ! echo "${ACTIVE_POLICY}" | grep -q "/usr/bin/python3.13"; then
+  echo "    ERROR: active policy missing /usr/bin/python3.13 binary subject"
+  echo "    Bridge subprocess exe will not match policy and proxy will return 403"
+  exit 1
+fi
+ok "active policy verified: port:9000 endpoints + /usr/bin/python3.13 subject present"
+# Remove the legacy split overlay if it's still applied — its presence
+# would re-trigger the overwrite-bug on the next bring-up because the
+# CLI replays applied presets in the order they were added.
+for legacy in manyforge-egress-shared manyforge-openclaw-overlay manyforge-composer; do
+  if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*${legacy}\b"; then
+    nemoclaw "${SANDBOX}" policy-remove "${legacy}" --yes 2>/dev/null \
+      && ok "legacy preset '${legacy}' removed (merged preset now authoritative)" \
+      || echo "    WARN: legacy preset '${legacy}' still present; remove manually"
+  fi
+done
 
 step "Step 1b: patch openclaw.json inference baseUrl to bypass inference.local"
 # REVISED 2026-06-03 per THREE-LANE-MIGRATION-PLAN route fix. The
@@ -357,33 +371,36 @@ MCP_PRINCIPAL="${MANYFORGE_PRINCIPAL:-openclaw-${SANDBOX}}"
 #     that proxy enforces the local-inference policy preset and the
 #     manyforge-egress-shared preset, which together allow the route.
 #   - For MCP traffic to host.openshell.internal:9000 (Composer's
-#     mode-scoped /api/assistant/...) the proxy returns 403
-#     "policy_denied" because no preset whitelists that route. We MUST
-#     bypass the proxy for this host to reach Composer at all.
+#     mode-scoped /api/assistant/...) the bridge MUST route through
+#     the same proxy. The OpenClaw gateway spawns the MCP bridge in
+#     an isolated network namespace; direct TCP to 172.18.0.1 (which
+#     host.openshell.internal resolves to) times out because that
+#     gateway IP is unreachable from the bridge's netns. The only
+#     network path back to Composer is via the OpenShell egress
+#     proxy at 10.200.0.1:3128. That proxy will allow the route iff
+#     the `manyforge_composer` policy block carries the port-9000
+#     endpoints AND the bridge's exe path (/usr/bin/python3.13 on
+#     the current my-assistant base image) is in its binaries list.
+#     Both are enforced by the merged preset applied in Step 1.
 #
-# Empirical confirmation 2026-06-03 from the live sandbox:
-#   curl WITHOUT host.openshell.internal in NO_PROXY → HTTP 403
-#     {"detail":"GET host.openshell.internal:9000/... not permitted by
-#      policy","error":"policy_denied"}
-#   curl WITH host.openshell.internal in NO_PROXY → HTTP 200, returns
-#     the full manyforge mode catalog as expected.
-#
-# Without this NO_PROXY entry the OpenClaw bundle-mcp spawner logs
-# `failed to start server "manyforge" ... HTTP 403` and the model sees
-# tool-search return "cataloged 1 tools" (only the OpenClaw core tools)
-# — every `tool_call("tree_draft_*", ...)` then fails with
-# "Unknown tool id" because the manyforge catalog never registered.
-# The MODEL is innocent; the MCP bridge never reached Composer.
+# Earlier setup-script revisions DEFENSIVELY appended
+# host.openshell.internal to NO_PROXY on the assumption that a direct
+# connection was available. That assumption is WRONG for the OpenClaw
+# MCP child — adding it makes urllib bypass the proxy, then the
+# bridge hangs on `tools/list` for the full REQUEST_TIMEOUT because
+# the TCP connect to 172.18.0.1 silently times out, after which the
+# gateway logs the misleading `MCP error -32001: Request timed out`.
+# Verified end-to-end 2026-06-03 from the bridge's own trace file
+# (MANYFORGE_MCP_TRACE) on three back-to-back boots.
 HTTP_PROXY_VAL="${HTTP_PROXY:-${http_proxy:-http://10.200.0.1:3128}}"
-# CRITICAL: include host.openshell.internal so the manyforge MCP
-# bridge can reach Composer's mode endpoint without going through the
-# OpenShell egress proxy (which denies the route by policy).
-NO_PROXY_VAL="${NO_PROXY:-${no_proxy:-127.0.0.1,localhost,::1,host.openshell.internal}}"
-# Defensive: append host.openshell.internal if an inherited env had it
-# missing. Operators sometimes export a stricter NO_PROXY upstream.
-if [[ "${NO_PROXY_VAL}" != *"host.openshell.internal"* ]]; then
-    NO_PROXY_VAL="${NO_PROXY_VAL},host.openshell.internal"
-fi
+# Loopback hosts ONLY in NO_PROXY. The bridge must reach Composer at
+# host.openshell.internal:9000 via the OpenShell egress proxy — the
+# isolated netns has no other route.
+NO_PROXY_VAL="${NO_PROXY:-${no_proxy:-127.0.0.1,localhost,::1}}"
+# Defensive: STRIP host.openshell.internal if an inherited env added
+# it. Operators carrying a stale NO_PROXY from the old setup would
+# otherwise break the bridge (see comment block above).
+NO_PROXY_VAL="$(echo "${NO_PROXY_VAL}" | sed -E 's/,?host\.openshell\.internal//g; s/^,//; s/,$//')"
 MCP_CONFIG_JSON=$(cat <<JSON
 {"command":"python3","args":["${MCP_BRIDGE_PATH}"],"env":{"MANYFORGE_COMPOSER_BASE":"${COMPOSER_BASE}","MANYFORGE_ASSISTANT_MODE":"${ASSISTANT_MODE}","MANYFORGE_PRINCIPAL":"${MCP_PRINCIPAL}","HTTP_PROXY":"${HTTP_PROXY_VAL}","HTTPS_PROXY":"${HTTP_PROXY_VAL}","NO_PROXY":"${NO_PROXY_VAL}","http_proxy":"${HTTP_PROXY_VAL}","https_proxy":"${HTTP_PROXY_VAL}","no_proxy":"${NO_PROXY_VAL}"}}
 JSON

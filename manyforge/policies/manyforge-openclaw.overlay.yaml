@@ -13,6 +13,18 @@ preset:
     contributes the ``binaries`` block onto the same policy name.
     OpenShell merges them additively into one effective policy.
 
+    OpenShell's policy enforcer matches the binary by *resolved* exe
+    path (``readlink /proc/<pid>/exe``), not the symlink the spawn
+    command used. The MCP bridge is launched as ``python3 bridge.py``,
+    but the kernel records the underlying interpreter (currently
+    ``/usr/bin/python3.13`` on the OpenShell ``my-assistant`` base
+    image — verified 2026-06-03 by reading /proc/<bridge-pid>/exe).
+    Without an entry for the versioned binary, the proxy denies the
+    bridge's egress to ``host.openshell.internal:9000`` with HTTP 403
+    and the MCP catalog never registers. We list both the symlink
+    (forwards-compatibility for any spawn path that records it) and
+    every Python interpreter we have actually observed in production.
+
 network_policies:
   manyforge_composer:
     name: manyforge_composer
@@ -20,3 +32,6 @@ network_policies:
       - path: /usr/local/bin/openclaw
       - path: /usr/local/bin/node
       - path: /usr/bin/python3
+      - path: /usr/bin/python3.11
+      - path: /usr/bin/python3.12
+      - path: /usr/bin/python3.13

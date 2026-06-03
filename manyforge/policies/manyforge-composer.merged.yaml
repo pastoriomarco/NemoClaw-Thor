@@ -1,0 +1,60 @@
+preset:
+  name: manyforge-composer-merged
+  description: |
+    Merged manyforge_composer policy combining the shared egress rules
+    (port 9000 endpoints) with the OpenClaw lane binary whitelist
+    (openclaw + node + python3 family). Applied as a single preset
+    because nemoclaw policy-add REPLACES a policy block rather than
+    merging additively when the same `network_policies.<name>` key is
+    re-applied. Verified 2026-06-03 — applying egress-shared then
+    overlay separately dropped the endpoints from the final policy.
+
+network_policies:
+  manyforge_composer:
+    name: manyforge_composer
+    endpoints:
+      - host: host.openshell.internal
+        port: 9000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow: { method: GET,  path: /api/mcp }
+          - allow: { method: POST, path: /api/mcp }
+          - allow: { method: GET,  path: /api/mcp/sse }
+          - allow: { method: POST, path: /api/mcp/sse }
+          - allow: { method: GET,  path: /api/assistant/modes/** }
+          - allow: { method: POST, path: /api/assistant/bridge/tools/** }
+      - host: host.openshell.internal
+        port: 8000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow: { method: GET,  path: /v1/models }
+          - allow: { method: POST, path: /v1/chat/completions }
+          - allow: { method: POST, path: /v1/completions }
+          - allow: { method: POST, path: /v1/embeddings }
+      - host: host.openshell.internal
+        port: 8002
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow: { method: GET,  path: /v1/models }
+          - allow: { method: POST, path: /v1/chat/completions }
+          - allow: { method: POST, path: /v1/completions }
+          - allow: { method: POST, path: /v1/embeddings }
+    binaries:
+      - path: /usr/local/bin/openclaw
+      - path: /usr/local/bin/node
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.11
+      - path: /usr/bin/python3.12
+      - path: /usr/bin/python3.13

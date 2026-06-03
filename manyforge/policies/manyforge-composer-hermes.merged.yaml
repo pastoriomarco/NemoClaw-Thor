@@ -1,0 +1,86 @@
+preset:
+  name: manyforge-composer-hermes-merged
+  description: |
+    Hermes-lane equivalent of manyforge-composer.merged.yaml. Carries the
+    same manyforge_composer endpoints (host.openshell.internal:9000 for
+    Composer's MCP/mode/bridge surface; :8000 for vLLM; :8002 for the
+    debug logging proxy) and swaps the binary subject list for what the
+    Hermes daemon actually spawns:
+
+      - /usr/local/bin/hermes  — Hermes daemon itself, the parent of the
+        MCP bridge subprocess on this lane
+      - /usr/bin/python3       — symlink, included for forwards-compat
+                                 with spawn paths that record the link
+      - /usr/bin/python3.{11,12,13} — the resolved interpreters we have
+        actually observed in production. OpenShell's policy enforcer
+        matches binaries by `readlink /proc/<pid>/exe`, so without the
+        versioned entry the bridge's outbound HTTP to Composer gets a
+        403 ("not permitted by policy") and the MCP catalog never
+        registers.
+
+    Applied as a SINGLE merged file because nemoclaw policy-add does NOT
+    additively merge same-keyed `network_policies.<name>` blocks — it
+    REPLACES them. Verified 2026-06-03 on the OpenClaw lane: applying
+    manyforge-egress-shared.yaml then manyforge-openclaw.overlay.yaml
+    produced a policy with only the overlay's binaries block, dropping
+    the shared file's port-9000 endpoints. The OpenClaw lane's
+    `manyforge-composer.merged.yaml` was created to fix this; this
+    Hermes file mirrors it preemptively so the Phase 4 bring-up does
+    not have to re-derive the same fix.
+
+    NOTE: Hermes spawns the MCP bridge via stdio (config in
+    `lanes/hermes/mcp_servers_config.yaml`). The bridge then routes its
+    outbound HTTP through the OpenShell proxy at 10.200.0.1:3128 —
+    NO_PROXY in the bridge env must be loopback-only (do NOT add
+    host.openshell.internal). Same reason as the OpenClaw lane: the
+    bridge runs in an isolated network namespace where direct TCP to
+    172.18.0.1 (the host gateway) times out.
+
+network_policies:
+  manyforge_composer:
+    name: manyforge_composer
+    endpoints:
+      - host: host.openshell.internal
+        port: 9000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow: { method: GET,  path: /api/mcp }
+          - allow: { method: POST, path: /api/mcp }
+          - allow: { method: GET,  path: /api/mcp/sse }
+          - allow: { method: POST, path: /api/mcp/sse }
+          - allow: { method: GET,  path: /api/assistant/modes/** }
+          - allow: { method: POST, path: /api/assistant/bridge/tools/** }
+      - host: host.openshell.internal
+        port: 8000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow: { method: GET,  path: /v1/models }
+          - allow: { method: POST, path: /v1/chat/completions }
+          - allow: { method: POST, path: /v1/completions }
+          - allow: { method: POST, path: /v1/embeddings }
+      - host: host.openshell.internal
+        port: 8002
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow: { method: GET,  path: /v1/models }
+          - allow: { method: POST, path: /v1/chat/completions }
+          - allow: { method: POST, path: /v1/completions }
+          - allow: { method: POST, path: /v1/embeddings }
+    binaries:
+      - path: /usr/local/bin/hermes
+      - path: /usr/bin/python3
+      - path: /usr/bin/python3.11
+      - path: /usr/bin/python3.12
+      - path: /usr/bin/python3.13

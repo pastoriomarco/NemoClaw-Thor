@@ -7,6 +7,8 @@
 > **Revised 2026-06-02 (rev. 3)** after second external review: stale contradictions cleaned up (principle #2 wording, §3 findings, §7 target layout for `policies/` and the MCP-integration doc cross-reference, §13 timeline/question counts); new **Phase 0.5 Hermes contract spike** added to de-risk the Hermes lane before the big refactor by probing `mcp_servers` injection, both session APIs, and the vLLM tool-call parser end-to-end; the `mcp_servers.manyforge` config snippet in §5.3 expanded to include `MANYFORGE_LANE`/`MANYFORGE_PRINCIPAL`/`MANYFORGE_ASSISTANT_MODE`/`MANYFORGE_ALLOWED_TOOLS_FILE` + outbound proxy envs; an explicit **lane-neutralization task for `manyforge-mcp-bridge.py`** in Phase 1 (it has OpenClaw defaults baked in today); Phase 1 marked as a **behavior-preserving refactor** with no concurrent OpenClaw native/plugin behavior changes; Hermes progress observer documented as **best-effort augmentation**, with composer bridge-tools callbacks as the hard correctness source.
 >
 > **Revised 2026-06-02 (rev. 4)** after verifying gaps in test/verification coverage and documentation discipline: **Phase 0 expanded** with 5 Direct-lane probes + 5 OpenClaw-lane probes mirroring Phase 0.5's shape, so all three lanes get explicit pre-refactor validation; **every phase now lists explicit documentation deliverables** as part of its gate (per-lane bring-up runbook sections, package READMEs, lane-comparison numbers rows, phase-specific result docs) — documentation is no longer an afterthought; new **load-bearing principle #4** added requiring `manyforge_specs` adherence before any modification to manyforge code, with per-phase specs-check sub-sections in Phase 1 (envelope/MCP wrapper/catalog hash), Phase 2 (cross-workspace bridge location), and Phase 5 (composer lane router contract). Total time bumps to 17-23 working days.
+>
+> **Revised 2026-06-03 (rev. 5)** after debugging the OpenClaw lane to first green smoke: §4.6 **split-policy guidance retracted** — `nemoclaw policy-add` REPLACES same-keyed `network_policies.<name>` blocks rather than additively merging, so applying `manyforge-egress-shared.yaml` then `manyforge-openclaw.overlay.yaml` silently dropped the port-9000 endpoints. The corrected shape is one merged file per lane (`policies/manyforge-composer.merged.yaml` for OpenClaw, `policies/manyforge-composer-hermes.merged.yaml` for Hermes), each carrying both endpoints AND binary subjects. Two additional findings folded into §4.6: (a) the MCP bridge runs in an isolated network namespace — direct TCP to `host.openshell.internal` times out, so `NO_PROXY` must list loopback only and the bridge must route through the OpenShell proxy at `10.200.0.1:3128`; (b) OpenShell's policy enforcer matches binary subjects by *resolved* exe path, so the whitelist must include `/usr/bin/python3.13` (or whichever versioned interpreter `readlink /proc/<pid>/exe` produces on the active base image), not only the `/usr/bin/python3` symlink. `setup-manyforge-assistant.sh` now applies the merged file with hard-fail post-apply verification on both invariants. End-to-end validated: 3/3 P-series smoke cases (P1 228s / P2 69s / P3 148s) on qwen3.6-35b-a3b-nvfp4 via OpenClaw tools-mode.
 
 ## TL;DR
 
@@ -99,18 +101,22 @@ The `SessionPolicy` config is per-lane and lives in `manyforge/lanes/<lane>/poli
 
 The three two-lane A/B harnesses (`ab-direct-vs-openclaw.py`, `lane-3x3-smoke.py`, `lane-parity-diff.py`) collapse into one parametric `scripts/debug/compare_lanes.py --lanes direct,openclaw,hermes`. Same corpus, three lane runs, side-by-side report.
 
-### 4.6 Policy preset — shared rules + per-lane binary overlays
+### 4.6 Policy preset — one merged file per lane (revised 2026-06-03)
 
 A single preset is unsafe. The current `policies/manyforge-composer.preset.yaml` whitelists `/usr/local/bin/openclaw`, Node, and Python — OpenClaw-shaped subjects. Hermes' `policy-additions.yaml` whitelists Hermes/Python and currently lacks Composer port 9000 egress. Mixing them would either grant OpenClaw to a Hermes sandbox or strand Hermes without composer access.
 
-The correct shape:
+Rev. 2 of this plan proposed splitting into a shared `manyforge-egress-shared.yaml` plus a per-lane `*.overlay.yaml`, with sandbox setup scripts applying both at onboarding. **That shape does NOT work with current `nemoclaw policy-add` semantics — `policy-add` REPLACES same-keyed `network_policies.<name>` blocks rather than merging additively.** Applying `manyforge-egress-shared.yaml` then `manyforge-openclaw.overlay.yaml` produced a final policy with only the overlay's `binaries:` block — the shared file's port-9000 endpoints were silently dropped. The MCP bridge's proxy request to `host.openshell.internal:9000/api/assistant/modes/composer-assistant` returned HTTP 403 ("not permitted by policy"); OpenClaw's `bundle-mcp` logged "Request timed out" because the bridge's `tools/list` handler never received the mode manifest; the model saw "cataloged 1 tools" (OpenClaw core only) and every `tool_call(...)` failed with "Unknown tool id". Confirmed end-to-end 2026-06-03 by reading `openshell policy get my-assistant --full` after each apply step (versions 18 / 19 / 20).
 
-- **`policies/manyforge-egress-shared.yaml`** (new) — egress rules only: allow `host.openshell.internal:9000` (composer) and `host.openshell.internal:8000` (vLLM proxy). Consumed by every sandbox lane. No subject (binary) whitelists.
-- **`policies/manyforge-openclaw.overlay.yaml`** (renamed from current preset, stripped) — adds the OpenClaw-specific binary whitelist (`/usr/local/bin/openclaw`, Node, Python) on top of the shared egress rules.
-- **`policies/manyforge-hermes.overlay.yaml`** (new) — adds the Hermes-specific binary whitelist (`/usr/local/bin/hermes`, Python) plus any Nous Portal broker egress if we enable managed-tool gateways.
+The correct shape (revised):
+
+- **`policies/manyforge-composer.merged.yaml`** — the OpenClaw lane's single source of truth. Contains BOTH the egress endpoints (host.openshell.internal:9000 for `/api/mcp`, `/api/mcp/sse`, `/api/assistant/modes/**`, `/api/assistant/bridge/tools/**`; host.openshell.internal:8000 for vLLM `/v1/*`) AND the binary subject whitelist (`/usr/local/bin/openclaw`, `/usr/local/bin/node`, `/usr/bin/python3`, plus every Python interpreter the bridge has actually been observed to resolve to — currently `/usr/bin/python3.11/12/13`). Applied by `setup-manyforge-assistant.sh` with hard-fail post-apply verification that the active policy contains both `port: 9000` and `/usr/bin/python3.13`.
+- **`policies/manyforge-composer-hermes.merged.yaml`** (Phase 4, same shape) — Hermes lane equivalent. Endpoints identical to the OpenClaw file; binaries swap OpenClaw/Node for `/usr/local/bin/hermes` (and any Hermes-specific egress, e.g. Nous Portal broker, if Phase 4 enables managed-tool gateways).
+- **`policies/manyforge-egress-shared.yaml` + `policies/manyforge-{openclaw,hermes}.overlay.yaml`** — kept in `policies/` as documentation of the conceptual decomposition (endpoints vs. binary subjects) and as source material for the merged files. They are NOT applied at onboarding. A future `nemoclaw policy-add` that grows additive-merge semantics could re-enable the split-apply path; until then the merged file is authoritative.
 - **Direct lane** is host-side, no sandbox, no preset needed.
 
-Sandbox setup scripts apply `shared + <lane>.overlay` together at onboarding.
+**Why `/usr/bin/python3.13` specifically.** OpenShell's policy enforcer matches binary subjects by *resolved* exe path (`readlink /proc/<pid>/exe`), not the symlink the spawn command used. The MCP bridge launches as `python3 bridge.py`, but the kernel records the underlying interpreter — currently `/usr/bin/python3.13` on the OpenShell `my-assistant` base image. Without the versioned entry, the proxy denies the bridge's egress and the MCP catalog never registers. The merged file lists both the symlink (forwards-compatibility for any spawn path that records it) and every interpreter we have actually observed in production.
+
+**Why the bridge must route through the proxy at all.** OpenClaw spawns the MCP bridge in an isolated network namespace. Direct TCP from inside that netns to `host.openshell.internal` (which resolves to `172.18.0.1` — the Docker bridge gateway) times out — that IP is not reachable from the netns. The only path back to Composer is via OpenShell's egress proxy at `10.200.0.1:3128`, which is reachable. Hence `NO_PROXY` in the bridge env must cover loopback only — adding `host.openshell.internal` to it sends urllib down the direct-connect path and the bridge hangs on `tools/list` for the full `MANYFORGE_REQUEST_TIMEOUT` window.
 
 ### 4.7 Observability
 
@@ -273,9 +279,11 @@ NemoClaw-Thor/manyforge/
 │   └── launch.sh                    # UPDATED — handle ASSISTANT_PROVIDER ∈ {direct, openclaw, hermes}
 │
 ├── policies/
-│   ├── manyforge-egress-shared.yaml       # SHARED — egress rules only (host 9000 + 8000)
-│   ├── manyforge-openclaw.overlay.yaml    # OpenClaw subject whitelist (openclaw/Node/Python)
-│   └── manyforge-hermes.overlay.yaml      # Hermes subject whitelist (hermes/Python) + Nous Portal egress if enabled
+│   ├── manyforge-composer.merged.yaml         # OpenClaw lane — APPLIED at onboarding (endpoints + binaries incl. python3.13)
+│   ├── manyforge-composer-hermes.merged.yaml  # Hermes lane — APPLIED at onboarding (Phase 4; same shape, hermes binary)
+│   ├── manyforge-egress-shared.yaml           # documentation / source material — NOT applied (see §4.6 rev. 3)
+│   ├── manyforge-openclaw.overlay.yaml        # documentation / source material — NOT applied
+│   └── manyforge-hermes.overlay.yaml          # documentation / source material — NOT applied
 │
 └── docs/
     ├── THREE-LANE-MIGRATION-PLAN.md  # this file
@@ -351,7 +359,7 @@ Each phase ends with an explicit pass/fail gate. No phase chains into the next w
 - Delete the projection mirror in `dev_ws/manyforge_assistant_bridge/bridge.py` and have it import from the new package.
 - **Add explicit lane registry to Composer + launcher.** Today Composer's `build_assistant_provider()` ([assistant_provider.py:614](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_provider.py#L614)) only knows `nemoclaw`/`openclaw`; the launcher's [assistant.sh:74](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/lib/assistant.sh#L74) falls back to Direct for unknown providers. Introduce `LANE_REGISTRY` keyed by provider id with `(bridge_endpoint, default_port, transport_class)` entries for `direct`, `openclaw`, and `hermes` (Hermes entry inert until Phase 4 wires it). Eliminates the "unknown provider falls back silently" foot-gun before bridge code moves.
 - Rename `OPENCLAW_PROXY_*` env vars to `MANYFORGE_PROXY_*` with deprecated aliases.
-- Split `policies/manyforge-composer.preset.yaml` into shared egress + OpenClaw overlay (per §4.6).
+- Merge `policies/manyforge-composer.preset.yaml` into `policies/manyforge-composer.merged.yaml` (single applied file containing both endpoints and the binary subject whitelist incl. `/usr/bin/python3.13`). Retain the `egress-shared` + `<lane>.overlay` files as documentation of the conceptual split — per §4.6 rev. 3, `policy-add` does not additively merge same-keyed blocks, so applying them separately drops the endpoints.
 - **Lane-neutralize `manyforge-mcp-bridge.py`.** Six concrete changes (verified against the current script). Reference implementation for the top-level constants:
 
   ```python
@@ -397,7 +405,7 @@ Each phase ends with an explicit pass/fail gate. No phase chains into the next w
 ### Phase 4 — Hermes lane bring-up (5-7 days)
 
 **Work.**
-- Spin up Hermes in a fresh sandbox. Apply `shared + hermes.overlay` policy. Provision `API_SERVER_KEY` via NemoClaw secret-store path (TBD Q6).
+- Spin up Hermes in a fresh sandbox. Apply `policies/manyforge-composer-hermes.merged.yaml` (single merged file — see §4.6 rev. 3). Provision `API_SERVER_KEY` via NemoClaw secret-store path (TBD Q6).
 - Emit `mcp_servers.manyforge` into Hermes config (fork or NemoClaw-Thor overlay on `hermes-config.ts`). Confirm Hermes discovers manyforge MCP tools at startup (Hermes will prefix them as `mcp_manyforge_<tool>`).
 - **Probe**: confirm `--tool-call-parser hermes` on vLLM 0.x produces OpenAI structured `tool_calls[]` for cosmos-reason2-8b — 5-case probe (open question Q3). If not, fall back to default parser + verify Hermes still consumes the catalog correctly.
 - **Probe**: decide between `/api/sessions/{id}/chat` and `/v1/runs` based on streaming + cancellation + session-key behavior — 3-case probe.
@@ -405,7 +413,7 @@ Each phase ends with an explicit pass/fail gate. No phase chains into the next w
 - Run per-turn smoke corpus through Hermes lane with memory disabled for parity comparison against the other two lanes.
 - Run the **longitudinal harness** (Section 9) with memory + skills + cron + todo + delegation enabled — the Hermes-native bake-off.
 
-**Gate.** Per-turn smoke ≥40/66 with memory disabled (Hermes is not optimized for stateless turns; sanity floor only). Longitudinal harness shows measurable session-over-session improvement OR explicit "no improvement" finding documented with diagnosis. **Documentation deliverables**: (a) `setup-hermes.sh` script that takes a clean host to a working Hermes lane (provisions sandbox, applies shared + hermes overlay policies, emits `mcp_servers.manyforge`, sets `API_SERVER_KEY`); (b) new "Hermes lane bring-up" section in [COMPOSER-ASSISTANT-RUNBOOK.md](./COMPOSER-ASSISTANT-RUNBOOK.md); (c) new "Hermes mcp_servers" section in [MANYFORGE-MCP-INTEGRATION.md](./MANYFORGE-MCP-INTEGRATION.md) covering the config emission strategy chosen for Q7 (fork / overlay / direct config write); (d) `LANE-COMPARISON-three-lane.md` Hermes row populated with both per-turn (memory off) and longitudinal (memory on) numbers; (e) `docs/PHASE-4-HERMES-LONGITUDINAL.md` documenting the longitudinal corpus design + measured skill emergences, memory hit-rates, and turns-to-completion across the session sequence. **Go = proceed to Phase 5.**
+**Gate.** Per-turn smoke ≥40/66 with memory disabled (Hermes is not optimized for stateless turns; sanity floor only). Longitudinal harness shows measurable session-over-session improvement OR explicit "no improvement" finding documented with diagnosis. **Documentation deliverables**: (a) `setup-hermes.sh` script that takes a clean host to a working Hermes lane (provisions sandbox, applies `manyforge-composer-hermes.merged.yaml` with post-apply verification, emits `mcp_servers.manyforge`, sets `API_SERVER_KEY`); (b) new "Hermes lane bring-up" section in [COMPOSER-ASSISTANT-RUNBOOK.md](./COMPOSER-ASSISTANT-RUNBOOK.md); (c) new "Hermes mcp_servers" section in [MANYFORGE-MCP-INTEGRATION.md](./MANYFORGE-MCP-INTEGRATION.md) covering the config emission strategy chosen for Q7 (fork / overlay / direct config write); (d) `LANE-COMPARISON-three-lane.md` Hermes row populated with both per-turn (memory off) and longitudinal (memory on) numbers; (e) `docs/PHASE-4-HERMES-LONGITUDINAL.md` documenting the longitudinal corpus design + measured skill emergences, memory hit-rates, and turns-to-completion across the session sequence. **Go = proceed to Phase 5.**
 
 ### Phase 5 — Lane routing + production decision (2-3 days)
 
