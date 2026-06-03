@@ -35,6 +35,74 @@ ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
 
 ---
 
+## Three-lane bring-up (THREE-LANE-MIGRATION-PLAN.md Phase 2/3/4)
+
+### Direct lane (`ASSISTANT_PROVIDER=nemoclaw`)
+
+Canonical bring-up via the launcher:
+
+```bash
+cd $HOME/workspaces/dev_ws/src/manyforge
+ASSISTANT_PROVIDER=nemoclaw \
+  THOR_VLLM_PORT=8050 THOR_RESTART_PROXY=0 MANYFORGE_NON_INTERACTIVE=1 \
+  ./scripts/launch.sh start --lane manyforge-only --assistant on \
+  --scenario ur10e-scene-authoring --non-interactive --yes
+```
+
+Brings up composer (:9000), vLLM (:8050), vllm-proxy (:8000), direct
+bridge (:8100). The shared core (`manyforge.common.projection`) is
+auto-imported by the bridge when `MANYFORGE_THOR_ROOT` points at the
+NemoClaw-Thor checkout (defaults to
+`/home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge`).
+
+Diagnostic helper: `./scripts/setup-direct.sh` walks the six gates
+(vLLM → proxy → composer → bridge venv → shared core → bridge healthz)
+and reports the first that fails.
+
+Baseline on cosmos-reason2-8b: **28/66 effective** (Phase 0 D-1; see
+[PHASE-0-LANE-BASELINE.md](./PHASE-0-LANE-BASELINE.md)). Failure
+pattern: `args_contain[...] got '<MISSING>'` — cosmos calls the right
+tool but doesn't fill arguments.
+
+### OpenClaw lane (`ASSISTANT_PROVIDER=openclaw`)
+
+Canonical bring-up (after a clean sandbox onboard):
+
+```bash
+# 1. Onboard a fresh sandbox with restricted policy + local-inference preset.
+NEMOCLAW_PROVIDER=custom \
+  NEMOCLAW_ENDPOINT_URL=http://127.0.0.1:8000/v1 \
+  NEMOCLAW_MODEL=cosmos-reason2-8b \
+  NEMOCLAW_PROVIDER_KEY=dummy \
+  NEMOCLAW_POLICY_TIER=restricted \
+  NEMOCLAW_POLICY_PRESETS=local-inference \
+  nemoclaw onboard --non-interactive --yes --fresh --name my-assistant \
+                   --recreate-sandbox --yes-i-accept-third-party-software
+
+# 2. Setup the manyforge layer (skill, MCP server, agent profile).
+$HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
+
+# 3. Bring up via launcher.
+cd $HOME/workspaces/dev_ws/src/manyforge
+ASSISTANT_PROVIDER=openclaw \
+  THOR_VLLM_PORT=8050 THOR_RESTART_PROXY=0 MANYFORGE_NON_INTERACTIVE=1 \
+  ./scripts/launch.sh start --lane manyforge-only --assistant on \
+  --scenario ur10e-scene-authoring --non-interactive --yes
+```
+
+iter-32 production baseline: **51/66 effective** on cosmos-reason2-8b
+with the chain-on recipe (bridge fires `/compact` every 2 prompts).
+
+### Hermes lane (`ASSISTANT_PROVIDER=hermes`) — Phase 4
+
+Inert until Phase 4 lands. The launcher rejects `ASSISTANT_PROVIDER=hermes`
+unless `HERMES_LANE_PHASE4_ENABLED=true` is also set, surfacing the
+gap clearly instead of falling back to Direct (the pre-Phase-1
+foot-gun). Composer-side `LANE_REGISTRY` carries the entry with
+`inert=True` for forward visibility.
+
+---
+
 ## 1. The full chain
 
 A user message in the Composer UI travels through ten distinct gates.
