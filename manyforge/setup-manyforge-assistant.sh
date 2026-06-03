@@ -155,30 +155,40 @@ step "Step 1/5: apply lane presets (local-inference + manyforge-egress-shared + 
 # but should no longer be referenced from new automation.
 SHARED_PRESET_PATH="${SCRIPT_DIR}/policies/manyforge-egress-shared.yaml"
 OPENCLAW_OVERLAY_PATH="${SCRIPT_DIR}/policies/manyforge-openclaw.overlay.yaml"
+# 2026-06-03: ALWAYS reapply the policies even if `policy-list` says
+# they're active. We observed today that the live sandbox showed only
+# `local-inference` active even though prior provisioning runs had
+# applied `manyforge-egress-shared` and `manyforge-openclaw-overlay`
+# — likely a race between policy-state cache and the OpenShell daemon's
+# active-policy view. The cost of re-applying is one no-op
+# `policy-add` (the daemon detects unchanged content and emits
+# "Policy unchanged"), so the safe choice is to ALWAYS apply.
+# The check-then-apply pattern was actively harmful: it skipped
+# the apply on a stale-cache hit, leaving the MCP bridge unable to
+# reach Composer because the route policy wasn't loaded, and the
+# operator never sees a clear error — just "Unknown tool id" from
+# the model and "policy_denied" deep in the gateway log.
 if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*local-inference"; then
   ok "preset 'local-inference' already applied"
 else
   nemoclaw "${SANDBOX}" policy-add local-inference --yes
   ok "preset 'local-inference' applied"
 fi
-if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-egress-shared"; then
-  ok "preset 'manyforge-egress-shared' already applied"
-else
-  nemoclaw "${SANDBOX}" policy-add --from-file "${SHARED_PRESET_PATH}" --yes
-  ok "preset 'manyforge-egress-shared' applied"
-fi
-if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-openclaw-overlay"; then
-  ok "overlay 'manyforge-openclaw-overlay' already applied"
-else
-  nemoclaw "${SANDBOX}" policy-add --from-file "${OPENCLAW_OVERLAY_PATH}" --yes
-  ok "overlay 'manyforge-openclaw-overlay' applied"
-fi
+nemoclaw "${SANDBOX}" policy-add --from-file "${SHARED_PRESET_PATH}" --yes 2>&1 | tail -2 | sed 's/^/    /'
+ok "preset 'manyforge-egress-shared' applied (or already at latest version)"
+# Same logic as the shared preset: ALWAYS reapply. The daemon
+# detects content unchanged and emits "Policy unchanged" if at the
+# latest version, otherwise it loads the new version. Both outcomes
+# are safe; skipping based on policy-list output is not (see comment
+# above).
+nemoclaw "${SANDBOX}" policy-add --from-file "${OPENCLAW_OVERLAY_PATH}" --yes 2>&1 | tail -2 | sed 's/^/    /'
+ok "overlay 'manyforge-openclaw-overlay' applied (or already at latest version)"
 # Remove the legacy fused preset if it's still active so we don't have
 # duplicate rules competing. Skip silently if not present.
 if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-composer"; then
   nemoclaw "${SANDBOX}" policy-remove manyforge-composer --yes 2>/dev/null \
     && ok "legacy fused preset 'manyforge-composer' removed (split files now active)" \
-    || warn "legacy 'manyforge-composer' preset still present; remove manually if needed"
+    || echo "    WARN: legacy 'manyforge-composer' preset still present; remove manually if needed"
 fi
 
 step "Step 1b: patch openclaw.json inference baseUrl to bypass inference.local"
