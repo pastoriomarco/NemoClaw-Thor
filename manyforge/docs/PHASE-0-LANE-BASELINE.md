@@ -68,7 +68,16 @@ Probes run on cosmos-reason2-8b through the OpenClaw sandbox (gateway `:18789` h
 ### Probe O-1 — iter-32 baseline reproduction
 - **Procedure**: Run the chain-on production recipe against the OpenClaw lane.
 - **Pass criteria**: ≥49/66 (51/66 baseline ±2).
-- **Result**: _to be filled_
+- **Result**: ❌ **FAIL — 14/66 effective (21.2%), 1/66 first-try (1.5%)**.
+  - 1 pass, 13 soft-pass, 52 fail, 8 future-tagged skips.
+  - **Root cause**: vLLM landed on `:8000` directly (no proxy in path) because the launcher was restarted with `START_VLLM_PROXY=false` to avoid the stale-proxy race condition documented in Phase 0 setup. Without the proxy in path:
+    - `UNWRAP_TOOL_CALL_ARGS` mutation is not applied — the hermes tool-call parser's `<tool_call>` XML wrap leaks into `assistant.tool_calls[*].arguments`, breaking the next round's JSON parse.
+    - `PROMOTE_REASONING_TO_CONTENT` is not applied — OpenClaw 2026.5.22 rejects null `content` from the qwen3 reasoning channel.
+    - `NORMALIZE_TOOL_NAMES` is not applied — `manyforge__` prefixed tool names break dispatch.
+    - `TOOL_ERROR_REWRITE` is not applied — error envelopes back to the model are degraded.
+  - Failure pattern: identical to Direct lane D-1 — `args_contain[...] got '<MISSING>'` and `expected tool X not observed`. **The lane is correct; the without-proxy stack is broken**.
+  - **Implication**: the iter-32 51/66 number was measured WITH the proxy in path. To reproduce, the proxy must be running on `:8000` and vLLM moved to `:8050`. The triage of "vLLM container keeps dying when the proxy step also runs" is a separate follow-up that gates a true OpenClaw baseline.
+  - Report: `/tmp/smoke_corpus_1780463260607.json`.
 
 ### Probe O-2 — Discovery surface present
 - **Procedure**: Inspect the most recent vLLM chat-completion request in the proxy log during the OpenClaw lane run.
