@@ -134,31 +134,51 @@ if [[ -z "${PRECHECK_HASH}" ]]; then
 fi
 ok "composer mode '${PRECHECK_MODE}' reachable (catalogHash: ${PRECHECK_HASH:0:16}…)"
 
-step "Step 1/5: apply BOTH 'local-inference' AND 'manyforge-composer' egress presets"
+step "Step 1/5: apply lane presets (local-inference + manyforge-egress-shared + manyforge-openclaw overlay)"
 # REVISED 2026-06-03 per THREE-LANE-MIGRATION-PLAN route fix: keep
-# BOTH presets active. Prior versions of this script removed
-# 'local-inference' on the assumption that 'manyforge-composer' was a
-# strict superset for the inference path. Empirical evidence in the
-# Phase 0 O-1 baseline (PHASE-0-LANE-BASELINE.md) shows it is NOT —
-# without local-inference active, the OpenShell network proxy denies
-# sandbox→host:8000 with `policy_denied` for chat-completion POSTs.
+# 'local-inference' active alongside the manyforge stack. Prior versions
+# of this script removed 'local-inference' on the assumption that the
+# manyforge preset was a strict superset for the inference path.
+# Empirical evidence in the Phase 0 O-1 baseline (PHASE-0-LANE-BASELINE.md)
+# shows it is NOT — without local-inference active, the OpenShell network
+# proxy denies sandbox→host:8000 with `policy_denied` for chat-completion
+# POSTs.
 #
-# Both presets cover the same vLLM :8000 endpoint at the network
-# policy layer; the difference is in how the OpenShell network proxy
-# (10.200.0.1:3128) routes traffic. local-inference is required for
-# the proxy to allow the route; manyforge-composer adds the Composer
-# :9000 endpoint with mode-scoped path rules.
+# 2026-06-03 (EXTRA #5): the fused `manyforge-composer.preset.yaml`
+# (which contained network rules + binary subject whitelist for OpenClaw
+# binaries) is now split into two files:
+#   - manyforge-egress-shared.yaml: lane-agnostic network rules
+#   - manyforge-openclaw.overlay.yaml: OpenClaw lane subject whitelist
+# This script applies the split files in order — shared FIRST so the
+# overlay's subject rules attach to the right policy. The legacy fused
+# preset file remains in `policies/` for back-compat with older bring-up
+# but should no longer be referenced from new automation.
+SHARED_PRESET_PATH="${SCRIPT_DIR}/policies/manyforge-egress-shared.yaml"
+OPENCLAW_OVERLAY_PATH="${SCRIPT_DIR}/policies/manyforge-openclaw.overlay.yaml"
 if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*local-inference"; then
   ok "preset 'local-inference' already applied"
 else
   nemoclaw "${SANDBOX}" policy-add local-inference --yes
   ok "preset 'local-inference' applied"
 fi
-if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-composer"; then
-  ok "preset 'manyforge-composer' already applied"
+if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-egress-shared"; then
+  ok "preset 'manyforge-egress-shared' already applied"
 else
-  nemoclaw "${SANDBOX}" policy-add --from-file "${PRESET_PATH}" --yes
-  ok "preset 'manyforge-composer' applied"
+  nemoclaw "${SANDBOX}" policy-add --from-file "${SHARED_PRESET_PATH}" --yes
+  ok "preset 'manyforge-egress-shared' applied"
+fi
+if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-openclaw-overlay"; then
+  ok "overlay 'manyforge-openclaw-overlay' already applied"
+else
+  nemoclaw "${SANDBOX}" policy-add --from-file "${OPENCLAW_OVERLAY_PATH}" --yes
+  ok "overlay 'manyforge-openclaw-overlay' applied"
+fi
+# Remove the legacy fused preset if it's still active so we don't have
+# duplicate rules competing. Skip silently if not present.
+if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*manyforge-composer"; then
+  nemoclaw "${SANDBOX}" policy-remove manyforge-composer --yes 2>/dev/null \
+    && ok "legacy fused preset 'manyforge-composer' removed (split files now active)" \
+    || warn "legacy 'manyforge-composer' preset still present; remove manually if needed"
 fi
 
 step "Step 1b: patch openclaw.json inference baseUrl to bypass inference.local"

@@ -38,6 +38,25 @@ When you genuinely don't know a tool's name, search with TWO terms — both name
 
 If `tool_call` fails (bad args, missing required field), the error flows back through `result.content` with `isError: true` and a human-readable message. **Read the error and adjust your args** — do NOT retry with the same args. The composer-side validator returns HTTP 200 with the structured error envelope (per the OpenClaw drop-policy workaround in `routes_assistant.py:execute_bridge_tool`), so the conversation continues even on validation failures.
 
+### Rule 6 — Tool arguments are camelCase + nested (NOT snake_case / flat)
+
+ManyForge tool schemas use **camelCase** for top-level keys and **nested objects** for compound payloads. The model's training corpus often produces snake_case Python-style argument names — those are rejected by the validator. Use the canonical names below; the validator's error envelope also includes a `diff.hint` line that names the exact rename when this rule is violated.
+
+| Tool | Wrong (snake_case / flat) | Correct (camelCase / nested) |
+|---|---|---|
+| `tree_draft_wrap_node` | `target_name`, `wrapper_id`, `wrapper_name`, `wrapper_params` | `targetName`, `wrapper: { id, name, params }` |
+| `tree_draft_insert_node` | `parent_name`, `node_id`, `node_name`, `node_params`, `after_name`, `before_name` | `parentName`, `node: { id, name, params }`, `position: { afterName, beforeName, index }` |
+| `tree_draft_update_node_params` | `node_name`, `merge:True` | `nodeName`, `merge:true`, `params` |
+| `tree_draft_delete_node` | `node_name` | `nodeName` |
+| `tree_draft_move_node` | `node_name`, `new_parent`, `new_position` | `nodeName`, `newParentName`, `position` |
+| `tree_draft_replace_subtree` | `target_name`, `replacement_id` | `targetName`, `replacement: { id, name, params, children }` |
+| `tree_draft_change_node_kind` | `node_name`, `new_kind` | `nodeName`, `newKind`, `params` |
+| `scene_draft_add_object` | `box_dims`, `position`, `orientation` | `shape: { type, box_dims }`, `pose: { position, orientation_quat }` |
+| `scene_draft_update_object` | `object_id`, `pose_position` | `objectId`, `pose: { position, orientation_quat }` |
+| `scene_draft_remove_object` | `object_id` | `objectId` |
+
+**General rule**: camelCase for top-level keys; nested objects for compound payloads (`wrapper`, `node`, `shape`, `pose`, `replacement`, `position`). When in doubt, call `tool_describe` first and use the EXACT keys from its returned schema — do not transliterate Python-style names. The validator returns a structured diff naming the rename; read it and reapply.
+
 ## Pre-named tool list (this skill's vocabulary)
 
 For ManyForge robot programming tasks, the most common tools by name. Most of these you can skip directly to `tool_describe`:
@@ -48,29 +67,33 @@ For ManyForge robot programming tasks, the most common tools by name. Most of th
 - `program_validate` — validate the current draft.
 - `scene_inspect` — inspect the loaded scene.
 - `catalog_read` — read the node + skill catalog (which tools/nodes are available).
-- `skills_read` — read the skill catalog.
-- `deployment_capabilities_read` — read what the active deployment supports.
-- `status_read` — read assistant-mode status.
+- `skills_read` — read available robot skills.
+- `deployment_capabilities_read` — what the runtime can do.
+- `status_read` — runtime status.
 
-### Tree mutations (preferred for behavior-tree edits)
+### Tree mutations (draft layer)
 
-- `tree_draft_insert_node` — insert a new node under a parent.
-- `tree_draft_wrap_node` — wrap an existing node in a decorator (repeat, retry, etc.).
-- `tree_draft_remove_node` — remove a node.
-- `tree_draft_update_node_params` — update a node's parameters.
-- `tree_draft_replace_node` — replace a node in place.
-- `tree_draft_move_node` — move a node to a different parent.
+- `tree_draft_insert_node` — insert a node under a parent at a position.
+- `tree_draft_wrap_node` — wrap an existing node with a decorator.
+- `tree_draft_remove_node` — remove a node by name.
+- `tree_draft_update_node_params` — patch a node's params.
+- `tree_draft_replace_node` — replace a node by name.
+- `tree_draft_move_node` — move a node to a new parent/position.
+- `tree_draft_change_node_kind` — change a node's `id` (kind) and re-shape its params.
+- `tree_draft_replace_subtree` — replace a node AND its entire subtree.
 
-### Scene mutations
+### Scene mutations (draft layer)
 
-- `scene_draft_add_object` — add an object to the scene.
-- `scene_draft_update_object` — update an object's properties (pose, shape, etc.).
-- `scene_draft_remove_object` — remove an object.
+- `scene_draft_add_object` — add a collision object to the scene draft.
+- `scene_draft_update_object` — update an existing object's pose/shape.
+- `scene_draft_remove_object` — remove an object by id.
 
-### Blackboard / runtime configuration
+### Blackboard/runtime config
 
-- `blackboard_draft_upsert_namespaces` — declare blackboard namespaces.
-- `blackboard_draft_set` — set a blackboard value.
+- `blackboard_draft_upsert_namespaces` — upsert key namespaces.
+- `blackboard_draft_set` — set a blackboard key value.
+- `program_draft_upsert_parameters` — upsert program parameters.
+- `program_draft_remove_parameters` — remove program parameters.
 - `program_draft_replace_blackboard` — replace the entire blackboard config.
 
 When in doubt about an exact name, `tool_search` is always safe — but prefer the direct-name path above whenever possible.

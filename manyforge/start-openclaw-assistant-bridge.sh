@@ -13,7 +13,26 @@ if [[ ! -x "${VENV}/bin/python" ]]; then
   "${VENV}/bin/pip" install -r "${BRIDGE_DIR}/requirements.txt"
 fi
 
-export OPENCLAW_ASSISTANT_LOCAL="${OPENCLAW_ASSISTANT_LOCAL:-true}"
+# Production-aligned defaults (see scripts/lib/assistant.sh):
+#   LOCAL=false          → bridge dispatches to the OpenShell sandbox-hosted
+#                           agent runner via `nemoclaw exec`, NOT a local
+#                           in-process model. The legacy `LOCAL=true` mode
+#                           is dev-only (boots a CPU stub) and produces
+#                           non-production behavior; do not use for smoke,
+#                           probe, or composer-driven runs.
+#   USE_GATEWAY=false    → CLI shell-out transport. OpenClaw 2026.5.22 does
+#                           not expose /v1/chat/completions on the gateway
+#                           HTTP server; the gateway_http transport returns
+#                           404 for every call. Set to "true" only if you
+#                           are running an OpenClaw build that has the
+#                           /v1/chat/completions endpoint, or are testing
+#                           the legacy path explicitly.
+#   LOOP_TOOL_THRESHOLD=5 / LOOP_ARGS_THRESHOLD=2 → bridge-side fail-fast
+#                           detectors (see FIX 5 in service.py). 0 disables.
+export OPENCLAW_ASSISTANT_LOCAL="${OPENCLAW_ASSISTANT_LOCAL:-false}"
+export OPENCLAW_ASSISTANT_USE_GATEWAY="${OPENCLAW_ASSISTANT_USE_GATEWAY:-false}"
 export OPENCLAW_ASSISTANT_AGENT="${OPENCLAW_ASSISTANT_AGENT:-manyforge-composer}"
+export OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD="${OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD:-5}"
+export OPENCLAW_ASSISTANT_LOOP_ARGS_THRESHOLD="${OPENCLAW_ASSISTANT_LOOP_ARGS_THRESHOLD:-2}"
 export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
 exec "${VENV}/bin/python" -m openclaw_assistant_bridge.service

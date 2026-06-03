@@ -456,10 +456,17 @@ async def assistant(request: Request) -> JSONResponse:
     # a synthetic stop message so the composer marks the case fail-fast.
     # This is in addition to round 7's narrow-pattern synthetic clarif.
     LOOP_TOOL_THRESHOLD = int(os.environ.get("OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD", "5") or "5")
-    if LOOP_TOOL_THRESHOLD > 0:
+    # FIX 5: also detect same-tool-SAME-ARGS repetition (tighter than
+    # plain same-name). When the model emits identical args twice in a
+    # row across composer turns, we know the model isn't reading the
+    # error envelope (FIX 4) and just retrying. Fire EARLIER than the
+    # name-only detector since the signal is stronger.
+    LOOP_ARGS_THRESHOLD = int(os.environ.get("OPENCLAW_ASSISTANT_LOOP_ARGS_THRESHOLD", "2") or "2")
+    if LOOP_TOOL_THRESHOLD > 0 or LOOP_ARGS_THRESHOLD > 0:
         msgs_in = payload.get("messages") or []
         if isinstance(msgs_in, list):
             tool_call_names = []
+            tool_call_fingerprints = []  # (name, normalized_args_json)
             for m in msgs_in:
                 if not isinstance(m, dict): continue
                 if m.get("role") != "assistant": continue
@@ -467,25 +474,65 @@ async def assistant(request: Request) -> JSONResponse:
                     if isinstance(tc, dict):
                         fn = tc.get("function") or {}
                         nm = fn.get("name") or tc.get("name")
-                        if nm: tool_call_names.append(nm)
+                        args_raw = fn.get("arguments") or tc.get("arguments") or ""
+                        if nm:
+                            tool_call_names.append(nm)
+                            # Normalize the args for fingerprinting:
+                            # parse as JSON if possible, sort keys, drop
+                            # whitespace. This makes "{a:1,b:2}" and
+                            # "{b:2,a:1}" register as the same call.
+                            try:
+                                args_parsed = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                                args_fp = json.dumps(args_parsed, sort_keys=True, separators=(",", ":"))
+                            except Exception:
+                                args_fp = str(args_raw).strip()
+                            tool_call_fingerprints.append(f"{nm}::{args_fp}")
             if tool_call_names:
                 from collections import Counter
+                # Same-tool-same-args check first (tighter).
+                fp_top_fp, fp_top_count = Counter(tool_call_fingerprints).most_common(1)[0]
+                # Same-tool-name check (existing behavior).
                 top_name, top_count = Counter(tool_call_names).most_common(1)[0]
-                if top_count >= LOOP_TOOL_THRESHOLD:
-                    loop_msg = (
-                        f"I have called `{top_name}` {top_count} times in this "
-                        "conversation. The retries have not reached a 2xx response. "
-                        "I am stopping to prevent a runaway loop. Please refine the "
-                        "request with the specific missing field (e.g., `pose_goal` "
-                        "for `motion_type=pose_goal`), specify a different tool, or "
-                        "clarify the target node names."
-                    )
+                trigger = None
+                if LOOP_ARGS_THRESHOLD > 0 and fp_top_count >= LOOP_ARGS_THRESHOLD + 1:
+                    # +1 because the same call repeats are counted relative
+                    # to the first appearance, not from zero. e.g.
+                    # threshold=2 means "fire after we've seen 3 identical
+                    # calls (1 original + 2 retries)".
+                    trigger = "same_args"
+                    repeated_tool = fp_top_fp.split("::", 1)[0]
+                    repeated_count = fp_top_count
+                elif LOOP_TOOL_THRESHOLD > 0 and top_count >= LOOP_TOOL_THRESHOLD:
+                    trigger = "same_name"
+                    repeated_tool = top_name
+                    repeated_count = top_count
+                if trigger:
+                    if trigger == "same_args":
+                        loop_msg = (
+                            f"I called `{repeated_tool}` {repeated_count} times "
+                            "with IDENTICAL arguments. The validator already "
+                            "told me what was wrong — I am not reading the "
+                            "error envelope's `diff` and `hint`. Stopping to "
+                            "prevent a runaway loop. Please clarify the "
+                            "request, or rename the keys per the diff hint, "
+                            "or pick a different tool."
+                        )
+                    else:
+                        loop_msg = (
+                            f"I have called `{repeated_tool}` {repeated_count} times in this "
+                            "conversation. The retries have not reached a 2xx response. "
+                            "I am stopping to prevent a runaway loop. Please refine the "
+                            "request with the specific missing field (e.g., `pose_goal` "
+                            "for `motion_type=pose_goal`), specify a different tool, or "
+                            "clarify the target node names."
+                        )
                     _log_event(
                         "bridge_synthetic_loop_break",
                         requestId=request_id,
-                        repeatedTool=top_name,
-                        repeatedCount=top_count,
-                        threshold=LOOP_TOOL_THRESHOLD,
+                        repeatedTool=repeated_tool,
+                        repeatedCount=repeated_count,
+                        threshold=LOOP_TOOL_THRESHOLD if trigger == "same_name" else LOOP_ARGS_THRESHOLD,
+                        trigger=trigger,
                     )
                     ACTIVE_REQUESTS.dec()
                     _record_outcome("synthetic_loop_break", transport, time.perf_counter() - handler_started)
@@ -499,7 +546,7 @@ async def assistant(request: Request) -> JSONResponse:
                             "toolCalls": [],
                             "proposals": [],
                             "warnings": [
-                                f"loop_detected_stopped: tool={top_name!r} repeated {top_count}x"
+                                f"loop_detected_stopped: tool={repeated_tool!r} repeated {repeated_count}x ({trigger})"
                             ],
                             "mutated": False,
                             "draftMutated": False,
@@ -611,55 +658,80 @@ async def assistant(request: Request) -> JSONResponse:
         # Sequential — wait for the compact to return before forwarding
         # the actual user prompt so the model sees the post-compaction
         # session state.
-        if cfg.use_gateway:
-            session_key = derive_gateway_session_key(payload)
-            session_count = _bump_session_request_counter(session_key)
-            if _should_fire_compact(session_count):
-                COMPACT_FIRES_TOTAL.labels(outcome="started").inc()
-                compact_started_perf = time.perf_counter()
-                _log_event(
-                    "openclaw_compact_fire_started",
-                    requestId=request_id,
-                    sessionKey=session_key,
-                    sessionCount=session_count,
-                    every_n=_COMPACT_EVERY_N,
-                    timeoutS=_COMPACT_TIMEOUT_S,
-                )
+        #
+        # REVISED 2026-06-03: compaction MUST work in cli_shell_out
+        # mode too, not just gateway_http. The original code gated
+        # compaction inside the `cfg.use_gateway` branch, which silently
+        # disabled the iter-32 production recipe when the route fix
+        # forced cli_shell_out. The trigger logic + session counter is
+        # now lifted out; only the actual /compact dispatch differs by
+        # transport (gateway: chat-completion; cli: openclaw agent).
+        session_key = derive_gateway_session_key(payload)
+        session_count = _bump_session_request_counter(session_key)
+        if _should_fire_compact(session_count):
+            COMPACT_FIRES_TOTAL.labels(outcome="started").inc()
+            compact_started_perf = time.perf_counter()
+            _log_event(
+                "openclaw_compact_fire_started",
+                requestId=request_id,
+                sessionKey=session_key,
+                sessionCount=session_count,
+                every_n=_COMPACT_EVERY_N,
+                timeoutS=_COMPACT_TIMEOUT_S,
+                transport=transport,
+            )
+            if cfg.use_gateway:
                 compact_command = build_gateway_chat_completions_command(
                     config=cfg,
                     payload=payload,
                     timeout_s=_COMPACT_TIMEOUT_S,
                     message="/compact",
                 )
-                try:
-                    await _run_agent(
-                        request_id=f"{request_id}-compact",
-                        command=compact_command,
-                        timeout_s=_COMPACT_TIMEOUT_S,
-                    )
-                    COMPACT_FIRES_TOTAL.labels(outcome="succeeded").inc()
-                    REQUEST_DURATION.labels(stage="compact", transport=transport).observe(
-                        time.perf_counter() - compact_started_perf
-                    )
-                    _log_event(
-                        "openclaw_compact_fire_succeeded",
-                        requestId=request_id,
-                        sessionKey=session_key,
-                        sessionCount=session_count,
-                    )
-                except Exception as compact_exc:  # noqa: BLE001
-                    # Compaction failed (timeout, gateway error, etc.) —
-                    # don't fail the user request; proceed with the
-                    # un-compacted session. The user-facing error rate
-                    # is what we care about; compaction is best-effort.
-                    COMPACT_FIRES_TOTAL.labels(outcome="failed").inc()
-                    _log_event(
-                        "openclaw_compact_fire_failed",
-                        requestId=request_id,
-                        sessionKey=session_key,
-                        sessionCount=session_count,
-                        error=f"{type(compact_exc).__name__}: {compact_exc}",
-                    )
+            else:
+                # cli_shell_out path: send /compact as the user message
+                # to `openclaw agent` and wait. OpenClaw's command
+                # registry resolves `/compact` regardless of whether
+                # it's received as a slash-command on the chat-completion
+                # path or as a CLI message argument.
+                compact_command = build_openclaw_command(
+                    config=cfg,
+                    message="/compact",
+                    timeout_s=_COMPACT_TIMEOUT_S,
+                    mcp_allowed_tools=None,  # compaction doesn't need tools
+                )
+            try:
+                await _run_agent(
+                    request_id=f"{request_id}-compact",
+                    command=compact_command,
+                    timeout_s=_COMPACT_TIMEOUT_S,
+                )
+                COMPACT_FIRES_TOTAL.labels(outcome="succeeded").inc()
+                REQUEST_DURATION.labels(stage="compact", transport=transport).observe(
+                    time.perf_counter() - compact_started_perf
+                )
+                _log_event(
+                    "openclaw_compact_fire_succeeded",
+                    requestId=request_id,
+                    sessionKey=session_key,
+                    sessionCount=session_count,
+                    transport=transport,
+                )
+            except Exception as compact_exc:  # noqa: BLE001
+                # Compaction failed (timeout, gateway error, etc.) —
+                # don't fail the user request; proceed with the
+                # un-compacted session. The user-facing error rate
+                # is what we care about; compaction is best-effort.
+                COMPACT_FIRES_TOTAL.labels(outcome="failed").inc()
+                _log_event(
+                    "openclaw_compact_fire_failed",
+                    requestId=request_id,
+                    sessionKey=session_key,
+                    sessionCount=session_count,
+                    error=f"{type(compact_exc).__name__}: {compact_exc}",
+                    transport=transport,
+                )
+
+        if cfg.use_gateway:
             command = build_gateway_chat_completions_command(
                 config=cfg,
                 payload=payload,
