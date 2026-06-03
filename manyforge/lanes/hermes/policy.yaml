@@ -1,0 +1,48 @@
+# Hermes Agents lane SessionPolicy
+#
+# Per principle #1 of THREE-LANE-MIGRATION-PLAN.md: let Hermes own its
+# agent loop, memory, skills, cron, todo, and progress events. The
+# bridge submits and observes; it does NOT shuttle per-turn tool calls.
+#
+# Per the explicit user direction during plan rev-3 review: "leverage
+# Hermes agents specific functionalities, even if it means giving up
+# some determinism." Hermes runs with memory + skills + cron + todo +
+# delegation ENABLED.
+
+compaction:
+  # OFF — Hermes owns its session lifecycle via the runs API. We don't
+  # override it. The bridge does NOT fire /compact equivalents on the
+  # Hermes lane.
+  enabled: false
+  every: 0
+  action: none
+
+synthetic_short_circuits:
+  # Opt-in for the Hermes lane. Default OFF — these are Cosmos-specific
+  # patches that may interact poorly with Hermes' built-in agent
+  # behavior. Re-enable after the Phase 4 bake-off shows whether they
+  # improve or degrade Hermes outcomes.
+  bypass_clarification: false
+  retry_loop_detector: false
+  retry_loop_threshold: 3
+
+discovery_mode: hermes_direct  # plumbed through to common.prompt.build_agent_prompt
+
+# Hermes-specific lifecycle config
+hermes:
+  # Memory accumulates across turns of the same conversation. Cleared
+  # only between bake-off runs that explicitly pass --reset-hermes-state.
+  memory_enabled: true
+  user_profile_enabled: true
+  skills_enabled: true
+  cron_enabled: true
+  todo_enabled: true
+  delegation_enabled: true
+
+  # The session API head-to-head probe (Phase 0.5 / Phase 4) decides
+  # which to use. Default leaves both options open until then.
+  preferred_session_api: "sessions_chat"  # or "runs"
+
+  # Hermes prefixes MCP tools as mcp_<server>_<tool>. The bridge audit
+  # strips the manyforge prefix for cross-lane parity reports.
+  mcp_tool_prefix: "mcp_manyforge_"

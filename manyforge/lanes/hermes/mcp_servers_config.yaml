@@ -1,0 +1,35 @@
+# Hermes Agents lane — mcp_servers.manyforge block
+#
+# Per THREE-LANE-MIGRATION-PLAN.md §5.3 and verified against the Hermes
+# 0.14.0 wheel (cli.py:2691 + cli.py:9314+ auto-reload + tools/mcp_tool.py
+# native MCP support).
+#
+# This YAML block is emitted into Hermes' /sandbox/.hermes/config.yaml by
+# the Phase 4 hermes-config overlay. Hermes' config-watcher detects the
+# mtime change and auto-registers the manyforge MCP tools at runtime.
+#
+# Hermes prefixes MCP tools as ``mcp_<server>_<tool>`` — the model sees
+# ``mcp_manyforge_tree_draft_wrap_node``. The bridge strips the
+# ``mcp_manyforge_`` prefix on the audit side via
+# ``manyforge.common.tool_calls.strip_mcp_prefix`` so cross-lane reports
+# show comparable tool names.
+
+mcp_servers:
+  manyforge:
+    command: python3
+    args:
+      - "/sandbox/manyforge/scripts/manyforge-mcp-bridge.py"
+    env:
+      MANYFORGE_LANE: "hermes"
+      MANYFORGE_PRINCIPAL: "hermes-${SANDBOX_NAME}"
+      MANYFORGE_ASSISTANT_MODE: "composer-assistant"
+      MANYFORGE_COMPOSER_BASE: "http://host.openshell.internal:9000"
+      MANYFORGE_ALLOWED_TOOLS_FILE: "/tmp/manyforge-hermes-allowed-tools.txt"
+      # Outbound proxy envs — REQUIRED for the bridge to reach Composer
+      # through OpenShell's proxy at 10.200.0.1:3128. Do NOT add
+      # host.openshell.internal to NO_PROXY; the bridge's
+      # manyforge-mcp-bridge.py:75-81 explicitly warns that bypassing
+      # the proxy yields "Connection refused".
+      HTTP_PROXY: "${HTTP_PROXY}"
+      HTTPS_PROXY: "${HTTPS_PROXY}"
+      NO_PROXY: "${NO_PROXY}"  # loopback only
