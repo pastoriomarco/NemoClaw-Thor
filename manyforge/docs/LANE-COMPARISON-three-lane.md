@@ -128,3 +128,32 @@ Run 5 cases × 4 scenarios on **qwen3.6-35B-NVFP4-MTP-2 FP8KV** (the 93/100 tool
 4. (optional) Hermes lane scaffold-only (no actual dispatch)
 
 Compare first-try rate to the cosmos-reason2-8b numbers above. If 35B's first-try rate in code mode is ≥40% while tools mode is similar, the model-quality gap is the bottleneck and we should make the lane default model-dependent.
+
+## 35B NVFP4 NVIDIA bake-off (2026-06-03) — deferred
+
+Ran 5-case OpenClaw tools-mode probe against `qwen3.6-35b-a3b-nvfp4-nvidia` (NVIDIA's ModelOpt v0.44.0 NVFP4 quant + MTP K=3 per the Spark recipe, on the current Thor stack with the launcher's start-model.sh path). Result: **0/5** vs cosmos 4/5 on the identical case set (P1_wrap_root_specific, WRAP_root_medium, SCENE_add_generic, SCENE_add_medium, PnP_05_tree_root).
+
+### What we observed
+
+All five cases ran to OpenClaw's per-invocation budget and failed with the same root cause: the 35B model never reached a successful `tool_call` against the manyforge catalog. The proxy capture of one in-flight assistant turn quoted the model verbalizing:
+
+> "I've been stuck trying to find the right tool name for manyforge tools. Every tool name I've tried returns 'Unknown tool id'. The only tool that seems to work is from the openclaw core namespace, like..."
+
+The model is using tools mode correctly (`tool_search`, `tool_describe`, `tool_call` all appear in its emissions). It just can't bridge from the tool-search results to a valid `tool_call({id: "<manyforge-id>", args: ...})` invocation. Most likely cause: the `--reasoning-parser qwen3` setting routes the model's "I should call tree_draft_wrap_node" thinking into a separate channel that doesn't reach the bridge as a tool-call attempt, while the visible `content` channel carries the model's confusion narrative.
+
+### Why this is NOT a tools-mode-vs-code-mode signal
+
+The 0/5 vs cosmos 4/5 gap is **stack-level integration** (tool-call parser + reasoning parser + chat template for the qwen3.6-35B-A3B-NVFP4 model on the Thor build of vLLM), not a discovery-surface issue. The 56/66 (84.8%) baseline noted in `serving/config.sh` for this same profile was measured on an earlier stack configuration that we have not been able to reproduce in this branch. Resolving the gap requires:
+
+1. Confirm `qwen3_coder` tool-call parser is the right pick for `qwen-fixed-froggeric.jinja` + this NVFP4 weight set (the qwen3.6-35B template tree has diverged across releases).
+2. Probe whether `--reasoning-parser qwen3` is interfering with tool-call emission (try `--reasoning-parser none` for a control run).
+3. Validate the served `tools[]` schema against what `tool_search` returns — Phase 3's "Unknown tool id" investigation surfaced that the OpenClaw catalog ID can differ from the bare manyforge name; the 35B may be picking the wrong shape.
+
+### Decision
+
+**Defer the 35B bake-off** to a follow-up cycle. Cosmos-reason2-8b stays the production model anchor with tools mode as the OpenClaw lane default. The `serving/config.sh` 56/66 number remains the aspirational target — we know it's achievable in principle, just not on this stack as currently wired.
+
+Production decision is unchanged from the cosmos-only data:
+- OpenClaw tools mode > OpenClaw code mode (58.3% vs 29.0% effective on cosmos)
+- Tools mode is the production default
+
