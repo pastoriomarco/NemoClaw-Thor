@@ -1,0 +1,26 @@
+preset:
+  name: manyforge-hermes-overlay
+  description: |
+    Hermes Agents lane subject whitelist for the manyforge_composer policy.
+
+    Apply AFTER ``manyforge-egress-shared.yaml``. This overlay adds the
+    binary subjects (``hermes``, ``python3``) that the Hermes daemon uses
+    when spawning the MCP bridge stdio process.
+
+    Hermes spawns the manyforge MCP bridge as ``python3 ...
+    manyforge-mcp-bridge.py`` per the ``mcp_servers.manyforge`` config
+    block we emit in Phase 4. The ``/usr/local/bin/hermes`` binary is
+    the daemon itself; ``/usr/bin/python3`` is the MCP bridge subprocess.
+
+    Phase 4 status: this file ships in Phase 1 so the Hermes contract
+    spike (Phase 0.5) can apply it without inventing the file shape on
+    the fly. The actual lane goes live in Phase 4.
+
+network_policies:
+  manyforge_composer:
+    name: manyforge_composer
+    binaries:
+      - path: /usr/local/bin/hermes
+      - path: /usr/bin/python3
+      # If a future Hermes runtime uses a non-system python (e.g. uv venv
+      # at /opt/hermes/.venv/bin/python), add it here.

@@ -1,0 +1,115 @@
+preset:
+  name: manyforge-egress-shared
+  description: |
+    Shared egress rules for ANY manyforge assistant lane (OpenClaw, Hermes,
+    future lanes). Lane-agnostic — contains ONLY network policy entries,
+    no binary subject whitelists.
+
+    Compose with a per-lane overlay:
+      OpenClaw:  nemoclaw <sandbox> policy-add --from-file manyforge-egress-shared.yaml
+                 nemoclaw <sandbox> policy-add --from-file manyforge-openclaw.overlay.yaml
+      Hermes:    nemoclaw <sandbox> policy-add --from-file manyforge-egress-shared.yaml
+                 nemoclaw <sandbox> policy-add --from-file manyforge-hermes.overlay.yaml
+
+    The overlays add a ``binaries`` block under the same
+    ``manyforge_composer`` policy so the L7 rules from this preset apply
+    to the lane's specific binary subjects. OpenShell merges overlays
+    additively, so applying both files yields a single combined policy.
+
+    Pre-Phase-1 deployments use ``manyforge-composer.preset.yaml`` (the
+    fused version that still ships alongside) — that file remains
+    backward-compatible until Phase 5 retires it.
+
+    Both endpoints are exposed via host.openshell.internal, which resolves to
+    a private/Docker-bridge IP (172.17.0.1 in this deployment). OpenShell's
+    SSRF guard rejects connections to RFC 1918 addresses by default, so we
+    opt-in via the canonical ``allowed_ips`` field per
+    docs.nvidia.com/openshell/latest/reference/policy-schema and
+    OpenShell/examples/private-ip-routing.
+
+    Companion to ``local-inference`` (which opens vLLM:8000 at OPA but
+    leaves the SSRF guard restrictive).
+
+network_policies:
+  manyforge_composer:
+    name: manyforge_composer
+    endpoints:
+      # Composer HTTP/MCP surface — host.openshell.internal:9000.
+      - host: host.openshell.internal
+        port: 9000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          # Docker-bridge subnets that may host host.openshell.internal.
+          # 172.17 = OpenShell 0.0.36 k3s bridge; 172.18 = 0.0.44 docker driver.
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow:
+              method: GET
+              path: /api/mcp
+          - allow:
+              method: POST
+              path: /api/mcp
+          - allow:
+              method: GET
+              path: /api/mcp/sse
+          - allow:
+              method: POST
+              path: /api/mcp/sse
+          # Path templates use OpenShell's `/**` wildcard; `{name}`-style
+          # placeholders are NOT honored by the L7 enforcer (verified
+          # 2026-05-05 — `{mode}` failed with "denied by L7 policy").
+          - allow:
+              method: GET
+              path: /api/assistant/modes/**
+          - allow:
+              method: POST
+              path: /api/assistant/bridge/tools/**
+      # vLLM inference endpoint — host.openshell.internal:8000.
+      # The OPA path is already covered by ``local-inference``; this entry
+      # exists solely to add ``allowed_ips`` so the SSRF guard accepts the
+      # private-IP resolution on the persistent gateway lane.
+      - host: host.openshell.internal
+        port: 8000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow:
+              method: GET
+              path: /v1/models
+          - allow:
+              method: POST
+              path: /v1/chat/completions
+          - allow:
+              method: POST
+              path: /v1/completions
+          - allow:
+              method: POST
+              path: /v1/embeddings
+      # Debug-only: vLLM logging proxy at :8002 used by the unified
+      # debug harness for lane-parity diff. Mirrors the :8000 ruleset.
+      # Safe to leave even when no debug is active.
+      - host: host.openshell.internal
+        port: 8002
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - "172.17.0.0/16"
+          - "172.18.0.0/16"
+        rules:
+          - allow:
+              method: GET
+              path: /v1/models
+          - allow:
+              method: POST
+              path: /v1/chat/completions
+          - allow:
+              method: POST
+              path: /v1/completions
+          - allow:
+              method: POST
+              path: /v1/embeddings

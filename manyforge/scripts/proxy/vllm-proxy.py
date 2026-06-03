@@ -25,6 +25,25 @@ Usage:
                         [--log-path /tmp/iter20_proxy.jsonl]
 
 Environment variables (override flags):
+
+  All ``OPENCLAW_PROXY_*`` env vars are accepted as deprecated aliases
+  for the canonical ``MANYFORGE_PROXY_*`` names introduced in Phase 1
+  of THREE-LANE-MIGRATION-PLAN.md. The proxy is lane-agnostic and no
+  longer specific to OpenClaw; the rename reflects that. Both names
+  work simultaneously; if both are set for the same suffix, the
+  MANYFORGE_PROXY_* form wins. A one-time stderr deprecation notice is
+  emitted at module import when any OPENCLAW_PROXY_* alias is read.
+
+  MANYFORGE_PROXY_LISTEN_PORT
+  MANYFORGE_PROXY_UPSTREAM
+  MANYFORGE_PROXY_LOG_PATH
+  MANYFORGE_PROXY_PROFILE        native | compat | prod  (Phase 1)
+                                  Recorded in the proxy log banner and
+                                  every audit entry so cross-lane
+                                  reports can correlate behavior to
+                                  the active mutation profile.
+
+  (legacy names still accepted)
   OPENCLAW_PROXY_LISTEN_PORT
   OPENCLAW_PROXY_UPSTREAM
   OPENCLAW_PROXY_LOG_PATH
@@ -82,6 +101,61 @@ import socketserver
 import sys
 import threading
 import time
+
+
+# =========================================================================
+# Phase 1 of THREE-LANE-MIGRATION-PLAN.md — env-var alias adapter.
+# =========================================================================
+# The proxy is lane-agnostic and no longer specific to OpenClaw, so the
+# canonical env-var prefix is now ``MANYFORGE_PROXY_*``. The historical
+# ``OPENCLAW_PROXY_*`` names continue to work as deprecated aliases for
+# one release cycle.
+#
+# Resolution order (highest priority first):
+#   1. MANYFORGE_PROXY_<suffix>   (canonical)
+#   2. OPENCLAW_PROXY_<suffix>    (deprecated alias)
+#   3. argv flag default          (the original behavior — unchanged)
+#
+# A single stderr notice is emitted at import if any OPENCLAW_PROXY_*
+# alias is observed; this surfaces drift in caller scripts without
+# breaking them. Set MANYFORGE_PROXY_NO_DEPRECATION=1 to silence.
+def _apply_manyforge_proxy_aliases() -> None:
+    legacy_prefix = "OPENCLAW_PROXY_"
+    new_prefix = "MANYFORGE_PROXY_"
+    aliased: list[str] = []
+    for key, value in list(os.environ.items()):
+        if not key.startswith(legacy_prefix):
+            continue
+        suffix = key[len(legacy_prefix):]
+        new_key = f"{new_prefix}{suffix}"
+        if new_key in os.environ:
+            # Caller set both; the canonical name wins. Do not overwrite.
+            continue
+        os.environ[new_key] = value
+        aliased.append(key)
+    if aliased and os.environ.get("MANYFORGE_PROXY_NO_DEPRECATION", "0") != "1":
+        sys.stderr.write(
+            "[vllm-proxy] DEPRECATION: env vars OPENCLAW_PROXY_* are renamed to "
+            f"MANYFORGE_PROXY_*. {len(aliased)} alias(es) active "
+            "(set MANYFORGE_PROXY_NO_DEPRECATION=1 to silence): "
+            f"{sorted(aliased)[:5]}{'…' if len(aliased) > 5 else ''}\n"
+        )
+
+
+_apply_manyforge_proxy_aliases()
+
+# Active mutation profile name (Phase 1). Recorded in the proxy log
+# banner and every audit entry so cross-lane reports can correlate
+# behavior to the active profile. Lane adapters set this at startup;
+# defaults to "compat" for OpenClaw and "native" for Direct/Hermes.
+MANYFORGE_PROXY_PROFILE = (
+    os.environ.get("MANYFORGE_PROXY_PROFILE", "").strip().lower() or "compat"
+)
+if MANYFORGE_PROXY_PROFILE not in ("native", "compat", "prod"):
+    sys.stderr.write(
+        f"[vllm-proxy] WARN: unknown MANYFORGE_PROXY_PROFILE={MANYFORGE_PROXY_PROFILE!r}; "
+        "expected one of native|compat|prod. Continuing with the literal value.\n"
+    )
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 
@@ -1913,10 +1987,15 @@ def main() -> None:
     if _UNWRAP_TOOL_CALL_ARGS:
         mutation_summary.append("unwrap_tool_call_args=on")
     mutation_str = ", ".join(mutation_summary) if mutation_summary else "logging-only (no mutations)"
+    # Banner identifies the active mutation profile (Phase 1 of
+    # THREE-LANE-MIGRATION-PLAN.md) so cross-lane reports can correlate
+    # behavior to profile. Banner name kept as ``openclaw-logging-proxy``
+    # for log-grep backward compatibility; the profile field is the new
+    # source of truth.
     print(
         f"openclaw-logging-proxy listening on {cfg.bind}:{_LISTEN_PORT} "
         f"-> {_UPSTREAM_SCHEME}://{_UPSTREAM_HOST}:{_UPSTREAM_PORT} "
-        f"(log: {_LOG_PATH}; mode: {mutation_str})",
+        f"(profile: {MANYFORGE_PROXY_PROFILE}; log: {_LOG_PATH}; mode: {mutation_str})",
         flush=True,
     )
     try:

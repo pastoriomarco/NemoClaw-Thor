@@ -1,0 +1,22 @@
+preset:
+  name: manyforge-openclaw-overlay
+  description: |
+    OpenClaw lane subject whitelist for the manyforge_composer policy.
+
+    Apply AFTER ``manyforge-egress-shared.yaml``. This overlay adds the
+    binary subjects (``openclaw``, ``node``, ``python3``) that are
+    permitted to make outbound calls under the network rules already
+    established by the shared preset.
+
+    Application order matters: the shared preset registers the
+    ``manyforge_composer`` policy with its endpoints; this overlay then
+    contributes the ``binaries`` block onto the same policy name.
+    OpenShell merges them additively into one effective policy.
+
+network_policies:
+  manyforge_composer:
+    name: manyforge_composer
+    binaries:
+      - path: /usr/local/bin/openclaw
+      - path: /usr/local/bin/node
+      - path: /usr/bin/python3
