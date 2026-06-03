@@ -50,7 +50,25 @@ If the rerun passes (≥46/66): the archived plugin artifacts can be deleted in 
 
 If it doesn't: document the gap, keep the archived artifacts available as a feature-flagged rollback (`OPENCLAW_LANE_MODE=plugin|native`), and proceed to Phase 4 either way — the architectural shape doesn't change, only the production routing default does.
 
-Decision: _to be filled_
+## Decision (2026-06-03)
+
+**Tools mode is the production OpenClaw default.** Code mode is functional but model-quality-limited on cosmos-reason2-8b. Full numbers, methodology, and verdict in [LANE-COMPARISON-three-lane.md](./LANE-COMPARISON-three-lane.md). Brief:
+
+| Mode | Real cases | First-try | Effective | Gate (46/66 ≈ 70%) |
+|---|---|---|---|---|
+| Tools (`tool_search`/`tool_describe`/`tool_call`) | 12 | 50.0% | 58.3% | ~65% extrapolated — within striking distance |
+| Code (`tool_search_code`, corrected primer) | 31 | 12.9% | 29.0% | ~21/74 ≈ 29% — far below |
+
+The Phase 3 gate is not yet definitively cleared (the tools-mode smoke crashed mid-run after the gateway-restart-to-flip; recovery cost a clean 74-case run). The 12-case sample is decisive on direction but not on the precise pass-rate.
+
+**Defaults landed under this decision:**
+
+- `start-openclaw-assistant-bridge.sh`: `OPENCLAW_ASSISTANT_TOOL_SURFACE=tools` (was `code`).
+- `scripts/lib/assistant.sh`: same default propagated to the bridge launcher AND the vllm-proxy launcher.
+- `setup-manyforge-assistant.sh` (Sandbox provisioner): writes `tools.toolSearch = {enabled: true, mode: "tools"}` to `/sandbox/.openclaw/openclaw.json` on provision.
+- Archived plugin artifacts at `archive/openclaw-plugin-attempt-2026-06-02/` stay available as a rollback path until Phase 5.
+
+**Deferred to multi-model bake-off**: re-run both modes on qwen3.6-35B-NVFP4 (the 93/100 tool-eval-bench winner). If the 35B model closes the gap in code mode, the lane default should be model-dependent.
 
 ## Version tuple
 

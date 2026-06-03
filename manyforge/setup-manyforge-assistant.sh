@@ -215,6 +215,37 @@ openshell sandbox upload "${SANDBOX}" /tmp/manyforge-patch-openclaw-baseurl.py /
 nemoclaw "${SANDBOX}" exec --no-tty -- python3 /tmp/manyforge-patch-openclaw-baseurl.py 2>&1 | tail -1
 ok "openclaw.json baseUrl patched (will be picked up by gateway hot-reload or next recover)"
 
+step "Step 1c: set tools.toolSearch.mode=tools (Phase 3 production default)"
+# Tools mode is the production default for the OpenClaw lane since
+# Phase 3 (2026-06-03). Measured 58.3% effective rate on cosmos-
+# reason2-8b vs 29.0% for code mode (see
+# docs/LANE-COMPARISON-three-lane.md). The flip is a single field
+# in openclaw.json: the bare boolean ``tools.toolSearch: true`` gets
+# replaced with the dict form ``tools.toolSearch: {enabled: true,
+# mode: "tools"}`` which signals the OpenClaw runtime
+# (resolveToolSearchConfig in pi-tools-iVT6BGHc.js) to expose
+# tool_search / tool_describe / tool_call in the model's tools[]
+# instead of tool_search_code.
+cat > /tmp/manyforge-patch-openclaw-toolsearch.py <<'PY'
+import json, hashlib, pathlib
+p = pathlib.Path("/sandbox/.openclaw/openclaw.json")
+d = json.loads(p.read_text())
+tools = d.setdefault("tools", {})
+current = tools.get("toolSearch")
+target = {"enabled": True, "mode": "tools"}
+if isinstance(current, dict) and current.get("mode") == "tools" and current.get("enabled", True):
+    print("toolSearch already tools mode — no change")
+else:
+    tools["toolSearch"] = target
+    p.write_text(json.dumps(d, indent=2))
+    h = hashlib.sha256(p.read_bytes()).hexdigest()
+    pathlib.Path("/sandbox/.openclaw/.config-hash").write_text(f"{h}  openclaw.json\n")
+    print(f"toolSearch: {current!r} -> {target!r}; hash refreshed")
+PY
+openshell sandbox upload "${SANDBOX}" /tmp/manyforge-patch-openclaw-toolsearch.py /tmp/ >/dev/null
+nemoclaw "${SANDBOX}" exec --no-tty -- python3 /tmp/manyforge-patch-openclaw-toolsearch.py 2>&1 | tail -1
+ok "openclaw.json tools.toolSearch.mode patched (gateway must be restarted to take effect — see RUNBOOK)"
+
 step "Step 2/5: stage skill (resolves repo symlinks; no /tmp left in persistent state)"
 STAGING_DIR="$(mktemp -d -t manyforge-skill-XXXX)"
 trap 'rm -rf "${STAGING_DIR}"' EXIT
