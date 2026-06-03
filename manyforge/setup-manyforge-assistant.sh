@@ -197,8 +197,18 @@ ok "active policy verified: port:9000 endpoints + /usr/bin/python3.13 subject pr
 # Remove the legacy split overlay if it's still applied — its presence
 # would re-trigger the overwrite-bug on the next bring-up because the
 # CLI replays applied presets in the order they were added.
+#
+# REGEX SAFETY: match at end-of-name (` ` or end-of-line) to avoid
+# matching the merged preset by prefix — `manyforge-composer\b` would
+# match `manyforge-composer-merged` because `\b` triggers at the `r-`
+# boundary. That bug silently removed the freshly-applied merged
+# preset on every launcher restart, reverting the policy to
+# local-inference only and breaking the OpenClaw lane. Fixed by
+# anchoring the match to an explicit end (space, dash to em-dash, or
+# EOL) per preset name.
 for legacy in manyforge-egress-shared manyforge-openclaw-overlay manyforge-composer; do
-  if nemoclaw "${SANDBOX}" policy-list 2>&1 | grep -qE "● .*${legacy}\b"; then
+  if nemoclaw "${SANDBOX}" policy-list 2>&1 \
+       | grep -qE "● ${legacy}( |$|—)"; then
     nemoclaw "${SANDBOX}" policy-remove "${legacy}" --yes 2>/dev/null \
       && ok "legacy preset '${legacy}' removed (merged preset now authoritative)" \
       || echo "    WARN: legacy preset '${legacy}' still present; remove manually"
