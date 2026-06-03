@@ -1,0 +1,20 @@
+# OpenClaw lane SessionPolicy
+#
+# Per manyforge.assistant_session.compaction.CompactionPolicy and
+# manyforge.assistant_session.synthetic_short_circuits.SyntheticPolicy.
+# This config is loaded by the bridge supervisor at startup and
+# composed into the active SessionPolicy for the lane.
+#
+# Defaults reflect the iter-32 production recipe (51/66 on cosmos-reason2-8b
+# with the chain-on configuration).
+compaction:
+  enabled: true
+  every: 2  # bridge fires /compact every Nth user prompt
+  action: openclaw_slash_compact  # POST /compact text to the gateway
+
+synthetic_short_circuits:
+  bypass_clarification: true   # detect no-tool-call responses to action-shaped prompts
+  retry_loop_detector: true    # detect same-tool-same-args repetition
+  retry_loop_threshold: 3      # how many identical calls before the detector fires
+
+discovery_mode: openclaw_discovery  # plumbed through to common.prompt.build_agent_prompt
