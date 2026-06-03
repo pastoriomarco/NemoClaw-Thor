@@ -637,7 +637,31 @@ else
 fi
 
 step "Sandbox-side reachability probe (manyforge-composer policy)"
-"${KEX_USER[@]}" "python3 -c 'import urllib.request; print(urllib.request.urlopen(\"${MODE_URL}\", timeout=5).read(400).decode(\"utf-8\", \"replace\"))'" 2>&1 | sed 's/^/    /'
+# 2026-06-03: retry the reachability probe with exponential backoff on
+# transient 403s. The sandbox network policy reload takes a few seconds
+# after the OpenShell daemon restart in earlier steps, and the first
+# probe hits the policy-not-yet-loaded window. A single fatal failure
+# at this step left the launcher in a half-provisioned state requiring
+# a full restart. Retry 5× with 2/4/8/16/32s backoff; accept transient
+# 403/connection-refused as recoverable; bail on persistent failure.
+set +e
+for attempt in 1 2 3 4 5; do
+    probe_out="$("${KEX_USER[@]}" "python3 -c 'import urllib.request; print(urllib.request.urlopen(\"${MODE_URL}\", timeout=5).read(400).decode(\"utf-8\", \"replace\"))'" 2>&1)"
+    probe_rc=$?
+    if [[ ${probe_rc} -eq 0 ]]; then
+        echo "${probe_out}" | sed 's/^/    /'
+        break
+    fi
+    if [[ ${attempt} -eq 5 ]]; then
+        echo "    WARN: sandbox reachability probe failed after 5 attempts (last error below). Continuing — supervisor will surface any real connectivity issue."
+        echo "${probe_out}" | tail -5 | sed 's/^/    /'
+        break
+    fi
+    backoff=$((2 ** attempt))
+    echo "    attempt ${attempt}/5 failed (rc=${probe_rc}); retrying in ${backoff}s..."
+    sleep ${backoff}
+done
+set -e
 
 cat <<EOF
 
