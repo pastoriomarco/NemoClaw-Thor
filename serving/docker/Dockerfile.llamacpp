@@ -1,0 +1,126 @@
+# Dockerfile.llamacpp — llama.cpp on Jetson AGX Thor (sm_110a)
+#
+# Companion to Dockerfile.vllm / Dockerfile.trt. Builds a small (~1 GB)
+# standalone llama.cpp serving image targeting Thor's SM_110a Blackwell GPU.
+#
+# Why this exists:
+#   llama.cpp serves the GGUF-only lane that vLLM (NVFP4/safetensors-focused)
+#   and TRT-Edge-LLM (engine-format) can't cleanly handle. Specifically:
+#     - unsloth/*-MTP-GGUF artifacts with fused MTP heads (single-file)
+#     - Custom mixed-precision GGUFs that don't fit NVFP4 schemes
+#     - Quick model sanity tests where ~30s cold-start beats vLLM's
+#       ~2-69 min FlashInfer JIT
+#     - MTP + DDTree experiments that land in llama.cpp before vLLM
+#
+# Not a vLLM replacement for production: llama.cpp lacks NVFP4 hardware
+# tensor cores (software FP4 only), FlashInfer CUTLASS MoE kernels, and the
+# qwen3_xml tool-call parser our ManyForge stack depends on. Expect ~2-3x
+# slower decode than the vLLM v8.1 NVFP4 path on Thor.
+#
+# Cold-start: seconds (no JIT, no Python). Container size: ~1 GB.
+#
+# Model files are NOT baked into the image — mount the HF cache and pull
+# GGUFs at runtime via the --hf-repo / --hf-file llama-server flags or
+# point -m at a host-side GGUF volume.
+
+ARG CUDA_BASE_BUILD=nvidia/cuda:13.0.3-devel-ubuntu24.04
+ARG CUDA_BASE_RUNTIME=nvidia/cuda:13.0.3-runtime-ubuntu24.04
+ARG LLAMA_CPP_REF=master
+ARG CUDA_ARCH=110a
+
+# ─────────────────────────────────────────────────────────────────────
+# Stage 1 — Builder
+# ─────────────────────────────────────────────────────────────────────
+FROM ${CUDA_BASE_BUILD} AS builder
+
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor \
+    --mount=type=cache,target=/var/lib/apt,id=apt-lib-thor \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ninja-build \
+        git \
+        ca-certificates \
+        pkg-config \
+        libcurl4-openssl-dev \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG LLAMA_CPP_REF
+ARG CACHEBUST_LLAMA=0
+WORKDIR /workspace
+
+RUN git clone https://github.com/ggml-org/llama.cpp.git && \
+    cd llama.cpp && \
+    git checkout ${LLAMA_CPP_REF} && \
+    echo "llama.cpp at: $(git rev-parse HEAD)" && \
+    echo "llama.cpp tag: $(git describe --tags --always)"
+
+ARG CUDA_ARCH
+WORKDIR /workspace/llama.cpp
+
+# Build flags justified:
+#   GGML_CUDA=ON               — CUDA backend (Thor sm_110a needs this)
+#   CMAKE_CUDA_ARCHITECTURES   — Thor is sm_110a; explicit avoids native-detection ambiguity
+#   GGML_CUDA_FA_ALL_QUANTS=ON — flash-attention path for all quant types (broader model support)
+#   GGML_CUDA_FORCE_MMQ=ON     — MoE matmul Q path (better for our agentic workloads)
+#   LLAMA_CURL=ON              — enables -hf-repo / -hf-file HF integration in llama-server
+#   GGML_NATIVE=OFF            — don't auto-detect CPU flags that may not match runtime host
+#
+# Build the server, bench, cli, and quantize tools; skip examples we won't use.
+RUN cmake -S . -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGGML_CUDA=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
+        -DGGML_CUDA_FA_ALL_QUANTS=ON \
+        -DGGML_CUDA_FORCE_MMQ=ON \
+        -DLLAMA_CURL=ON \
+        -DGGML_NATIVE=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=ON \
+        -DLLAMA_BUILD_TOOLS=ON \
+    && cmake --build build --target llama-server llama-bench llama-cli llama-quantize -j$(nproc)
+
+# Capture build provenance for the runtime image
+RUN cd /workspace/llama.cpp && \
+    git rev-parse HEAD > /workspace/llama-cpp-commit.txt && \
+    git describe --tags --always > /workspace/llama-cpp-tag.txt
+
+# ─────────────────────────────────────────────────────────────────────
+# Stage 2 — Runtime
+# ─────────────────────────────────────────────────────────────────────
+FROM ${CUDA_BASE_RUNTIME} AS runtime
+
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor \
+    --mount=type=cache,target=/var/lib/apt,id=apt-lib-thor \
+    apt-get update && apt-get install -y --no-install-recommends \
+        libcurl4 \
+        libgomp1 \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy llama.cpp build artifacts + provenance
+COPY --from=builder /workspace/llama.cpp/build/bin/llama-server   /usr/local/bin/
+COPY --from=builder /workspace/llama.cpp/build/bin/llama-bench    /usr/local/bin/
+COPY --from=builder /workspace/llama.cpp/build/bin/llama-cli      /usr/local/bin/
+COPY --from=builder /workspace/llama.cpp/build/bin/llama-quantize /usr/local/bin/
+COPY --from=builder /workspace/llama.cpp/build/bin/*.so           /usr/local/lib/
+COPY --from=builder /workspace/llama-cpp-commit.txt /etc/llama-cpp-commit
+COPY --from=builder /workspace/llama-cpp-tag.txt    /etc/llama-cpp-tag
+
+# Make ggml shared libs discoverable
+RUN ldconfig
+
+# Volume mounts (model + HF cache stay on host, never in the image):
+#   /root/.cache/huggingface  — HF cache for -hf-repo / -hf-file downloads
+#   /models                   — host-side GGUF directory mount point
+ENV HF_HUB_CACHE=/root/.cache/huggingface
+VOLUME /root/.cache/huggingface
+VOLUME /models
+
+EXPOSE 8000
+
+# Default to llama-server; override CMD for benching / CLI use
+ENTRYPOINT ["/usr/local/bin/llama-server"]
+CMD ["--help"]
