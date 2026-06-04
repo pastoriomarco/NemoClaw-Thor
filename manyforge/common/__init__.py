@@ -12,7 +12,7 @@ Modules:
                       envelope (config, results, error responses)
     tool_calls      — tool-call extraction, canonicalization, OpenClaw envelope
                       unwrap helper
-    mcp_allowlist   — mode-scoped MCP tool allowlist resolution
+    mcp_catalog     — mode-scoped MCP tool catalog helpers
 
 Status: Phase 1 of THREE-LANE-MIGRATION-PLAN.md. Initially a re-export
 shim over ``openclaw_assistant_bridge.adapter`` so the OpenClaw lane
@@ -30,7 +30,7 @@ __version__ = "0.1.0"
 # Surface the most-used exports at package root for ergonomic imports.
 # Individual modules are also accessible directly (preferred for clarity).
 from . import envelope  # noqa: F401
-from . import mcp_allowlist  # noqa: F401
+from . import mcp_catalog  # noqa: F401
 from . import projection  # noqa: F401
 from . import prompt  # noqa: F401
 from . import tool_calls  # noqa: F401

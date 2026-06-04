@@ -23,13 +23,10 @@ The pipeline accumulated several behavior-changing patches in late May / early
 June 2026. The list below is the rapid-reference; each item is fully described
 later in the doc.
 
-- **Synthetic clarification inverted to default-OFF (2026-06-01).** Was
-  hard-coded ON before. Opt-in via `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1`;
-  legacy `OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC=1` preserved as the back-compat
-  off-switch. The bypass was hiding model-specific ability to ask clarification
-  on `add a <kind>` patterns; default-off makes the smoke corpus a fair
-  comparator across models. Implementation: `service.py:397-407`. See §B.3 +
-  §D.4.
+- **Bridge-side clarification bypass removed (2026-06-04).** It previously
+  short-circuited narrow `add a <kind>` prompts with canned text. That hid
+  model-specific ability to ask clarification, so benchmarks now invoke the
+  model and expose the full mode catalog.
 - **CONSECUTIVE (not LIFETIME) tail-run loop counting (2026-06-01).** The
   proxy's `vllm-proxy.py:403-442` now counts run-length at the tail of the
   assistant-turn sequence — any different tool resets the run to 1, a no-tool
@@ -41,13 +38,11 @@ later in the doc.
   at `_REFLECT_AT=4` + hard stop at `_STOP_AT=8`. Two-stage: the model gets
   exactly one shot to act on the reflection prompt before being cut off. Pairs
   with the consecutive counting fix above. Documented in §D.1.
-- **Rule 11 NO_REPLY guard + Rule 11a Missing-WHERE clause (2026-06-01).**
-  `adapter.py:513-536`. Rule 11 explicitly forbids the model from replying the
-  literal `NO_REPLY` string on action-shaped prompts; 11a names
-  `PARALLEL_generic` / `FALLBACK_generic` / `UPDATE_params_generic` as the
-  patterns that MUST elicit a clarification question instead of a tool call.
-  This is the prompt-side replacement for the now-default-off synthetic
-  clarification bypass. Documented in §B.2-prompt and §D.4.
+- **Rule 11 generalized (2026-06-04).** The corpus-specific Rule 11a/11b
+  clauses and the `self_check` appendix were removed. The remaining prompt
+  guidance is generic: act when required target/parameters are known, ask one
+  concise clarification when they are missing, and never answer an action
+  request with literal `NO_REPLY`.
 - **Per-profile proxy tuning (2026-06-01).** `serving/config.sh` carries
   `THOR_TARGET_PROXY_LOOP_REFLECT_AT` / `_STOP_AT` / `_FORCE_ENABLE_THINKING`
   per profile case branch (5 active branches);
@@ -83,8 +78,7 @@ later in the doc.
   `PARALLEL_generic`, `FALLBACK_generic`, plus 2 cases labeled
   `category: clarification` (smoke_corpus.yaml lines 1170, 1196, 1214).
   These rebalances are tied to the default-synthetic-off measurement design —
-  they probe whether the model itself asks (via Rule 11a) without the
-  bridge bypass.
+  they probe whether the model itself asks without the bridge bypass.
 
 ---
 
@@ -115,12 +109,9 @@ later in the doc.
   5. `OPENCLAW_PROXY_LOOP_REFLECT_AT=4` / `OPENCLAW_PROXY_LOOP_STOP_AT=8`
      (round-10 cascading loop defense, **CONSECUTIVE** counting since
      2026-06-01).
-- **Synthetic clarification is OFF by default since 2026-06-01.** The
-  bypass that used to short-circuit `add a <kind>` prompts is now an
-  opt-in (`OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1`). The prompt-side
-  replacement is Rule 11a (Missing-WHERE) in `adapter.py:519-536`, which
-  instructs the model to ask "which parent and where in its children?"
-  for those patterns without bypass.
+- **No bridge-side clarification bypass or corpus-specific prompt rule.**
+  The model must decide whether to ask or act from the user request and
+  available context.
 - **Production default**: `cosmos-reason2-8b` (8B Qwen3-VL VLM, FP8 KV,
   hermes tool parser, qwen3 reasoning parser, thinking-on, 256K ctx).
 
@@ -151,11 +142,9 @@ later in the doc.
 │                     ▼                                                       │
 │  ┌────────────────────────── Hop 2 (lane-specific) ──────────────────┐    │
 │  │  openclaw_assistant_bridge :8200  (FastAPI, this repo)             │    │
-│  │  ─ synthetic clarif for "add a <kind>" — DEFAULT OFF since         │    │
-│  │      2026-06-01 (opt-in: OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1)    │    │
-│  │  ─ Rule 11 NO_REPLY guard + 11a Missing-WHERE injected into RULES  │    │
-│  │      block (adapter.py:513-536) — prompt-side replacement          │    │
-│  │  ─ detects 5+ same-tool calls across turns → synthetic stop (r 8)  │    │
+│  │  ─ no prompt-keyword tool windows or canned clarification bypasses │    │
+│  │  ─ generic Rule 11 asks-or-acts; no corpus-specific 11a/self_check │    │
+│  │  ─ loop guard: one visible reflection, then loop_detected failure  │    │
 │  │  ─ fires /compact every Nth user prompt on this session key        │    │
 │  │  ─ builds OpenClaw agent invocation (gateway mode = HTTP)          │    │
 │  │  ─ derives session key = conversationId + catalogHash + progRev    │    │
@@ -354,10 +343,8 @@ unchanged.
 | `OPENCLAW_ASSISTANT_GATEWAY_ENABLE_THINKING` | unset | Optional boolean. If set, added to `chat_template_kwargs` in the gateway envelope. Note: **the proxy's mirror is the proven path** — this flag exists as an alternative but is less tested. | Use the **proxy's** `OPENCLAW_PROXY_FORCE_ENABLE_THINKING` for production toggles. This bridge-side var is here for symmetry. |
 | `OPENCLAW_ASSISTANT_COMPACT_EVERY_N` | `0` (disabled) | When set to N>0, the bridge POSTs `/compact` to the gateway **before** every Nth user prompt on this session key (skipping #1). Counter resets on bridge restart. **Iter-32 production setting.** | `2` in production — keeps chain-on sessions from overflowing the 256K context. Disable only if measuring an isolated baseline. |
 | `OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S` | `120` | Timeout for the `/compact` call itself. If exceeded the failure is logged and the user request still goes through. | Leave alone — compaction normally completes in 10-30 s. |
-| `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` | `5` | Bridge-side **cross-turn same-tool-name loop detector** (round 8, 2026-05-31). When the request's `messages[]` history has 5+ assistant turns calling the same tool, the bridge short-circuits with a synthetic stop response (status 200, message "I have called X N times… stopping to prevent a runaway loop.", `warnings: ["loop_detected_stopped: … (same_name)"]`). NOTE: Composer→bridge sends ONE user message per turn — `messages[]` is rarely populated as a history — so the load-bearing duplicate-tool detector is the **proxy's**. Leave at 5 as a belt-and-braces backstop. Set to `0` to disable. | This catches loops the proxy's per-conversation threshold would miss when Composer restarts conversations indefinitely. |
-| `OPENCLAW_ASSISTANT_LOOP_ARGS_THRESHOLD` | `2` | Bridge-side **cross-turn same-tool-AND-same-args loop detector** (FIX 5, 2026-06-03). When the same `name+args_hash` fingerprint appears `_THRESHOLD + 1` times in `messages[]` (so 3 identical calls at default 2), the bridge fires a stronger synthetic stop: "I called X N times with IDENTICAL arguments. The validator already told me what was wrong — I am not reading the error envelope's diff and hint." Tighter than the same-name detector because identical-args repetition is a definitive signal the model isn't reading FIX 4's enriched error envelope. Set to `0` to disable. | Pair with FIX 3 (composer normalizer) and FIX 4 (diff-bearing error envelope) — same-args repeat means both upstream fixes missed. |
-| `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC` | _(unset = off)_ | **NEW 2026-06-01.** Opt-in for the bridge-side synthetic clarification short-circuit (see §D.4). When set (1/true/yes/on), prompts matching the narrow gate `add a <kind>` / `insert a <kind>` / `wrap with <kind>` (≤4 words, kind ∈ {parallel, fallback, sequence, repeat, retry, inverter}) are answered with a canned "Which parent? Which position?" without invoking OpenClaw. Default OFF means the model itself must ask (Rule 11a in `adapter.py`). | Production: leave OFF. Enable only when running a smoke against a model that demonstrably cannot pass Rule 11a and you need the bypass to ship. |
-| `OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC` | _(unset = off)_ | **Legacy back-compat opt-out** (was the only knob before 2026-06-01, when synthetic was hard-coded ON). When set (1/true/yes/on), forces the bypass off even if `_ENABLE_SYNTHETIC` was also set. Honored for backwards compatibility with launcher scripts that referenced this var. | Use only if you have an old script that sets ENABLE but you want to verify the bypass is off. New deployments should leave it unset and rely on the new opt-in. |
+| `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` | `5` | Bridge-side **cross-turn same-tool-name loop detector**. At one below threshold, injects one visible `loop_guard_reflection` note into the next prompt; at threshold, returns `error.code="loop_detected"` instead of a synthetic assistant answer. Set to `0` to disable. | This catches loops the proxy's per-conversation threshold would miss when Composer restarts conversations indefinitely. |
+| `OPENCLAW_ASSISTANT_LOOP_ARGS_THRESHOLD` | `2` | Bridge-side **cross-turn same-tool-AND-same-args loop detector**. At threshold, injects one visible reflection; at `_THRESHOLD + 1` identical calls, returns `error.code="loop_detected"`. Tighter than same-name because identical args prove the model is not reading the validation error. Set to `0` to disable. | Pair with composer normalizer + diff-bearing error envelope. Any recovery after reflection is marked assisted. |
 | `OPENCLAW_ASSISTANT_SANDBOX` | `my-assistant` | NemoClaw sandbox name. | Match the actual sandbox; default is the one the provisioner installs. |
 | `OPENCLAW_ASSISTANT_NAMESPACE` | `openshell` | K8s namespace inside the cluster gateway container. | Leave alone. |
 | `OPENCLAW_ASSISTANT_CONTAINER` | `agent` | K8s container name. | Leave alone. |
@@ -366,8 +353,6 @@ unchanged.
 | `OPENCLAW_ASSISTANT_BIN` | `openclaw` | Path to the `openclaw` binary on the host (CLI fallback). | Override when testing a non-default install. |
 | `OPENCLAW_ASSISTANT_LOCAL` | `false` | When `true`, run the agent locally instead of via cluster `kubectl exec`. | Debug-only — bypasses the sandbox's Landlock + seccomp + egress policy. |
 | `OPENCLAW_ASSISTANT_THINKING` | `off` | Adapter-side hint for OpenClaw's `--thinking` CLI flag. **Only used in CLI mode.** | Gateway mode ignores this. |
-| `OPENCLAW_ASSISTANT_AUTO_TOOL_WINDOW` | `true` | When `true` in CLI mode, the bridge narrows the per-request allowlist by inferring tools the prompt needs. | Leave on for CLI mode. Gateway mode does not narrow (incompatible with the persistent MCP wrapper). |
-| `OPENCLAW_ASSISTANT_ALLOWED_TOOLS_FILE` | `/tmp/manyforge-openclaw-allowed-tools.txt` | Where the CLI-mode allowlist is written for the MCP wrapper to read. | Leave alone. Stale entries cause the symptom in the runbook §3 ("not exposed by this request's tool window"). |
 | `OPENCLAW_ASSISTANT_COMPOSER_BASE` | `http://127.0.0.1:9000` | Composer URL for principal-binding registration (live tool-call streaming). | Override when Composer runs on a non-default port. |
 | `OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_ENABLED` | `false` | Opt-in: after N consecutive failures, fail fast with 503 instead of dispatching to a sick gateway. | Enable in production reliability runs; leave off for development. |
 | `OPENCLAW_ASSISTANT_CIRCUIT_BREAKER_THRESHOLD` | `5` | Consecutive failures before opening. | Tune by environment. |
@@ -375,23 +360,14 @@ unchanged.
 | `OPENCLAW_ASSISTANT_METRICS_ENABLED` | `false` | When `true`, mount `/metrics` Prometheus endpoint on the bridge port. | Enable for production observability. |
 | `OPENCLAW_ASSISTANT_LOG_LEVEL` | `info` | Uvicorn log level. | `debug` for new-incident triage. |
 
-**Bridge-side synthetic-clarification short-circuit** (`service.py:370-446`,
-round 7 of 2026-05-31; **default-OFF since 2026-06-01**): pattern-matches
-`add a <kind>` / `insert a <kind>` / `wrap with <kind>` (kind ∈ parallel,
-fallback, sequence, repeat, retry, inverter; word count ≤ 4); returns a
-canned "Which parent? Which position?" clarification without ever invoking
-OpenClaw.
+**Bridge-side synthetic-clarification short-circuit**: removed 2026-06-04.
+Smoke benchmarks now measure whether the model itself asks clarification on
+ambiguous prompts.
 
-The 2026-06-01 inversion: **opt-in via `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1`**;
-default off so smoke benchmarks measure the model's actual ability to ask
-clarification on those patterns (the bypass was hiding model-specific
-behavior). Legacy `OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC=1` opt-out preserved
-for backwards compatibility — if set, forces off even when ENABLE is set.
-
-The prompt-side replacement is **Rule 11a Missing-WHERE** (adapter.py:519-536)
-which instructs the model to ask "which parent and where in its children?"
-for `PARALLEL_generic` / `FALLBACK_generic` / `UPDATE_params_generic`
-patterns. See §D.4 for full details on both mechanisms.
+The prompt-side replacement is now generic **Rule 11**: act when required
+target/parameters are known, ask one concise clarification when they are
+missing, and never answer an action request with literal `NO_REPLY`. The
+old corpus-specific Rule 11a/self-check path is removed.
 
 ### B.4 Composer config (sibling `dev_ws/src/manyforge/`)
 
@@ -478,8 +454,7 @@ accept legitimate variant behavior without rewriting corpus expectations.
 `PARALLEL_generic`, `FALLBACK_generic`, plus 2 cases labeled
 `category: clarification` (smoke_corpus.yaml lines 1170, 1196, 1214). The
 rebalance is tied to the default-synthetic-OFF design — these cases probe
-whether the model itself (via Rule 11a) asks for parent/position without
-the bridge bypass.
+whether the model itself asks for parent/position without the bridge bypass.
 
 The runner reconfigures stdout to line-buffered at import (`smoke_corpus_runner.py:48`) so `tail -f /tmp/iterN_runner.log` streams verdicts realtime — see [SMOKE-ITER-RUNBOOK.md §4](./SMOKE-ITER-RUNBOOK.md) for the rationale.
 
@@ -635,14 +610,16 @@ also explicitly set. New deployments should use the two-knob form.
 
 ### D.2 Bridge defense (across multiple Composer prompts)
 
-`service.py:412-473`. Same counter logic, but in the bridge — fires
-**before** OpenClaw is invoked at all. Returns status 200 with a
-`warnings: ["loop_detected_stopped: …"]` payload that Composer renders as a
-normal model message and the smoke runner scores as a fail.
+Same counter logic, but in the bridge — fires **before** OpenClaw is invoked.
+At the reflection threshold it appends one visible `loop_guard_reflection`
+note to the model prompt and marks the response as assisted if the model later
+recovers. At the hard threshold it returns a failure-shaped `loop_detected`
+envelope; it does not synthesize a normal assistant answer.
 
 | Trigger | Action |
 |---------|--------|
-| `top_count >= OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` (default 5) | Synthesize a 200 response with a canned "I have called X N times… stopping to prevent a runaway loop. Please refine the request…" message. No OpenClaw invocation. `bridge_synthetic_loop_break` telemetry event. |
+| `top_count == OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD - 1` | Inject one `loop_guard_reflection` note into the next prompt; mark any recovery as assisted. |
+| `top_count >= OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` (default 5) | Return `error.code="loop_detected"` with repeated tool/count details. No OpenClaw invocation. `bridge_loop_detected_stop` telemetry event. |
 
 ### D.3 Why this matters
 
@@ -654,77 +631,19 @@ normal model message and the smoke runner scores as a fail.
 - The two-stage proxy design + bridge cross-turn floor reliably bound
   total time-per-case at ~60-80 s even in the worst loop.
 
-### D.4 Bridge synthetic-clarification + the Rule 11a prompt-side equivalent
+### D.4 Retired bridge clarification shortcut + Rule 11
 
-There are **two** mechanisms in the pipeline that attempt to make the model
-ask the right "which parent / where in its children?" clarification on
-narrow `add a <kind>` patterns. They overlap in purpose but operate at
-different layers:
+The bridge-side clarification shortcut was removed on 2026-06-04. It used to
+answer narrow `add a <kind>` prompts with canned text before invoking
+OpenClaw. That made benchmarks less meaningful by giving weak models a free
+clarification pass and by masking the difference between models that over-act,
+over-ask, or balance the two.
 
-| Mechanism | Where | Cost | Gating | Today |
-|-----------|-------|------|--------|-------|
-| **Bridge synthetic clarification** | `service.py:370-446` | 0 GPU — bypass before OpenClaw is invoked | Opt-in env `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1` | **DEFAULT OFF since 2026-06-01** |
-| **Prompt-side Rule 11 NO_REPLY + Rule 11a Missing-WHERE** | `adapter.py:513-536` | Normal GPU spend (model invocation) | Always-on (part of every RULES block) | Production replacement for the bypass |
-
-**Bridge synthetic clarification (round 7, 2026-05-31)** — bypass OpenClaw
-entirely on prompts matching a narrow gate, return a canned answer. Narrow
-gate (`service.py:407-415`):
-
-- `add a <kind>` / `insert a <kind>` / `wrap with <kind>`
-- `<kind>` ∈ {parallel, fallback, sequence, repeat, retry, inverter}
-- Total word count ≤ 4 (compound forms like `add a parallel that ...`
-  refused)
-
-Returns a canned "Which parent node? Which position? For example: 'as the
-first child of pick_and_place', 'after gripper_close', or 'as a new root
-wrapping the existing tree'." answer. Smoke's `answer_must_contain` rubric
-checks for "which" and "where" tokens; the synthetic answer contains both.
-
-Default inverted to **OFF** on 2026-06-01 because the bypass gave every
-candidate model the same free pass on `PARALLEL_generic` /
-`FALLBACK_generic`, masking model-specific ability (or lack thereof) to ask
-clarification. Enable with `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1` for a
-production lane where the model demonstrably cannot pass Rule 11a (e.g.
-Cosmos-Reason2-8B on chain-off first-turn action prompts). Legacy
-`OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC=1` is preserved as a back-compat
-opt-out — if set, forces off even when ENABLE is set.
-
-**Rule 11 NO_REPLY guard + Rule 11a Missing-WHERE
-(2026-06-01, `adapter.py:513-536`)** — the prompt-side replacement. Both
-rules sit in the per-turn RULES block injected into every gateway-mode
-agent prompt:
-
-- **Rule 11**: "NEVER reply with the literal string `NO_REPLY` when the
-  user's prompt contains an action verb — `NO_REPLY` is reserved for
-  genuinely empty contexts (silence, continuation prompts), NOT for action
-  requests. If the request is action-shaped, either emit a tool call or
-  ask a clarifying question with real text content." Some Qwen-family
-  models default to `NO_REPLY` on unfamiliar action prompts; this guard
-  forbids that escape hatch.
-- **Rule 11a (Missing-WHERE)**: "A prompt is ambiguous if it names the
-  operation and node kind but NOT where to place the result (parent /
-  position / target sibling). For these, output ONLY a clarification
-  question — do NOT call any tool." The rule names the patterns
-  explicitly: `PARALLEL_generic`, `FALLBACK_generic`,
-  `UPDATE_params_generic`. The smoke corpus mirrors these names in case
-  IDs so the rule maps directly to test outcomes.
-
-The two rules together are designed to make the model do what the bypass
-used to do, **without** requiring the bypass — letting the smoke corpus
-fairly measure cross-model clarification quality. When designing a new
-profile, the question to ask is: "does this model satisfy Rule 11a on the
-4 ASK cases without the bypass?" If yes, leave synthetic OFF. If no, the
-bypass exists as a shipping crutch.
-
-There is also a separate **self_check appendix** at `adapter.py:575-610`
-that appends a `\n\n## self_check (apply BEFORE responding)` block to the
-user_request when the prompt is ≤5 words, starts with `add a `/`insert a `
-/`wrap with `/`wrap the root with `, contains a control-flow kind, and has
-**no** locator keyword (none of: `after `, `before `, `child of`,
-`under `, `inside `, `position `, `first child`, `last child`, `at index`,
-`somewhere`, …). The self_check still routes through the model (unlike
-the synthetic bypass which short-circuits), but biases it toward asking
-rather than guessing.
+The remaining mechanism is generic prompt-side Rule 11. It is guidance, not
+a bypass: the model still sees the lane's full mode catalog and must choose
+whether to ask a clarification question or emit a tool call. Corpus-specific
+Rule 11a/11b clauses and the `self_check` appendix were removed on
+2026-06-04 so the bridge no longer encodes benchmark-pattern decisions.
 
 ---
 
@@ -892,7 +811,7 @@ If the loop happens **across** Composer prompts (each prompt's history
 shows the same tool but the per-conversation counter resets at proxy
 level), the bridge's `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` is the
 right defense — confirm it's `5` (default) and that
-`bridge_synthetic_loop_break` events fire in the bridge log.
+`bridge_loop_detected_stop` events fire in the bridge log.
 
 ### F.5 Add a new model profile
 
@@ -1002,14 +921,14 @@ Reference baselines (from [SMOKE-CORPUS.md](./SMOKE-CORPUS.md)):
 | 20 | chain-off, no recovery turn | 45/66 (68.2%) | 49/66 (74.2%) |
 | 28 | chain-off, recovery turn, schema refactor | 49/66 (74.2%) | 51/66 (77.3%) |
 | **32** | **chain-on + COMPACT_EVERY_N=2 + recovery turn (prior prod)** | **47/66 (71.2%)** | **51/66 (77.3%)** |
-| 33+ (2026-06-01) | iter-32 recipe **+ synthetic OFF + Rule 11a + alt_names + consecutive-counting + 4 cases rebalanced to ASK** | (re-baselining in progress) | (re-baselining in progress) |
+| 33+ (2026-06-01; partially retired 2026-06-04) | iter-32 recipe **+ synthetic OFF + Rule 11a + alt_names + consecutive-counting + 4 cases rebalanced to ASK** | (re-baselining in progress) | (Rule 11a/self-check no longer live) |
 
 The 2026-06-01 corpus rebalance moves 4 cases (`PARALLEL_generic`,
 `FALLBACK_generic`, 2 `category: clarification` cases at smoke_corpus.yaml
 lines 1170/1196/1214) from "expect a tool call" to "expect a clarification
 question". This couples the corpus to the default-synthetic-OFF design:
 under the bypass, those 4 cases were guaranteed to pass via the canned
-answer; under Rule 11a, they probe whether the model itself asks. Older
+answer; after Rule 11a removal, they probe whether the model itself asks. Older
 iter-N numbers are NOT directly comparable to runs after the rebalance —
 re-baseline on each model when comparing recipes.
 
@@ -1111,11 +1030,11 @@ Recorded under `/tmp/35b-iter-log/rounds/`. Round structure:
 | **4** | Bigger thinking budget (1024 → 2048) | Net-negative on cosmos-8b; 512 stays the sweet-spot. |
 | **5** | `OPENCLAW_PROXY_FORCE_TOOL_CHOICE=required-first` | Aborted — interacted poorly with chain-on session memory; reverted to no force. |
 | **6** | `OPENCLAW_PROXY_USER_MESSAGE_SUFFIX` plan-then-execute nudge | Ignored by the model on first-turn action prompts. Suffix deprecated for this stack. |
-| **7** | Bridge synthetic clarification short-circuit for `add a <kind>` | Lands the answer-text rubric for the 4 affected smoke cases; very narrow gate intentionally. **Default-INVERTED to OFF 2026-06-01** so smoke fairly measures cross-model clarification quality. Opt-in via `OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1`. |
+| **7** | Bridge clarification short-circuit for `add a <kind>` | Retired 2026-06-04. It improved selected rubric cases but hid model-specific clarification behavior and is no longer part of benchmark or production runs. |
 | **8** | Bridge cross-turn `OPENCLAW_ASSISTANT_LOOP_TOOL_THRESHOLD` fail-fast | Stops the 25-28-turn same-tool runaway pattern. Tight defaults (5). |
 | **10** | Proxy cascading loop defense (reflect_at=4 + stop_at=8) | Bounds total time-per-case at ~60-80 s in the worst loop; lets the model recover once after seeing the reflection prompt. **2026-06-01 follow-up: CONSECUTIVE tail-run counting replaces lifetime counting** — fixes false-positive hard-stops on chain-on smoke (every PnP_NN case after the 3rd was being shut down on turn 1). |
-| **11** (2026-06-01) | Rule 11 NO_REPLY guard + Rule 11a Missing-WHERE in `adapter.py:513-536` | Prompt-side replacement for the synthetic bypass — instructs the model directly to ask "which parent / where in its children?" on `PARALLEL_generic` / `FALLBACK_generic` / `UPDATE_params_generic` patterns. Lets the smoke corpus fairly measure cross-model clarification quality. |
-| **12** (2026-06-01) | Corpus rebalance: 4 cases switched from "expect tool call" → "expect ASK" | Couples the corpus to the default-synthetic-OFF design. Cases that used to pass via the canned bypass answer now probe whether the model itself asks via Rule 11a. |
+| **11** (2026-06-01; generalized 2026-06-04) | Rule 11 ask-or-act guard | Generic prompt guidance: act when required target/parameters are known, ask one concise clarification when they are missing, never answer an action request with literal `NO_REPLY`. Corpus-specific 11a/11b and `self_check` were removed. |
+| **12** (2026-06-01) | Corpus rebalance: 4 cases switched from "expect tool call" → "expect ASK" | Historical scoring change. These cases now measure model behavior directly; the bridge no longer adds a bypass or corpus-specific ask rule. |
 | **13** (2026-06-01) | Smoke runner `alt_names` support (`smoke_corpus_runner.py:391-424`) | Cases declare equivalent-effect tool aliases; soft-pass when an alt fires with 2xx. Stops false-fails on legitimate variant tool choices (e.g. `scene_draft_upsert_objects` for `scene_draft_add_object`). |
 | **14** (2026-06-01) | Schema fix: `node.name` accepted in `tree_draft_insert_node` payload | Stops validator death-spirals when models duplicate `nodeName` into `node.name` (legacy shape from `_TREE_NODE_SCHEMA`). Handler still reads top-level `nodeName`; `node.name` is accepted-and-ignored. |
 

@@ -4,7 +4,7 @@ The bridge has two transports, selected by the `OPENCLAW_ASSISTANT_USE_GATEWAY`
 env var (`AdapterConfig.use_gateway`):
 
   HOT PATH — gateway HTTP (production default):
-    build_agent_prompt(payload, mcp_allowed_tools=None)
+    build_agent_prompt(payload)
       → build_gateway_chat_completions_command()
       → curl POST to OpenClaw's chat-completions endpoint
       → parse_chat_completions_response()
@@ -14,12 +14,10 @@ env var (`AdapterConfig.use_gateway`):
       _project_node_catalog, _project_skill_catalog.
 
   COLD PATH — CLI shell-out (fallback transport):
-    build_agent_prompt(payload, mcp_allowed_tools=<inferred window>)
+    build_agent_prompt(payload)
       → build_openclaw_command() (docker exec … kubectl exec … openclaw agent)
       → parse_openclaw_json() (extract structured JSON from stdout)
       → normalize_agent_response()
-    The tool-window inference (`mcp_allowed_tools_from_payload`) only fires
-    on this path.
 
 Tests are grouped below. The hot-path block is the one that has to stay
 correct for production OpenClaw + Cosmos-Reason2-8B traffic; the cold-path
@@ -36,7 +34,6 @@ from openclaw_assistant_bridge.adapter import (
     build_gateway_chat_completions_command,
     build_openclaw_command,
     derive_gateway_session_key,
-    mcp_allowed_tools_from_payload,
     normalize_agent_response,
     normalize_chat_completions_response,
     parse_chat_completions_response,
@@ -138,21 +135,14 @@ def test_build_prompt_includes_mode_tools_and_user_message() -> None:
     assert "Read the program." in prompt
 
 
-def test_build_prompt_filters_allowed_tool_ids_to_visible_window() -> None:
-    # When a `mcp_allowed_tools` window is provided, the `allowedTools`
-    # id list in the envelope must be filtered to that window.
-    prompt = build_agent_prompt(
-        _rich_payload("add a box"),
-        mcp_allowed_tools=["scene_draft_add_object", "catalog_read"],
-    )
+def test_build_prompt_exposes_full_mode_tool_catalog() -> None:
+    # Prompt-derived request windows were removed. The id list remains useful
+    # model context, but it is now the full assistant-mode catalog supplied by
+    # Composer, not a per-prompt subset.
+    prompt = build_agent_prompt(_rich_payload("add a box"))
     assert "scene_draft_add_object" in prompt
     assert "catalog_read" in prompt
-    # Tools outside the visible window must NOT appear in the
-    # `allowedTools` list. RULES rule 3 mentions `tree_draft_*` and
-    # `scene_draft_*` literally as wildcards, so check for the exact
-    # quoted id form (which only appears in the json-serialized
-    # `allowedTools` list).
-    assert '"scene_draft_remove_objects"' not in prompt
+    assert "scene_draft_remove_objects" in prompt
     # `allowedNodes` and `allowedSkills` were dropped (no regression
     # observed in smoke; ids are derivable from the catalogs).
     assert "allowedNodes" not in prompt
@@ -220,11 +210,14 @@ def _rich_payload_with_snapshots(message: str = "add a box of size 1 0.02 0.5") 
 def test_build_prompt_keeps_complete_node_index_and_object_ids_index() -> None:
     """Structured projections must keep ALL names reachable as indexes.
 
-    The detail window is bounded (first-N + prompt-referenced), but the
-    index lists are unconditional — the model must always be able to
-    reference any node-name or object-id by string in a later tool call.
+    The detail window is bounded first-N, but the index lists are
+    unconditional — the model must always be able to reference any
+    node-name or object-id by string in a later tool call.
     """
     prompt = build_agent_prompt(_rich_payload_with_snapshots())
+    assert "stateContext" in prompt
+    assert '"programSnapshot"' not in prompt
+    assert '"sceneSnapshot"' not in prompt
     # All program tree node names appear at least somewhere in the index.
     assert "pick_and_place" in prompt
     assert "approach" in prompt
@@ -234,16 +227,26 @@ def test_build_prompt_keeps_complete_node_index_and_object_ids_index() -> None:
     assert "ground" in prompt
 
 
-def test_build_prompt_promotes_prompt_referenced_objects_to_detail() -> None:
-    """When the user prompt references a specific object, its detail must
-    appear in `sceneSnapshot.objects` even if it would have been outside
-    the first-N detail window."""
+def test_build_prompt_can_skip_state_context_by_cadence() -> None:
+    """The service can skip the compact state capsule by cadence without
+    removing the request metadata or the raw user request."""
     prompt = build_agent_prompt(
-        _rich_payload_with_snapshots("update graspable pose to (1.0, 0.0, 0.0)")
+        _rich_payload_with_snapshots("update graspable pose to (1.0, 0.0, 0.0)"),
+        state_context_control={
+            "mode": "every_n",
+            "everyN": 3,
+            "sequence": 2,
+            "include": False,
+            "reason": "cadence_skip",
+            "lastIncludedSequence": 1,
+        },
     )
-    # Detail for `graspable` must appear (it is referenced by name in the
-    # user message), beyond just the id index.
-    assert "graspable" in prompt
+    assert '"stateContext"' in prompt
+    assert '"included": false' in prompt
+    assert '"reason": "cadence_skip"' in prompt
+    assert '"program": {' not in prompt
+    assert '"scene": {' not in prompt
+    assert "update graspable pose" in prompt
 
 
 def test_build_prompt_node_catalog_uses_projected_shape() -> None:
@@ -461,70 +464,16 @@ def test_build_command_can_set_session_id() -> None:
     assert "--session-id conversation-1" in inner
 
 
-def test_build_command_can_scope_manyforge_mcp_tools() -> None:
+def test_build_command_does_not_write_request_scoped_tool_window() -> None:
     command = build_openclaw_command(
         config=AdapterConfig(),
         message="hello",
         timeout_s=10,
-        mcp_allowed_tools=["tree_draft_wrap_node", "catalog_read"],
     )
     inner = _decoded_inner_invocation(command)
-    assert (
-        "tree_draft_wrap_node,catalog_read > "
-        "/tmp/manyforge-openclaw-allowed-tools.txt"
-    ) in inner
-    assert "trap 'rm -f /tmp/manyforge-openclaw-allowed-tools.txt' EXIT" in inner
+    assert "manyforge-openclaw-allowed-tools.txt" not in inner
+    assert "trap 'rm -f" not in inner
     assert "openclaw agent" in inner
-
-
-def test_mcp_allowed_tools_uses_requested_tools_when_present() -> None:
-    payload = {
-        **_payload(),
-        "requestedTools": ["tree_draft_wrap_node", "not_in_catalog"],
-    }
-    assert mcp_allowed_tools_from_payload(payload) == ["tree_draft_wrap_node"]
-
-
-def test_mcp_allowed_tools_infers_tree_window_for_node_prompt() -> None:
-    payload = {**_payload(), "message": "add a repeat node as the new root"}
-    assert mcp_allowed_tools_from_payload(payload) == [
-        "program_read",
-        "tree_draft_wrap_node",
-    ]
-
-
-def test_mcp_allowed_tools_keeps_root_wrap_window_narrow() -> None:
-    payload = _rich_payload("add a repeat node as root node, and make the current root node its child")
-    assert mcp_allowed_tools_from_payload(payload) == [
-        "catalog_read",
-        "program_read",
-        "scene_inspect",
-        "tree_draft_wrap_node",
-    ]
-
-
-def test_mcp_allowed_tools_routes_runtime_object_reset_to_tree_insert() -> None:
-    payload = _rich_payload("at the end of the cycle, remove graspable and re-add it")
-    assert mcp_allowed_tools_from_payload(payload) == [
-        "catalog_read",
-        "program_read",
-        "scene_inspect",
-        "tree_draft_insert_node",
-    ]
-
-
-def test_mcp_allowed_tools_routes_compile_time_scene_add_to_scene_add() -> None:
-    payload = _rich_payload("add a box of size 1.0, 0.02, 0.2 at position 0, -0.2, 0.1")
-    assert mcp_allowed_tools_from_payload(payload) == [
-        "catalog_read",
-        "program_read",
-        "scene_inspect",
-        "scene_draft_add_object",
-    ]
-
-
-def test_mcp_allowed_tools_fails_open_for_plain_query() -> None:
-    assert mcp_allowed_tools_from_payload(_payload()) == []
 
 
 def test_parse_openclaw_json_accepts_logged_json_line() -> None:

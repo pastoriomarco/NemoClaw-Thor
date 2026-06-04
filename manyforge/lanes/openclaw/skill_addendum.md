@@ -18,9 +18,17 @@ You see three control tools in your `tools[]`:
 
 The naive flow is 3 round-trips per real tool invocation: search → describe → call. That's expensive (and slow). Use these rules to collapse it:
 
-### Rule 1 — Pre-named tools skip `tool_search`
+### Rule 1 — `tool_describe` / `tool_call` need the MCP-exposed `name`, NOT the bare ManyForge id
 
-`tool_describe` accepts a bare tool name as `id`. If you already know the tool name (from this primer or from earlier in the conversation), go straight to `tool_describe({id: "tree_draft_wrap_node"})` — no `tool_search` needed.
+OpenClaw exposes ManyForge tools under three fields per `tool_search` result row:
+
+- **`name`** — the dispatch id, e.g. `manyforge__tree_draft_wrap_node`. Pass this **verbatim** to `tool_describe` and `tool_call`.
+- **`id`** — a fully-qualified MCP locator like `mcp:bundle-mcp:manyforge__tree_draft_wrap_node`. Some clients use this internally; treat it as opaque.
+- **`label`** — the bare ManyForge name (e.g. `tree_draft_wrap_node`) for display only. **Never use the label for dispatch.**
+
+If you already know the tool name (from this primer or earlier in the conversation), call `tool_describe({id: "manyforge__tree_draft_wrap_node"})` — keep the `manyforge__` prefix, underscores only, no dashes. If you don't have a search row yet, run `tool_search({query: "<keywords>"})` first and read the `name` field — never guess the prefix shape.
+
+Bare ids (`tree_draft_wrap_node`) and dashed variants (`manyforge__tree-draft-wrap_node`) both return `Unknown tool id` from OpenClaw. Verified 2026-06-04 from the gateway log; the proxy-side `normalize_nested_mcp_ids` mutation will rewrite them for you, but emitting the canonical form directly saves a round-trip.
 
 ### Rule 2 — Describe once per conversation
 

@@ -7,7 +7,7 @@ Lane-specific artifacts for the OpenClaw assistant lane.
 | File | Purpose |
 |---|---|
 | [`skill_addendum.md`](./skill_addendum.md) | Discovery-protocol primer appended to the lane-agnostic skill body. Teaches the model how to use OpenClaw 2026.5.6+'s native `tool_search` / `tool_describe` / `tool_call` compaction surface efficiently. |
-| [`policy.yaml`](./policy.yaml) | `SessionPolicy` config for this lane (compaction, synthetic short-circuits, discovery_mode). Defaults reflect the iter-32 production recipe (51/66 on cosmos-reason2-8b). |
+| [`policy.yaml`](./policy.yaml) | `SessionPolicy` config for this lane (compaction, discovery_mode). Defaults reflect the current native OpenClaw route. |
 
 ## Phase 3 status
 
@@ -34,8 +34,8 @@ container (in-sandbox), not in the bridge. The bridge's job is:
    `skill_addendum.md` to the lane-agnostic skill body.
 3. POST it to the OpenClaw gateway at `:18789/v1/chat/completions` with
    model id `openclaw/manyforge-composer`.
-4. Apply the lane's `SessionPolicy` (compaction every 2; synthetic
-   short-circuits on) per the iter-32 recipe.
+4. Apply the lane's `SessionPolicy` (compaction every 2) and leave
+   clarification/intent decisions to the model.
 5. Parse the response and audit the discovery turns vs the real-tool
    turns separately (so the bake-off can show the round-trip overhead
    honestly).

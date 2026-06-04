@@ -4,7 +4,7 @@
 > Authored 2026-06-02 after the OpenClaw 2026.5.6+ tool-search-shim rebuild and the four-agent inventory pass that grounds the recommendations below.
 > **Revised 2026-06-02 (rev. 2)** after first external review: Hermes natively supports `mcp_servers` (verified against Hermes 0.14.0 wheel — `cli.py:2691, 9314+`, `tools/mcp_tool.py`), so the custom MCP-to-Hermes-tool wrapper is dropped in favor of Hermes' native MCP path; the Hermes lane uses Hermes' native session/runs APIs rather than `/v1/chat/completions`; policy preset is split into shared egress + per-lane binary overlay; OpenClaw plugin/build artifacts are archived (not deleted) until after Phase 3 gate; per-lane opt-in for synthetic short-circuits; explicit composer provider registry task in Phase 1; proxy env-var rename + per-lane mutation profiles. Per-phase gates corrected for the 66-case corpus.
 >
-> **Revised 2026-06-02 (rev. 3)** after second external review: stale contradictions cleaned up (principle #2 wording, §3 findings, §7 target layout for `policies/` and the MCP-integration doc cross-reference, §13 timeline/question counts); new **Phase 0.5 Hermes contract spike** added to de-risk the Hermes lane before the big refactor by probing `mcp_servers` injection, both session APIs, and the vLLM tool-call parser end-to-end; the `mcp_servers.manyforge` config snippet in §5.3 expanded to include `MANYFORGE_LANE`/`MANYFORGE_PRINCIPAL`/`MANYFORGE_ASSISTANT_MODE`/`MANYFORGE_ALLOWED_TOOLS_FILE` + outbound proxy envs; an explicit **lane-neutralization task for `manyforge-mcp-bridge.py`** in Phase 1 (it has OpenClaw defaults baked in today); Phase 1 marked as a **behavior-preserving refactor** with no concurrent OpenClaw native/plugin behavior changes; Hermes progress observer documented as **best-effort augmentation**, with composer bridge-tools callbacks as the hard correctness source.
+> **Revised 2026-06-02 (rev. 3)** after second external review: stale contradictions cleaned up (principle #2 wording, §3 findings, §7 target layout for `policies/` and the MCP-integration doc cross-reference, §13 timeline/question counts); new **Phase 0.5 Hermes contract spike** added to de-risk the Hermes lane before the big refactor by probing `mcp_servers` injection, both session APIs, and the vLLM tool-call parser end-to-end; the `mcp_servers.manyforge` config snippet in §5.3 expanded to include `MANYFORGE_LANE`/`MANYFORGE_PRINCIPAL`/`MANYFORGE_ASSISTANT_MODE` + outbound proxy envs; an explicit **lane-neutralization task for `manyforge-mcp-bridge.py`** in Phase 1 (it has OpenClaw defaults baked in today); Phase 1 marked as a **behavior-preserving refactor** with no concurrent OpenClaw native/plugin behavior changes; Hermes progress observer documented as **best-effort augmentation**, with composer bridge-tools callbacks as the hard correctness source.
 >
 > **Revised 2026-06-02 (rev. 4)** after verifying gaps in test/verification coverage and documentation discipline: **Phase 0 expanded** with 5 Direct-lane probes + 5 OpenClaw-lane probes mirroring Phase 0.5's shape, so all three lanes get explicit pre-refactor validation; **every phase now lists explicit documentation deliverables** as part of its gate (per-lane bring-up runbook sections, package READMEs, lane-comparison numbers rows, phase-specific result docs) — documentation is no longer an afterthought; new **load-bearing principle #4** added requiring `manyforge_specs` adherence before any modification to manyforge code, with per-phase specs-check sub-sections in Phase 1 (envelope/MCP wrapper/catalog hash), Phase 2 (cross-workspace bridge location), and Phase 5 (composer lane router contract). Total time bumps to 17-23 working days.
 >
@@ -52,8 +52,8 @@ Carrying forward from the prior hermes-migration analysis (preserved per the inv
 - **The projection mirror is real and documented.** `_build_program_summary` etc. exist twice — in NemoClaw-Thor's `adapter.py` and dev_ws's `manyforge_assistant_bridge/bridge.py`. Without a shared package, Hermes would be the third copy.
 - **`vllm-proxy.py`, `smoke_corpus.yaml`, and `smoke_corpus_runner.py` are already lane-agnostic.** No work needed (except the proxy env-var rename in §4.4); they become the universal verifier surface.
 - **`policies/manyforge-composer.preset.yaml` is NOT lane-agnostic** — it whitelists `/usr/local/bin/openclaw`, Node, and Python as allowed subjects. Egress rules are lane-agnostic but subject whitelists are lane-specific. Split required (§4.6).
-- **`scripts/manyforge-mcp-bridge.py` has OpenClaw defaults baked in** — principal `openclaw-sandbox`, conversation prefix `openclaw-...`, allowed-tools file at `/tmp/manyforge-openclaw-allowed-tools.txt`. Phase 1 must parameterize the bridge with `MANYFORGE_LANE`, `MANYFORGE_PRINCIPAL`, and `MANYFORGE_ALLOWED_TOOLS_FILE` envs so the same script serves Hermes (`MANYFORGE_LANE=hermes`, `MANYFORGE_PRINCIPAL=hermes-<sandbox>`) and any future lane.
-- **Cosmos-specific synthetic bypasses (~150 lines) and `/compact` orchestration (~80 lines) are trapped inside the OpenClaw `service.py`.** Lift to a shared `assistant_session` layer; otherwise Hermes will re-implement them.
+- **`scripts/manyforge-mcp-bridge.py` had OpenClaw defaults baked in** — principal `openclaw-sandbox` and conversation/request prefixes `openclaw-...`. Phase 1 parameterizes the bridge with `MANYFORGE_LANE` and `MANYFORGE_PRINCIPAL` so the same script serves Hermes (`MANYFORGE_LANE=hermes`, `MANYFORGE_PRINCIPAL=hermes-<sandbox>`) and any future lane. Request-scoped MCP tool-window files were removed 2026-06-04; the wrapper exposes the assistant-mode catalog and lets Composer/MCP policy enforce authorization.
+- **Cosmos-specific synthetic bypasses were retired on 2026-06-04.** `/compact` orchestration (~80 lines) remains trapped inside the OpenClaw `service.py`; lift that to a shared `assistant_session` layer if Direct or Hermes need it.
 - **Baseline yardstick to beat is empirical, not aspirational.** Cosmos-Reason2-8B iter-32 chain-on production recipe: 51/66 (77.3%), per memory. The Qwen3.6-35B 56/66 (84.8%) from the pre-rebuild bake-off is a peer reference but not the production model — keep both visible, anchor decisions on the cosmos number.
 - **Hermes memory is an evaluation hazard.** `/sandbox/.hermes/{memories,sessions,runtime/state.db}` must be reset between bake-off runs for determinism comparisons. For the Hermes-native longitudinal harness, it stays.
 
@@ -73,7 +73,7 @@ Extracted from the top half of `openclaw_assistant_bridge/adapter.py`. Pure-func
 - `prompt.py` — `build_agent_prompt(envelope, *, discovery_mode: Lane)`. The preamble + rules + tail-checklist block. The `discovery_mode` parameter swaps in the OpenClaw discovery primer (Section 6) or the direct-catalog header for the other two lanes. Same checklist, same RULES block.
 - `envelope.py` — `error_envelope`, `request_id_from_payload`, `is_action_shaped_prompt`, `derive_session_key`. The DTOs and helpers around the Composer `manyforge.assistant.provider_request.v0` envelope. Lane-agnostic.
 - `tool_calls.py` — `extract_tool_calls`, `canonical_tool_name`, `dedupe_known`, `unwrap_openclaw_envelope` (handles the `{tool, result}` wrap from OpenClaw's `tool_call`). The OpenClaw envelope unwrap is one helper here; lanes that don't need it just don't call it.
-- `mcp_allowlist.py` — `mcp_allowed_tools_from_payload`. The mode-scoped MCP wrapper is the only mutation path on every lane; the allowlist filter is the universal enforcement point.
+- `mcp_catalog.py` — mode-catalog inspection helpers only. Prompt-keyword tool-window inference is intentionally removed; the mode-scoped MCP wrapper remains the mutation authorization point.
 
 This library lives in NemoClaw-Thor at `manyforge/common/` and is `pip install -e`'d by every bridge venv. The dev_ws sibling repo's `manyforge_assistant_bridge` imports it instead of keeping its mirror. The projection mirror dies.
 
@@ -165,7 +165,6 @@ Lives at `manyforge/lanes/hermes/`. Mostly new code. Per the explicit ask, Herme
          MANYFORGE_PRINCIPAL: "hermes-${SANDBOX_NAME}"
          MANYFORGE_ASSISTANT_MODE: "composer-assistant"
          MANYFORGE_COMPOSER_BASE: "http://host.openshell.internal:9000"
-         MANYFORGE_ALLOWED_TOOLS_FILE: "/tmp/manyforge-hermes-allowed-tools.txt"
          HTTP_PROXY: "${HTTP_PROXY}"
          HTTPS_PROXY: "${HTTPS_PROXY}"
          NO_PROXY: "${NO_PROXY}"   # loopback only; do NOT add host.openshell.internal — see below
@@ -234,13 +233,12 @@ NemoClaw-Thor/manyforge/
 │   ├── prompt.py                    # was adapter.py L180-500 (parameterized by lane)
 │   ├── envelope.py                  # was adapter.py L500-680
 │   ├── tool_calls.py                # was adapter.py L1571-1700 + new unwrap helper
-│   ├── mcp_allowlist.py             # was adapter.py L1450-1570
+│   ├── mcp_catalog.py               # mode-catalog helpers, no prompt inference
 │   ├── skill_base.md                # the lane-agnostic skill body
 │   └── tests/
 │
 ├── assistant_session/               # SHARED — orchestration layer
 │   ├── compaction.py                # was service.py L42-78, L608-662
-│   ├── synthetic_short_circuits.py  # was service.py L355-508
 │   ├── circuit_breaker.py           # moved from openclaw_assistant_bridge/
 │   ├── session_key.py               # was adapter.py session-key derivation
 │   └── tests/
@@ -262,7 +260,7 @@ NemoClaw-Thor/manyforge/
 │       ├── session_dispatcher.py    # Hermes runs/sessions API client (~150 lines)
 │       ├── progress_observer.py     # SSE progress-event consumer → universal audit
 │       ├── mcp_servers_config.yaml  # the mcp_servers.manyforge block emitted into Hermes config
-│       ├── policy.yaml              # SessionPolicy: compaction=off, synthetics=opt-in
+│       ├── policy.yaml              # SessionPolicy: compaction=off
 │       ├── skill_addendum.md        # tiny — direct-catalog header, memory note
 │       └── tests/
 │
@@ -360,24 +358,20 @@ Each phase ends with an explicit pass/fail gate. No phase chains into the next w
 - **Add explicit lane registry to Composer + launcher.** Today Composer's `build_assistant_provider()` ([assistant_provider.py:614](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_provider.py#L614)) only knows `nemoclaw`/`openclaw`; the launcher's [assistant.sh:74](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/lib/assistant.sh#L74) falls back to Direct for unknown providers. Introduce `LANE_REGISTRY` keyed by provider id with `(bridge_endpoint, default_port, transport_class)` entries for `direct`, `openclaw`, and `hermes` (Hermes entry inert until Phase 4 wires it). Eliminates the "unknown provider falls back silently" foot-gun before bridge code moves.
 - Rename `OPENCLAW_PROXY_*` env vars to `MANYFORGE_PROXY_*` with deprecated aliases.
 - Merge `policies/manyforge-composer.preset.yaml` into `policies/manyforge-composer.merged.yaml` (single applied file containing both endpoints and the binary subject whitelist incl. `/usr/bin/python3.13`). Retain the `egress-shared` + `<lane>.overlay` files as documentation of the conceptual split — per §4.6 rev. 3, `policy-add` does not additively merge same-keyed blocks, so applying them separately drops the endpoints.
-- **Lane-neutralize `manyforge-mcp-bridge.py`.** Six concrete changes (verified against the current script). Reference implementation for the top-level constants:
+  - **Lane-neutralize `manyforge-mcp-bridge.py`.** Five concrete changes (verified against the current script). Reference implementation for the top-level constants:
 
   ```python
   LANE = (os.environ.get("MANYFORGE_LANE", "openclaw").strip() or "openclaw")
   PRINCIPAL = os.environ.get("MANYFORGE_PRINCIPAL", f"{LANE}-sandbox")
   ASSISTANT_MODE = os.environ.get("MANYFORGE_ASSISTANT_MODE", "composer-assistant")
-  _ALLOWED_TOOLS_FILE = os.environ.get(
-      "MANYFORGE_ALLOWED_TOOLS_FILE",
-      f"/tmp/manyforge-{LANE}-allowed-tools.txt",
-  )
   CONVERSATION_ID = f"{LANE}-{uuid.uuid4().hex[:12]}"
   # request_id inside the request loop:
   request_id = f"{LANE}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
   ```
-  `LANE` is sanitized via `.strip() or "openclaw"` so an empty env doesn't corrupt IDs/log columns. Existing OpenClaw deployments are preserved: with all three new envs unset, `LANE="openclaw"`, `PRINCIPAL="openclaw-sandbox"`, `_ALLOWED_TOOLS_FILE="/tmp/manyforge-openclaw-allowed-tools.txt"`, and the two ID prefixes resolve to `"openclaw-..."` — bit-identical to today.
+  `LANE` is sanitized via `.strip() or "openclaw"` so an empty env doesn't corrupt IDs/log columns. Existing OpenClaw deployments are preserved: with the lane/principal envs unset, `LANE="openclaw"`, `PRINCIPAL="openclaw-sandbox"`, and the two ID prefixes resolve to `"openclaw-..."`.
 
   Maps to:
-  - **Env-readable defaults**: `PRINCIPAL` ([line 83](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/manyforge-mcp-bridge.py#L83)) and `_ALLOWED_TOOLS_FILE` ([line 87](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/manyforge-mcp-bridge.py#L87)) already read `MANYFORGE_PRINCIPAL` / `MANYFORGE_ALLOWED_TOOLS_FILE` envs — but their defaults are hard-coded OpenClaw values. Switch to lane-derived defaults so any lane that sets only `MANYFORGE_LANE` gets correct values for free.
+  - **Env-readable defaults**: `PRINCIPAL` reads `MANYFORGE_PRINCIPAL` and defaults to `f"{LANE}-sandbox"` so any lane that sets only `MANYFORGE_LANE` gets correct identity/audit attribution for free.
   - **Introduce `MANYFORGE_LANE` env read** at module top (new env, defaults to `"openclaw"`).
   - **Replace hardcoded `CONVERSATION_ID` constant** ([line 115](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/manyforge-mcp-bridge.py#L115)): currently `f"openclaw-{uuid...}"`; lane-prefix instead.
   - **Replace hardcoded `request_id` prefix** ([line 421](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/manyforge-mcp-bridge.py#L421)): currently `f"openclaw-{int(time...)}-{uuid...}"`; lane-prefix instead.

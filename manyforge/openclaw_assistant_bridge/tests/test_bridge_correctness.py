@@ -377,7 +377,6 @@ def test_compact_command_passes_session_id() -> None:
         config=cfg,
         message="/compact",
         timeout_s=30.0,
-        mcp_allowed_tools=None,
         session_id="conv-42",
     )
     # build_openclaw_command wraps the inner ``openclaw agent ...``
@@ -521,6 +520,74 @@ def test_proxy_classifier_returns_unknown_for_empty_or_missing_tools() -> None:
     drift fired."""
     assert _classify([]) == "unknown"
     assert _classify(None) == "unknown"  # type: ignore[arg-type]
+
+
+def test_proxy_loop_hard_stop_returns_error_json() -> None:
+    """Proxy hard-stop is a failure, not synthetic assistant prose.
+
+    The old path returned a 200/SSE assistant message beginning with
+    "[loop-break]"; smoke scorers could count that as a soft-pass. The
+    proxy still fails fast, but now emits an OpenAI-style error object
+    that callers classify as infrastructure/model failure.
+    """
+    import importlib.util as _ilu
+    import json
+
+    spec = _ilu.spec_from_file_location(
+        "vllm_proxy_under_test_loop_stop",
+        _REPO_ROOT / "scripts" / "proxy" / "vllm-proxy.py",
+    )
+    if spec is None or spec.loader is None:
+        pytest.skip("vllm-proxy.py not importable in this environment")
+    mod = _ilu.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as exc:
+        pytest.skip(f"vllm-proxy.py import failed: {exc}")
+
+    mod._STOP_AT = 2
+    mod._REFLECT_AT = 0
+    body = {
+        "model": "test-model",
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "tool_call", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "content": "{\"success\":false}"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {"name": "tool_call", "arguments": "{}"},
+                    }
+                ],
+            },
+        ],
+    }
+
+    error_body, mutated_body, trigger_info = mod._check_loop_short_circuit(
+        "/v1/chat/completions",
+        json.dumps(body).encode("utf-8"),
+    )
+
+    assert mutated_body is None
+    assert trigger_info == {"trigger": "hard_stop", "tool": "tool_call", "count": 2}
+    assert error_body is not None
+    parsed = json.loads(error_body.decode("utf-8"))
+    assert parsed["error"]["code"] == "loop_detected"
+    assert parsed["error"]["type"] == "manyforge_proxy_loop_detected"
+    assert parsed["error"]["loopGuard"] == {
+        "trigger": "hard_stop",
+        "tool": "tool_call",
+        "count": 2,
+    }
 
 
 # ---------------------------------------------------------------------------

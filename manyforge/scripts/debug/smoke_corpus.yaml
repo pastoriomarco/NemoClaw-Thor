@@ -172,10 +172,29 @@ cases:
 - id: P2b_scene_add_cylinder_diameter
   category: scene_add
   detail_level: specific
-  # Exercises the cylinder/diameter branch of scene_draft_add_object. The
-  # alias matcher accepts both `diameter` (model-friendly flat alias
-  # documented in spec 485) and the canonical `shape.diameter_m` form.
-  # `height` and `height_m` are likewise both accepted.
+  status: future
+  # Filed 2026-06-03; deferred to "future" pending fix of an unrelated
+  # composer-side bug surfaced by this case:
+  #
+  #   POST /api/program/load after the case completed returned HTTP 409
+  #   with
+  #     "Failed to add scene object 'cylinder_01': add with
+  #      shape_type=cylinder requires cylinder_radius_m"
+  #
+  # That is a real composer-side gap — spec 485 line 420 documents
+  # `diameter` as an accepted model-friendly alias, and the
+  # scene_draft_add_object tool surface does accept it, but the
+  # downstream cycle_manager's apply_scene path (verified via the
+  # traceback in composer logs at
+  # `manyforge_behavior/runner.py:282 apply_scene`) requires
+  # `cylinder_radius_m` on the persisted scene object. The diameter→
+  # radius normalization is missing from the composer's
+  # `_normalize_scene_resource_aliases` pipeline.
+  #
+  # Track in: docs/PHASE-0.5-HERMES-SPIKE.md "Composer cylinder
+  # diameter→radius normalization gap". Promote back to active once
+  # composer normalizes diameter to radius (or vice versa) so that
+  # the scene-runtime apply succeeds.
   prompt: "add a cylinder of diameter 0.08 and height 0.20 at position 0.30, 0.10, 0.05"
   expected:
     tools_called:
@@ -315,8 +334,15 @@ cases:
           parentName: pick_and_place
           position: 0
           node.id: wait_for_signal_bool
-          node.params.signal_id: start_pick
-          node.params.expected: true
+          # 2026-06-03: schema-drift fix. Live manifest shows
+          # wait_for_signal_bool has required params `key` (string) +
+          # `expected_value` (bool). Earlier corpus used `signal_id` +
+          # `expected` which match an older spec revision. Reverting to
+          # the canonical wire names so the args_contain check measures
+          # what the model actually emits against what the schema
+          # accepts.
+          node.params.key: start_pick
+          node.params.expected_value: true
         allow_retries: true
     state_after:
       "program.tree.children[0].id": wait_for_signal_bool

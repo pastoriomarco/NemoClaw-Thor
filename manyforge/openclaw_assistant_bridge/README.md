@@ -88,8 +88,6 @@ MANYFORGE_ASSISTANT_ENDPOINT_URL=http://127.0.0.1:8200/v1/manyforge/assistant
 | `OPENCLAW_ASSISTANT_TIMEOUT_S` | `120` | Default per-request OpenClaw `--timeout`. Cascade is layered with outward buffers (each outer layer ≥ inner + 5s) to avoid timeout-collision races and give in-flight debug visibility: OpenClaw 120s → bridge waits OpenClaw + 5s internal pad = 125s → Composer `--assistant-timeout-s 130` → smoke harness `TIMEOUT_S 140`. The +10s harness buffer also leaves time to capture logs while a slow-but-still-running request settles before any outer layer cuts the connection. |
 | `OPENCLAW_ASSISTANT_LOCAL` | launcher default: `true`; service default: `false` | Add `--local` to `openclaw agent` when set. The launcher defaults this on because the validated Thor path uses the sandbox-local OpenClaw runner. |
 | `OPENCLAW_ASSISTANT_THINKING` | `off` | Passed as `openclaw agent --thinking ...`. The Phase 2 route defaults to `off` because local Omni otherwise spends the Composer provider timeout even on trivial prompts. |
-| `OPENCLAW_ASSISTANT_AUTO_TOOL_WINDOW` | `true` | When enabled, the adapter writes a short-lived sandbox tool-window file so the ManyForge MCP wrapper exposes a request-sized tool window for obvious tree/scene edits. Broad or ambiguous prompts fail open to the full mode surface. |
-| `OPENCLAW_ASSISTANT_ALLOWED_TOOLS_FILE` | `/tmp/manyforge-openclaw-allowed-tools.txt` | Sandbox file used to pass the request-scoped tool window to the mode-scoped MCP wrapper. A file is used because OpenClaw's configured MCP server env is static. |
 | `OPENCLAW_ASSISTANT_BRIDGE_HOST` | `127.0.0.1` | HTTP bind host |
 | `OPENCLAW_ASSISTANT_BRIDGE_PORT` | `8200` | HTTP bind port |
 

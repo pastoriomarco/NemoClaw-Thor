@@ -1,8 +1,7 @@
 """Smoke tests for manyforge.assistant_session package.
 
 Phase 1 deliverable: re-exports resolve, dataclass defaults reflect
-the iter-32 / per-lane intent, and the CompactionPolicy/SyntheticPolicy
-APIs are immutable (frozen).
+the iter-32 / per-lane intent, and policy APIs are immutable (frozen).
 """
 from __future__ import annotations
 
@@ -15,7 +14,6 @@ from assistant_session import (  # noqa: E402
     circuit_breaker,
     compaction,
     session_key,
-    synthetic_short_circuits,
 )
 
 
@@ -47,28 +45,6 @@ def test_compaction_should_fire_counter():
     """The bookkeeping helpers are re-exported callable."""
     assert callable(compaction.bump_session_request_counter)
     assert callable(compaction.should_fire_compact)
-
-
-def test_synthetic_policy_defaults():
-    """Per-lane SyntheticPolicy defaults match the plan intent."""
-    assert synthetic_short_circuits.OPENCLAW_DEFAULT.bypass_clarification is True
-    assert synthetic_short_circuits.OPENCLAW_DEFAULT.retry_loop_detector is True
-
-    assert synthetic_short_circuits.DIRECT_DEFAULT.bypass_clarification is False
-    assert synthetic_short_circuits.DIRECT_DEFAULT.retry_loop_detector is False
-
-    assert synthetic_short_circuits.HERMES_DEFAULT.bypass_clarification is False
-    assert synthetic_short_circuits.HERMES_DEFAULT.retry_loop_detector is False
-
-
-def test_synthetic_policy_is_frozen():
-    """SyntheticPolicy is immutable."""
-    p = synthetic_short_circuits.OPENCLAW_DEFAULT
-    try:
-        p.bypass_clarification = False  # type: ignore[misc]
-        raise AssertionError("expected immutability")
-    except Exception as exc:
-        assert "frozen" in str(exc).lower() or isinstance(exc, AttributeError)
 
 
 def test_circuit_breaker_reexports():

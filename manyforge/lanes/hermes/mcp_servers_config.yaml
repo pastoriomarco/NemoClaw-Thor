@@ -24,7 +24,6 @@ mcp_servers:
       MANYFORGE_PRINCIPAL: "hermes-${SANDBOX_NAME}"
       MANYFORGE_ASSISTANT_MODE: "composer-assistant"
       MANYFORGE_COMPOSER_BASE: "http://host.openshell.internal:9000"
-      MANYFORGE_ALLOWED_TOOLS_FILE: "/tmp/manyforge-hermes-allowed-tools.txt"
       # Outbound proxy envs — REQUIRED for the bridge to reach Composer
       # through OpenShell's proxy at 10.200.0.1:3128. Do NOT add
       # host.openshell.internal to NO_PROXY; the bridge's

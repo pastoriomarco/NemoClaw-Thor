@@ -13,11 +13,6 @@ Modules:
                               owns its session lifecycle via the runs
                               API); on with different threshold for
                               Direct (truncation strategy).
-    synthetic_short_circuits — synthetic-clarification bypass + retry-loop
-                              detector. Cosmos-specific patches. Default
-                              on for OpenClaw (proven there); opt-in for
-                              Direct and Hermes — flag them per-config
-                              and benchmark with/without before defaulting on.
     circuit_breaker         — per-transport circuit breaker (timeout +
                               consecutive failure counter). Lane-agnostic;
                               always on.
@@ -33,6 +28,5 @@ from __future__ import annotations
 from . import circuit_breaker  # noqa: F401
 from . import compaction  # noqa: F401
 from . import session_key  # noqa: F401
-from . import synthetic_short_circuits  # noqa: F401
 
 __version__ = "0.1.0"

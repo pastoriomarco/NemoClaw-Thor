@@ -15,7 +15,7 @@ The Hermes lane is **inert until Phase 4 lands**. This directory ships the confi
 | File | Purpose |
 |---|---|
 | [`mcp_servers_config.yaml`](./mcp_servers_config.yaml) | The `mcp_servers.manyforge` block emitted into Hermes' `/sandbox/.hermes/config.yaml`. Hermes' native MCP runtime (verified against the 0.14.0 wheel — `cli.py:2691, 9314+`, `tools/mcp_tool.py`) registers manyforge tools at startup with the `mcp_manyforge_` prefix. |
-| [`policy.yaml`](./policy.yaml) | `SessionPolicy` config for this lane. Compaction OFF (Hermes owns its session lifecycle); synthetic short-circuits OFF (opt-in after bake-off); memory/skills/cron/todo/delegation all ENABLED per the explicit user direction. |
+| [`policy.yaml`](./policy.yaml) | `SessionPolicy` config for this lane. Compaction OFF (Hermes owns its session lifecycle); memory/skills/cron/todo/delegation all ENABLED per the explicit user direction. |
 
 ## Why this configuration
 

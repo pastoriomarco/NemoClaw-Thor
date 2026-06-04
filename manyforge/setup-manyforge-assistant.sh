@@ -215,7 +215,7 @@ for legacy in manyforge-egress-shared manyforge-openclaw-overlay manyforge-compo
   fi
 done
 
-step "Step 1b: patch openclaw.json inference baseUrl to bypass inference.local"
+step "Step 1b: patch openclaw.json inference provider (baseUrl + timeoutSeconds)"
 # REVISED 2026-06-03 per THREE-LANE-MIGRATION-PLAN route fix. The
 # default OpenClaw config sets models.providers.inference.baseUrl to
 # https://inference.local/v1 — a TLS-terminating route routed via
@@ -229,25 +229,41 @@ step "Step 1b: patch openclaw.json inference baseUrl to bypass inference.local"
 # (UNWRAP_TOOL_CALL_ARGS, PROMOTE_REASONING_TO_CONTENT,
 # NORMALIZE_TOOL_NAMES, TOOL_ERROR_REWRITE) are then applied to every
 # /chat/completions request.
+#
+# REVISED 2026-06-04: also set models.providers.inference.timeoutSeconds.
+# OpenClaw has a model-stream idle watchdog (separate from the runtime
+# timeoutMs the bridge sends in the request body). Default is 120s. On
+# long tool-search chains and reasoning-heavy turns the model can go
+# >120s between stream chunks, which fires EmbeddedAttemptSessionTakeoverError
+# with returncode 1 (the bridge then translates this to HTTP 502). 300s
+# matches OPENCLAW_ASSISTANT_TIMEOUT_S and the smoke runner default.
 cat > /tmp/manyforge-patch-openclaw-baseurl.py <<'PY'
 import json, hashlib, pathlib
 p = pathlib.Path("/sandbox/.openclaw/openclaw.json")
 d = json.loads(p.read_text())
 inf = d.setdefault("models", {}).setdefault("providers", {}).setdefault("inference", {})
-old = inf.get("baseUrl")
-target = "http://host.openshell.internal:8000/v1"
-if old == target:
-    print(f"baseUrl already {target} — no change")
+changes = []
+target_url = "http://host.openshell.internal:8000/v1"
+old_url = inf.get("baseUrl")
+if old_url != target_url:
+    inf["baseUrl"] = target_url
+    changes.append(f"baseUrl: {old_url} -> {target_url}")
+target_timeout = 300
+old_timeout = inf.get("timeoutSeconds")
+if old_timeout != target_timeout:
+    inf["timeoutSeconds"] = target_timeout
+    changes.append(f"timeoutSeconds: {old_timeout} -> {target_timeout}")
+if not changes:
+    print("models.providers.inference already correct — no change")
 else:
-    inf["baseUrl"] = target
     p.write_text(json.dumps(d, indent=2))
     h = hashlib.sha256(p.read_bytes()).hexdigest()
     pathlib.Path("/sandbox/.openclaw/.config-hash").write_text(f"{h}  openclaw.json\n")
-    print(f"baseUrl: {old} -> {target}; hash refreshed")
+    print("; ".join(changes) + "; hash refreshed")
 PY
 openshell sandbox upload "${SANDBOX}" /tmp/manyforge-patch-openclaw-baseurl.py /tmp/ >/dev/null
 nemoclaw "${SANDBOX}" exec --no-tty -- python3 /tmp/manyforge-patch-openclaw-baseurl.py 2>&1 | tail -1
-ok "openclaw.json baseUrl patched (will be picked up by gateway hot-reload or next recover)"
+ok "openclaw.json baseUrl + timeoutSeconds patched (will be picked up by gateway hot-reload or next recover)"
 
 step "Step 1c: set tools.toolSearch.mode=tools (Phase 3 production default)"
 # Tools mode is the production default for the OpenClaw lane since

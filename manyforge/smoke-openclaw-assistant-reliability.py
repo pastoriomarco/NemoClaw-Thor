@@ -225,7 +225,7 @@ def _summarize(
         "adapterDurationMs": openclaw.get("durationMs"),
         "agentRunMs": timings.get("agentRunMs"),
         "promptChars": openclaw.get("promptChars"),
-        "allowedMcpTools": openclaw.get("allowedMcpTools") or [],
+        "toolSurfaceScope": openclaw.get("toolSurfaceScope") or "assistant_mode",
         "toolCallCount": len(tool_calls),
         "toolFailureCount": len(failed_tools),
         "draftMutated": bool(body.get("draftMutated")),
@@ -240,7 +240,7 @@ def _format_record(record: dict[str, Any]) -> str:
         f"  status={record['httpStatus']} duration={record['durationMs']}ms "
         f"agent={record.get('agentRunMs')}ms tools={record['toolCallCount']} "
         f"failedTools={record['toolFailureCount']} error={record.get('errorCode') or '-'} "
-        f"allowed={record.get('allowedMcpTools')}"
+        f"scope={record.get('toolSurfaceScope')}"
     )
 
 

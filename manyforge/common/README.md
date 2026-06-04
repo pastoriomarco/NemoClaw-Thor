@@ -11,7 +11,7 @@ lanes (Direct vLLM, OpenClaw, Hermes Agents).
 | [`prompt.py`](./prompt.py) | Agent prompt assembly. Preamble + RULES + state block + tail checklist, with a per-lane `discovery_mode` parameter that swaps in the OpenClaw discovery primer (Phase 3) or the Hermes direct-catalog header (Phase 4). |
 | [`envelope.py`](./envelope.py) | DTOs and helpers for the `manyforge.assistant.provider_request.v0` envelope. `AdapterConfig`, `AgentRunResult`, `request_id_from_payload`, `error_envelope`, `derive_session_key`, `is_action_shaped_prompt`. |
 | [`tool_calls.py`](./tool_calls.py) | Tool-call extraction (`extract_tool_calls`), canonicalization (`canonical_tool_name`), OpenClaw envelope unwrap (`unwrap_openclaw_envelope`, Phase 3), Hermes `mcp_manyforge_` prefix strip (`strip_mcp_prefix`, Phase 4). |
-| [`mcp_allowlist.py`](./mcp_allowlist.py) | Mode-scoped MCP tool allowlist resolution. `mcp_allowed_tools_from_payload` and the helpers it delegates to. |
+| [`mcp_catalog.py`](./mcp_catalog.py) | Mode-scoped MCP tool catalog helpers. Prompt-keyword tool-window inference is intentionally not part of the common surface. |
 
 ## What does NOT live here
 
@@ -20,8 +20,8 @@ lanes (Direct vLLM, OpenClaw, Hermes Agents).
   the per-lane `AssistantTransport` implementation under
   `manyforge/lanes/<lane>/`.
 - **Response parsing for a specific provider** — same reasoning.
-- **Orchestration policy** (compaction, synthetic short-circuits,
-  circuit breaker) — those live in [`manyforge.assistant_session`](../assistant_session/).
+- **Orchestration policy** (compaction, circuit breaker) — those live in
+  [`manyforge.assistant_session`](../assistant_session/).
 
 ## Intended consumers
 

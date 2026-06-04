@@ -17,15 +17,6 @@ compaction:
   every: 0
   action: none
 
-synthetic_short_circuits:
-  # Opt-in for the Hermes lane. Default OFF — these are Cosmos-specific
-  # patches that may interact poorly with Hermes' built-in agent
-  # behavior. Re-enable after the Phase 4 bake-off shows whether they
-  # improve or degrade Hermes outcomes.
-  bypass_clarification: false
-  retry_loop_detector: false
-  retry_loop_threshold: 3
-
 discovery_mode: hermes_direct  # plumbed through to common.prompt.build_agent_prompt
 
 # Hermes-specific lifecycle config

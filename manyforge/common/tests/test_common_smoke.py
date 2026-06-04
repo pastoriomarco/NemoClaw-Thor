@@ -14,7 +14,7 @@ import pathlib
 # scaffolding; install discipline lands in Phase 2 with setup-direct.sh).
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from common import projection, prompt, envelope, tool_calls, mcp_allowlist  # noqa: E402
+from common import projection, prompt, envelope, tool_calls, mcp_catalog  # noqa: E402
 
 
 def test_projection_reexports():
@@ -45,11 +45,10 @@ def test_tool_calls_reexports():
     assert callable(tool_calls.dedupe_known)
 
 
-def test_mcp_allowlist_reexports():
-    """MCP allowlist helpers are accessible."""
-    assert callable(mcp_allowlist.mcp_allowed_tools_from_payload)
-    assert callable(mcp_allowlist.helper_tool_ids)
-    assert callable(mcp_allowlist.tool_ids)
+def test_mcp_catalog_reexports():
+    """MCP catalog helpers are accessible."""
+    assert callable(mcp_catalog.allowed_tool_map)
+    assert callable(mcp_catalog.tool_ids)
 
 
 def test_prompt_discovery_mode_validation():

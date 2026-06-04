@@ -21,7 +21,6 @@ from .adapter import (
     build_openclaw_command,
     derive_gateway_session_key,
     error_envelope,
-    mcp_allowed_tools_from_payload,
     normalize_agent_response,
     normalize_chat_completions_response,
     parse_chat_completions_response,
@@ -56,6 +55,9 @@ PORT = int(os.environ.get("OPENCLAW_ASSISTANT_BRIDGE_PORT", "8200"))
 _COMPACT_EVERY_N = int(os.environ.get("OPENCLAW_ASSISTANT_COMPACT_EVERY_N", "0") or "0")
 _COMPACT_TIMEOUT_S = float(os.environ.get("OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S", "120") or "120")
 _SESSION_REQUEST_COUNTER: dict[str, int] = {}
+_STATE_CONTEXT_MODES = {"off", "always", "every_n", "first_then_every_n"}
+_STATE_CONTEXT_COUNTER: dict[str, int] = {}
+_STATE_CONTEXT_LAST_INCLUDED: dict[str, int] = {}
 
 
 def _bump_session_request_counter(session_key: str) -> int:
@@ -78,6 +80,68 @@ def _should_fire_compact(session_request_count: int) -> bool:
     if _COMPACT_EVERY_N <= 0:
         return False
     return session_request_count > 1 and (session_request_count - 1) % _COMPACT_EVERY_N == 0
+
+
+def _state_context_mode() -> str:
+    raw = (
+        os.environ.get("OPENCLAW_ASSISTANT_STATE_CONTEXT")
+        or os.environ.get("MANYFORGE_STATE_CONTEXT")
+        or "first_then_every_n"
+    ).strip().lower()
+    aliases = {
+        "0": "off",
+        "false": "off",
+        "no": "off",
+        "1": "always",
+        "true": "always",
+        "yes": "always",
+        "on": "always",
+    }
+    mode = aliases.get(raw, raw)
+    return mode if mode in _STATE_CONTEXT_MODES else "first_then_every_n"
+
+
+def _state_context_every_n() -> int:
+    raw = (
+        os.environ.get("OPENCLAW_ASSISTANT_STATE_CONTEXT_EVERY_N")
+        or os.environ.get("MANYFORGE_STATE_CONTEXT_EVERY_N")
+        or "3"
+    )
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 3
+
+
+def _state_context_control(session_key: str) -> dict[str, Any]:
+    sequence = _STATE_CONTEXT_COUNTER.get(session_key, 0) + 1
+    _STATE_CONTEXT_COUNTER[session_key] = sequence
+    mode = _state_context_mode()
+    every_n = _state_context_every_n()
+    include = False
+    reason = "off"
+    if mode == "always":
+        include = True
+        reason = "always"
+    elif mode == "every_n":
+        include = sequence % every_n == 0
+        reason = "cadence" if include else "cadence_skip"
+    elif mode == "first_then_every_n":
+        include = sequence == 1 or (sequence - 1) % every_n == 0
+        reason = "first" if sequence == 1 else ("cadence" if include else "cadence_skip")
+    last_included = _STATE_CONTEXT_LAST_INCLUDED.get(session_key)
+    if include:
+        _STATE_CONTEXT_LAST_INCLUDED[session_key] = sequence
+        last_included = sequence
+    return {
+        "schemaVersion": "manyforge.state_context_control.v0",
+        "mode": mode,
+        "everyN": every_n,
+        "sequence": sequence,
+        "include": include,
+        "reason": reason,
+        "lastIncludedSequence": last_included,
+    }
 
 
 # Sampling defaults (temperature, top_k, top_p, chat_template_kwargs)
@@ -219,12 +283,6 @@ def _config_from_env() -> AdapterConfig:
         local=os.environ.get("OPENCLAW_ASSISTANT_LOCAL", "false").lower()
         in {"1", "true", "yes"},
         thinking=os.environ.get("OPENCLAW_ASSISTANT_THINKING", "off"),
-        auto_tool_window=os.environ.get("OPENCLAW_ASSISTANT_AUTO_TOOL_WINDOW", "true").lower()
-        in {"1", "true", "yes"},
-        allowed_tools_file=os.environ.get(
-            "OPENCLAW_ASSISTANT_ALLOWED_TOOLS_FILE",
-            "/tmp/manyforge-openclaw-allowed-tools.txt",
-        ),
         use_gateway=os.environ.get("OPENCLAW_ASSISTANT_USE_GATEWAY", "false").lower()
         in {"1", "true", "yes"},
         gateway_port=int(os.environ.get("OPENCLAW_ASSISTANT_GATEWAY_PORT", "18789")),
@@ -523,7 +581,7 @@ async def healthz() -> dict[str, Any]:
                 "requestId": request_id,
                 "stage": meta.get("stage") or "running",
                 "elapsedMs": round((now - started) * 1000.0, 1),
-                "allowedMcpTools": list(meta.get("allowedMcpTools") or []),
+                "toolSurfaceScope": meta.get("toolSurfaceScope") or "assistant_mode",
                 "promptChars": meta.get("promptChars"),
             }
         )
@@ -601,111 +659,23 @@ async def assistant(request: Request) -> JSONResponse:
     transport = "gateway_http" if cfg.use_gateway else "cli_shell_out"
     total_started = time.perf_counter()
     prompt_started = time.perf_counter()
-    # 2026-05-31 (round 7 — synthetic bypass for under-specified
-    # control-flow adds): cosmos-reason2-8b ignores both rule-block
-    # text and proxy USER_MESSAGE_SUFFIX nudges on first-turn action
-    # prompts (rounds 1-6 confirmed). For the specific patterns the
-    # smoke marks as expected-clarification (PARALLEL_generic,
-    # FALLBACK_generic), the only way to consistently meet the
-    # expectation is to short-circuit at the bridge before openclaw
-    # ever sees the request — synthesizing a canned clarification
-    # answer. Pattern matches the same logic as adapter.build_agent
-    # _prompt's self_check but with an EXTRA narrowness gate: word
-    # count <= 4 (the smoke corpus's gold-standard ASK prompts are
-    # all 3 words: "add a parallel", "add a fallback", "add a sequence",
-    # "add a repeat") and ONLY add/insert/wrap verbs. The synthesized
-    # answer includes both "which" and "where" tokens so the smoke's
-    # answer_must_contain assertion passes.
-    msg_raw = payload.get("message")
-    msg_lower = (msg_raw or "").strip().lower() if isinstance(msg_raw, str) else ""
-    # ------------------------------------------------------------------
-    # Bridge-side synthetic clarification (round 7 of 2026-05-31 session)
-    # ------------------------------------------------------------------
-    # The bridge can short-circuit the model entirely for narrow
-    # "under-specified add" prompts:
-    #   "add a parallel"   "add a fallback"   "add a sequence"
-    #   "add a repeat"     "wrap with retry"  "insert a inverter"
-    # (≤4 words, control-flow kind, no parent/position/locator).
-    #
-    # On these prompts the bridge returns a canned clarification
-    # ("Which parent should I add the X under, and where in its
-    # children?") without dispatching the request to OpenClaw or the
-    # model — instant, deterministic, zero-GPU.
-    #
-    # Why it was useful: Cosmos-Reason2-8B (the prior production
-    # default) couldn't reliably ask clarification on first turn for
-    # these patterns; the bypass guaranteed correct behavior in
-    # production. See COMPOSER-ASSISTANT-ARCHITECTURE.md §D and
-    # session log 2026-05-31 round 7.
-    #
-    # Why DEFAULT OFF (2026-06-01): in benchmark comparisons across
-    # models, the bypass gives every candidate the same free passes
-    # on PARALLEL_generic / FALLBACK_generic — hiding model-specific
-    # differences. Default-off ensures the smoke measures the model's
-    # actual ability to ask. For production deployments where the
-    # bypass is desired, set OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC=1.
-    synthetic_enabled = os.environ.get(
-        "OPENCLAW_ASSISTANT_ENABLE_SYNTHETIC", ""
-    ).strip().lower() in ("1", "true", "yes", "on")
-    # Legacy opt-out env (DISABLE_SYNTHETIC=1) still honored for
-    # backwards compatibility — if it's set, synthetic stays off
-    # even if ENABLE_SYNTHETIC was also set somewhere.
-    synthetic_disabled_legacy = os.environ.get(
-        "OPENCLAW_ASSISTANT_DISABLE_SYNTHETIC", ""
-    ).strip().lower() in ("1", "true", "yes", "on")
-    if msg_lower and synthetic_enabled and not synthetic_disabled_legacy:
-        cf_kinds = ("parallel", "fallback", "sequence", "repeat", "retry", "inverter")
-        # Strict template: "add a <kind>" / "insert a <kind>" / "wrap with <kind>"
-        # (3-4 words exactly). Refuse compound forms ("add a parallel that ...").
-        words = msg_lower.split()
-        starts_add_verb = (
-            (len(words) >= 3 and words[0] in ("add", "insert") and words[1] == "a" and words[2] in cf_kinds and len(words) <= 4)
-            or (len(words) >= 3 and words[0] == "wrap" and words[1] == "with" and words[2] in cf_kinds and len(words) <= 4)
-        )
-        if starts_add_verb:
-            kind = words[2]
-            synthetic_msg = (
-                f"Which parent node should I add the {kind} under, and "
-                f"where in its children should it go? For example: 'as the "
-                f"first child of pick_and_place', 'after gripper_close', or "
-                f"'as a new root wrapping the existing tree'."
-            )
-            _log_event(
-                "bridge_synthetic_clarification",
-                requestId=request_id,
-                pattern=msg_lower,
-                kind=kind,
-            )
-            ACTIVE_REQUESTS.dec()
-            _record_outcome("synthetic_clarification", transport, time.perf_counter() - handler_started)
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "version": "v1",
-                    "schemaVersion": "1.0.0",
-                    "requestId": request_id,
-                    "message": synthetic_msg,
-                    "toolCalls": [],
-                    "proposals": [],
-                    "warnings": [],
-                    "mutated": False,
-                    "draftMutated": False,
-                    "requiresReview": False,
-                },
-            )
     # Compute the per-conversation key once; used both by the loop
     # detector below AND by the post-dispatch history recorder near
     # the end of the handler. Cheap (a couple of dict lookups), and
     # hoisting it out of the conditional avoids a NameError when the
     # thresholds are zeroed for diagnostic runs.
     loop_conv_key = _loop_conversation_key(payload, request_id)
+    loop_reflection_injected = False
+    loop_guard_info: dict[str, Any] | None = None
     # 2026-05-31 (round 8 — fail-fast retry-loop detector): we observed
     # cosmos-reason2-8b spending 25-28 turns retrying the same tool with
     # the same args after the same validator error. OpenClaw has a
     # per-turn budget (15 attempts) but the composer/smoke harness keeps
     # making new bridge requests, each starting OpenClaw's budget fresh.
-    # Detector returns a synthetic stop message so the composer marks
-    # the case fail-fast.
+    # The detector now has two explicit phases:
+    #   1. one visible loop-guard reflection appended to the next model prompt;
+    #   2. a failure-shaped loop_detected envelope if repetition continues.
+    # It never returns a synthetic assistant success.
     #
     # 2026-06-03 (external review finding 9): the prior implementation
     # read ``payload.get("messages")`` for history, which is dead in
@@ -760,66 +730,78 @@ async def assistant(request: Request) -> JSONResponse:
             # Same-tool-name check (existing behavior).
             top_name, top_count = Counter(tool_call_names).most_common(1)[0]
             trigger = None
+            phase = None
             if LOOP_ARGS_THRESHOLD > 0 and fp_top_count >= LOOP_ARGS_THRESHOLD + 1:
                 # +1 because the same call repeats are counted relative
                 # to the first appearance, not from zero. e.g.
                 # threshold=2 means "fire after we've seen 3 identical
                 # calls (1 original + 2 retries)".
                 trigger = "same_args"
+                phase = "fail"
+                repeated_tool = fp_top_fp.split("::", 1)[0]
+                repeated_count = fp_top_count
+            elif LOOP_ARGS_THRESHOLD > 0 and fp_top_count == max(2, LOOP_ARGS_THRESHOLD):
+                trigger = "same_args"
+                phase = "reflect"
                 repeated_tool = fp_top_fp.split("::", 1)[0]
                 repeated_count = fp_top_count
             elif LOOP_TOOL_THRESHOLD > 0 and top_count >= LOOP_TOOL_THRESHOLD:
                 trigger = "same_name"
+                phase = "fail"
+                repeated_tool = top_name
+                repeated_count = top_count
+            elif LOOP_TOOL_THRESHOLD > 0 and top_count == max(2, LOOP_TOOL_THRESHOLD - 1):
+                trigger = "same_name"
+                phase = "reflect"
                 repeated_tool = top_name
                 repeated_count = top_count
             if trigger:
-                if trigger == "same_args":
-                    loop_msg = (
-                        f"I called `{repeated_tool}` {repeated_count} times "
-                        "with IDENTICAL arguments. The validator already "
-                        "told me what was wrong — I am not reading the "
-                        "error envelope's `diff` and `hint`. Stopping to "
-                        "prevent a runaway loop. Please clarify the "
-                        "request, or rename the keys per the diff hint, "
-                        "or pick a different tool."
+                threshold = LOOP_TOOL_THRESHOLD if trigger == "same_name" else LOOP_ARGS_THRESHOLD
+                loop_guard_info = {
+                    "trigger": trigger,
+                    "phase": phase,
+                    "repeatedTool": repeated_tool,
+                    "repeatCount": repeated_count,
+                    "threshold": threshold,
+                }
+                if phase == "fail":
+                    detail = (
+                        f"loop detected: tool '{repeated_tool}' repeated "
+                        f"{repeated_count} times ({trigger}) without recovery"
                     )
-                else:
-                    loop_msg = (
-                        f"I have called `{repeated_tool}` {repeated_count} times in this "
-                        "conversation. The retries have not reached a 2xx response. "
-                        "I am stopping to prevent a runaway loop. Please refine the "
-                        "request with the specific missing field (e.g., `pose_goal` "
-                        "for `motion_type=pose_goal`), specify a different tool, or "
-                        "clarify the target node names."
+                    _log_event(
+                        "bridge_loop_detected_stop",
+                        requestId=request_id,
+                        repeatedTool=repeated_tool,
+                        repeatedCount=repeated_count,
+                        threshold=threshold,
+                        trigger=trigger,
+                        conversationKey=list(loop_conv_key),
+                        historyDepth=len(bridge_history),
                     )
+                    body = error_envelope(
+                        request_id=request_id,
+                        code="loop_detected",
+                        detail=detail,
+                    )
+                    body["error"].update(loop_guard_info)
+                    body["warnings"].append(
+                        f"loop_detected: tool={repeated_tool!r} repeated {repeated_count}x ({trigger})"
+                    )
+                    body["loopGuard"] = loop_guard_info
+                    _record_outcome("loop_detected", transport, time.perf_counter() - handler_started)
+                    ACTIVE_REQUESTS.dec()
+                    return JSONResponse(status_code=409, content=body)
+                loop_reflection_injected = True
                 _log_event(
-                    "bridge_synthetic_loop_break",
+                    "bridge_loop_reflection_injected",
                     requestId=request_id,
                     repeatedTool=repeated_tool,
                     repeatedCount=repeated_count,
-                    threshold=LOOP_TOOL_THRESHOLD if trigger == "same_name" else LOOP_ARGS_THRESHOLD,
+                    threshold=threshold,
                     trigger=trigger,
                     conversationKey=list(loop_conv_key),
                     historyDepth=len(bridge_history),
-                )
-                ACTIVE_REQUESTS.dec()
-                _record_outcome("synthetic_loop_break", transport, time.perf_counter() - handler_started)
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "version": "v1",
-                        "schemaVersion": "1.0.0",
-                        "requestId": request_id,
-                        "message": loop_msg,
-                        "toolCalls": [],
-                        "proposals": [],
-                        "warnings": [
-                            f"loop_detected_stopped: tool={repeated_tool!r} repeated {repeated_count}x ({trigger})"
-                        ],
-                        "mutated": False,
-                        "draftMutated": False,
-                        "requiresReview": True,
-                    },
                 )
     # Gateway path skips the prompt-augmentation work the CLI path needs.
     # The persistent gateway has the manyforge MCP server registered with
@@ -837,39 +819,35 @@ async def assistant(request: Request) -> JSONResponse:
     # anything. Build the same enriched prompt as the CLI shell-out path
     # so both paths give the model identical context. The extra preamble
     # is small (~5-15 KB) and gets trimmed if context is tight.
-    if cfg.use_gateway:
-        # Gateway path: do NOT narrow `allowedTools` per-request. The
-        # in-sandbox MCP wrapper is launched once at gateway startup
-        # and exposes whatever set was active then to vLLM via
-        # `tools/list` — the bridge has no in-band channel to update
-        # that allowlist per request. Narrowing the prompt's
-        # `allowedTools` JSON while leaving the wrapper's `tools/list`
-        # wide creates a disagreement the model resolves intermittently
-        # ("I can't use program_read because it isn't available", even
-        # though program_read IS in the schema list). Sending the full
-        # mode surface in both places keeps them in lockstep — the
-        # mode catalog is the real authorization boundary, and the
-        # narrow window was only ever a soft prompt-economy hint.
-        allowed_mcp_tools = None
-        prompt = build_agent_prompt(
-            payload,
-            mcp_allowed_tools=allowed_mcp_tools,
-            tool_surface=cfg.tool_surface,
+    # Do not derive a request-scoped MCP allowlist from the user's prompt.
+    # The lane/mode catalog is the enforcement boundary; the model must decide
+    # whether to inspect, ask for clarification, or call one of the visible
+    # tools. This keeps benchmarks from inheriting bridge-side intent guesses.
+    prompt_payload = payload
+    if loop_reflection_injected and loop_guard_info is not None:
+        prompt_payload = dict(payload)
+        original_message = prompt_payload.get("message")
+        if not isinstance(original_message, str):
+            original_message = json.dumps(original_message, sort_keys=True)
+        repeated_tool = str(loop_guard_info.get("repeatedTool") or "")
+        repeated_count = int(loop_guard_info.get("repeatCount") or 0)
+        trigger = str(loop_guard_info.get("trigger") or "repeat")
+        prompt_payload["message"] = (
+            original_message.rstrip()
+            + "\n\n## loop_guard_reflection\n"
+            + f"You have already repeated `{repeated_tool}` {repeated_count} "
+            + f"times in this conversation ({trigger}). Do not retry the same "
+            + "tool call. Read the last validation error, change the arguments "
+            + "or tool choice, or ask one concise clarification question if the "
+            + "request is missing required information."
         )
-    else:
-        # CLI shell-out path: the per-request allowlist is written to
-        # /tmp/manyforge-openclaw-allowed-tools.txt before openclaw
-        # launches and the wrapper reads it on startup, so prompt and
-        # `tools/list` agree. Narrowing here is safe.
-        inferred_mcp_tools = (
-            mcp_allowed_tools_from_payload(payload) if cfg.auto_tool_window else []
-        )
-        allowed_mcp_tools = inferred_mcp_tools or None
-        prompt = build_agent_prompt(
-            payload,
-            mcp_allowed_tools=allowed_mcp_tools,
-            tool_surface=cfg.tool_surface,
-        )
+    session_key = derive_gateway_session_key(payload)
+    state_context_control = _state_context_control(session_key)
+    prompt = build_agent_prompt(
+        prompt_payload,
+        tool_surface=cfg.tool_surface,
+        state_context_control=state_context_control,
+    )
     prompt_ms = (time.perf_counter() - prompt_started) * 1000.0
     REQUEST_DURATION.labels(stage="prompt_build", transport=transport).observe(prompt_ms / 1000.0)
     timeout_s = _request_timeout(payload, cfg.timeout_s)
@@ -877,7 +855,9 @@ async def assistant(request: Request) -> JSONResponse:
     _ACTIVE_REQUESTS[request_id] = {
         "startedPerf": time.perf_counter(),
         "stage": "dispatching_openclaw_gateway" if cfg.use_gateway else "dispatching_openclaw",
-        "allowedMcpTools": allowed_mcp_tools or [],
+        "toolSurfaceScope": "assistant_mode",
+        "loopReflectionInjected": loop_reflection_injected,
+        "stateContext": state_context_control,
         "promptChars": len(prompt),
         "sessionId": session_id,
         "transport": "gateway_http" if cfg.use_gateway else "cli_shell_out",
@@ -886,7 +866,9 @@ async def assistant(request: Request) -> JSONResponse:
         "openclaw_request_started",
         requestId=request_id,
         timeoutS=timeout_s,
-        allowedMcpTools=allowed_mcp_tools or [],
+        toolSurfaceScope="assistant_mode",
+        loopReflectionInjected=loop_reflection_injected,
+        stateContext=state_context_control,
         promptChars=len(prompt),
         transport="gateway_http" if cfg.use_gateway else "cli_shell_out",
     )
@@ -942,7 +924,6 @@ async def assistant(request: Request) -> JSONResponse:
         # forced cli_shell_out. The trigger logic + session counter is
         # now lifted out; only the actual /compact dispatch differs by
         # transport (gateway: chat-completion; cli: openclaw agent).
-        session_key = derive_gateway_session_key(payload)
         session_count = _bump_session_request_counter(session_key)
         if _should_fire_compact(session_count):
             COMPACT_FIRES_TOTAL.labels(outcome="started").inc()
@@ -981,7 +962,6 @@ async def assistant(request: Request) -> JSONResponse:
                     config=cfg,
                     message="/compact",
                     timeout_s=_COMPACT_TIMEOUT_S,
-                    mcp_allowed_tools=None,  # compaction doesn't need tools
                     session_id=session_id,
                 )
             try:
@@ -1035,7 +1015,6 @@ async def assistant(request: Request) -> JSONResponse:
                 message=prompt,
                 timeout_s=timeout_s,
                 session_id=session_id,
-                mcp_allowed_tools=allowed_mcp_tools,
             )
         result = await _run_agent(
             request_id=request_id,
@@ -1052,7 +1031,7 @@ async def assistant(request: Request) -> JSONResponse:
             "openclaw_request_timeout",
             requestId=request_id,
             timeoutS=timeout_s,
-            allowedMcpTools=allowed_mcp_tools or [],
+            toolSurfaceScope="assistant_mode",
         )
         body = error_envelope(
             request_id=request_id,
@@ -1187,6 +1166,15 @@ async def assistant(request: Request) -> JSONResponse:
     tool_warnings = body.get("toolCallWarnings") if isinstance(body, dict) else None
     if isinstance(tool_warnings, list) and tool_warnings:
         TOOL_CALLS_TOTAL.labels(outcome="warning").inc(len(tool_warnings))
+    if loop_reflection_injected and loop_guard_info is not None:
+        warnings = body.get("warnings")
+        if not isinstance(warnings, list):
+            warnings = []
+            body["warnings"] = warnings
+        warnings.append("loop_guard_reflection_injected")
+        body["assisted"] = True
+        body["loopReflectionInjected"] = True
+        body["loopGuard"] = loop_guard_info
     body["openclaw"] = {
         "adapter": "openclaw_assistant_bridge",
         "transport": "gateway_http" if cfg.use_gateway else "cli_shell_out",
@@ -1200,7 +1188,9 @@ async def assistant(request: Request) -> JSONResponse:
         "promptChars": len(prompt),
         "stdoutBytes": len(result.stdout.encode("utf-8")),
         "stderrBytes": len(result.stderr.encode("utf-8")),
-        "allowedMcpTools": allowed_mcp_tools or [],
+        "toolSurfaceScope": "assistant_mode",
+        "loopReflectionInjected": loop_reflection_injected,
+        "stateContext": state_context_control,
         "sandbox": cfg.sandbox,
         "agent": cfg.agent,
     }
@@ -1209,7 +1199,9 @@ async def assistant(request: Request) -> JSONResponse:
         requestId=request_id,
         totalAdapterMs=round(total_ms, 1),
         agentRunMs=round(result.duration_ms, 1),
-        allowedMcpTools=allowed_mcp_tools or [],
+        toolSurfaceScope="assistant_mode",
+        loopReflectionInjected=loop_reflection_injected,
+        stateContext=state_context_control,
         promptChars=len(prompt),
         toolSurface=cfg.tool_surface,
     )

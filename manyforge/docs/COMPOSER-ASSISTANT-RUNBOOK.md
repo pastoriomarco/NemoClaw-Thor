@@ -291,7 +291,7 @@ has, fix the deployment YAML's
 | `policy_denied` in 403 body, curl from non-allowed binary | Binary not in `manyforge_composer.binaries` allow-list |
 | `Manyforge X-Y failed` in gateway, no POST in Composer audit | Gate 7 (allow list blocks bundle-mcp) or Gate 10 (tool not in mode catalog) |
 | Tool name registered as `manyforge__scene-inspect` but model calls `manyforge__scene_inspect` | Workspace TOOLS.md has wrong mangling — dots become **dashes**, underscores stay |
-| Bridge returns "tool not exposed by this request's assistant tool window" | The `MANYFORGE_ALLOWED_TOOLS_FILE` is stale (delete `/tmp/manyforge-openclaw-allowed-tools.txt` between CLI and gateway runs) |
+| Bridge returns "tool not exposed by assistant mode" | Tool id is not in the active assistant mode catalog, or the lane is pointed at the wrong `MANYFORGE_ASSISTANT_MODE` / Composer instance |
 
 ---
 

@@ -65,13 +65,32 @@ except AttributeError:  # Python <3.7 (defensive)
 # ----------------------------------------------------------------------
 
 DEFAULT_COMPOSER = "http://127.0.0.1:9000"
-DEFAULT_TIMEOUT_S = 270.0  # 2026-05-09: 360s caused 3 cases to hit a
-                           # 5-minute upstream-502 circuit-breaker
-                           # (PnP_18, FALLBACK_alternate_medium,
-                           # REPLACE_subtree_specific). Default sits just
-                           # under the 502 ceiling; per-case overrides via
-                           # `precondition.chain_timeout_s` carry the
-                           # rare cases that genuinely need more time.
+
+# Per-request timeout the runner sends as `timeoutSeconds` in the chat body.
+# The bridge honors this REQUEST value over its env-side default
+# (`OPENCLAW_ASSISTANT_TIMEOUT_S`), so the runner-side constant is the real
+# ceiling for any case that doesn't supply `precondition.chain_timeout_s`.
+#
+# History:
+#   2026-05-09: lowered to 270 because 360 caused 3 cases to hit the
+#               composer's 5-minute (300s) upstream-502 circuit-breaker
+#               (PnP_18, FALLBACK_alternate_medium, REPLACE_subtree_specific).
+#               Default sat at 270 to leave a 30s margin under the 300s wall.
+#   2026-06-03: raised to 295 after the Phase 0 iter-32 reproduction showed
+#               three cases (WRAP_root_generic, TREE_insert_runtime_medium,
+#               MOVE_generic) hitting exactly 275.1s — the 270 + 5s HTTP
+#               wrapper timeout. The bridge-side env was already set to 300s
+#               by the launcher (start-openclaw-assistant-bridge.sh
+#               OPENCLAW_ASSISTANT_TIMEOUT_S default) but the request-body
+#               value the runner sent was overriding it. 295 keeps a 5s
+#               safety margin under the composer's 300s wall while giving
+#               the 270+ cases a fair shot at completing.
+#
+# Env override available via MANYFORGE_SMOKE_DEFAULT_TIMEOUT_S so future
+# operators can re-tune for a different composer cap without a code change.
+DEFAULT_TIMEOUT_S = float(
+    os.environ.get("MANYFORGE_SMOKE_DEFAULT_TIMEOUT_S", "295") or "295"
+)
 COMPOSER_CONTAINER = "manyforge-e2e-composer"
 DEFAULT_CORPUS = str(Path(__file__).resolve().parent / "smoke_corpus.yaml")
 
@@ -565,13 +584,71 @@ def _match_args_contain(
 @dataclass
 class CaseResult:
     case_id: str
-    status: str           # "pass" | "soft-pass" | "fail" | "skipped"
+    status: str           # "pass" | "soft-pass" | "recovered-pass" | "fail" | "skipped" | "contaminated"
     elapsed_s: float
     tool_calls: list[dict] = field(default_factory=list)
     answer: str = ""
     failures: list[str] = field(default_factory=list)
     soft_failures: list[str] = field(default_factory=list)
     skip_reason: str = ""
+
+
+# 2026-06-03: opt-in chain-state contamination detector.
+#
+# Symptom this detector addresses: a chained-case run where one case
+# triggers the bridge's `loop_reflect` stop ("I called X N times with
+# IDENTICAL arguments... Stopping to prevent a runaway loop") leaves
+# the SAME conversationId carrying that canned answer in
+# `chain_state`. Every subsequent chain step's `send_chat` returns
+# the same stuck answer in ~0.1s without ever invoking the model.
+# Observed 2026-06-03 Phase 0 OpenClaw run: 16 PnP_* cases from
+# PnP_04 onward all failed at exactly 0.10s with identical loop-break
+# content, contributing -16 cases to the apparent pass rate without
+# any model involvement.
+#
+# Behavior when enabled (`MANYFORGE_SMOKE_DETECT_CHAIN_CONTAMINATION=1`):
+#   1. After each case returns, check the model's `answer` against
+#      the bridge's loop-break sentinel. Detection is a literal
+#      substring match on "Stopping to prevent a runaway loop" —
+#      the bridge sentinel emitted at
+#      openclaw_assistant_bridge/service.py:778. False-positive risk
+#      is essentially zero (the model would have to coincidentally
+#      output that exact phrase verbatim).
+#   2. Pop the contaminated chain's entry from `chain_state` so the
+#      NEXT chain step gets a fresh `conversationId` and re-engages
+#      the model rather than echoing the stuck answer.
+#   3. Record the contaminated case with `status="contaminated"`
+#      (distinct from "fail" so the harness can report it as a
+#      runner-side issue, not a model miss).
+#
+# Behavior when disabled (default): identical to the legacy runner —
+# contaminated cases continue to be counted as `"fail"`. This makes
+# the feature strictly opt-in for the rerun, so any historical
+# baseline numbers measured under the old behavior remain
+# reproducible by simply not setting the env.
+_DETECT_CHAIN_CONTAMINATION = bool(int(
+    os.environ.get("MANYFORGE_SMOKE_DETECT_CHAIN_CONTAMINATION", "0") or "0"
+))
+# Two sentinels, both load-bearing fragments of the bridge's
+# same_args / same_tool loop-break templates
+# (openclaw_assistant_bridge/service.py:776-790). The runtime
+# detection runs on the FULL pre-truncation answer so either match
+# is sufficient. The shorter "IDENTICAL arguments" / "I have called"
+# fragments also survive the answer[:200] truncation that lands in
+# the persisted JSON, so the same predicate can be replayed offline
+# against archived reports without re-running the smoke. False
+# positives would require the model to output one of these literal
+# phrases verbatim, which the bridge prompt never asks for.
+_CHAIN_CONTAMINATION_SENTINELS = (
+    "with IDENTICAL arguments",   # same_args loop-break
+    "I have called `",            # same_tool loop-break opener
+)
+
+
+def _looks_like_chain_contamination(answer: str | None) -> bool:
+    if not answer:
+        return False
+    return any(s in answer for s in _CHAIN_CONTAMINATION_SENTINELS)
 
 
 def assert_tools(case: dict, observed: list[dict], failures: list[str],
@@ -601,6 +678,53 @@ def assert_tools(case: dict, observed: list[dict], failures: list[str],
     # `state_after` (the post-state inherently reflects the cumulative
     # effect, not the path that got there).
     available = [dict(c) for c in observed]   # local copy we'll consume
+
+    def _pick_best(matchers: list[str], allow_retries: bool) -> int | None:
+        """Pick the best call matching any name in `matchers`. Tiered
+        preference:
+          T1 — bridge_status=completed AND structured args (non-_raw)
+          T2 — bridge_status=completed (even if args is just {"_raw": ...})
+          T3 — any 2xx (legacy behavior — last resort)
+
+        Rationale: smoke audit captures BOTH the bridge HTTP status (always
+        200 if the call reached the bridge) AND a bridge_status of
+        "completed" | "failed". On direct lane the model often emits a
+        first-turn call with malformed args (bridge_status=failed,
+        arguments={"_raw": "<tool_call>...</tool_call>"}) and then a
+        recovery-turn call with structured args (bridge_status=completed,
+        arguments={"sceneResource": {...}}). The legacy first-2xx picker
+        consumed the failed call and ran args_contain against `_raw` only —
+        producing false-negative MISSING failures even when the model's
+        SECOND attempt was the canonical schema. This picker chooses the
+        actually-executed structured call instead.
+        """
+        # Tier 1
+        for idx, call in enumerate(available):
+            if call.get("_consumed") or call["tool"] not in matchers:
+                continue
+            status = int(call["status"] or 0)
+            if 200 <= status < 300 and call.get("bridge_status") == "completed":
+                args = call.get("arguments") or {}
+                if args and not (len(args) == 1 and "_raw" in args):
+                    return idx
+        # Tier 2
+        for idx, call in enumerate(available):
+            if call.get("_consumed") or call["tool"] not in matchers:
+                continue
+            status = int(call["status"] or 0)
+            if 200 <= status < 300 and call.get("bridge_status") == "completed":
+                return idx
+        # Tier 3 (legacy)
+        for idx, call in enumerate(available):
+            if call.get("_consumed") or call["tool"] not in matchers:
+                continue
+            status = int(call["status"] or 0)
+            if 200 <= status < 300:
+                return idx
+            if allow_retries:
+                available[idx]["_consumed"] = True
+        return None
+
     for i, exp in enumerate(expected_list):
         name = exp.get("name")
         # 2026-06-01: support `alt_names` (list) for equivalent-effect tools.
@@ -611,32 +735,12 @@ def assert_tools(case: dict, observed: list[dict], failures: list[str],
         # outer runner promotes this to a soft-pass for the case).
         alt_names = exp.get("alt_names") or []
         allow_retries = exp.get("allow_retries", False)
-        consumed_idx: int | None = None
         matched_alt: str | None = None
-        # First pass: try primary name
-        for idx, call in enumerate(available):
-            if call.get("_consumed") or call["tool"] != name:
-                continue
-            status = int(call["status"] or 0)
-            if 200 <= status < 300:
-                consumed_idx = idx
-                break
-            if not allow_retries:
-                continue
-            available[idx]["_consumed"] = True
-        # Second pass: try alt names if primary missed
+        consumed_idx = _pick_best([name], allow_retries)
         if consumed_idx is None and alt_names:
-            for idx, call in enumerate(available):
-                if call.get("_consumed") or call["tool"] not in alt_names:
-                    continue
-                status = int(call["status"] or 0)
-                if 200 <= status < 300:
-                    consumed_idx = idx
-                    matched_alt = call["tool"]
-                    break
-                if not allow_retries:
-                    continue
-                available[idx]["_consumed"] = True
+            consumed_idx = _pick_best(alt_names, allow_retries)
+            if consumed_idx is not None:
+                matched_alt = available[consumed_idx]["tool"]
         if consumed_idx is None:
             failures.append(
                 f"expected tool '{name}' not observed (or never reached 2xx)"
@@ -694,15 +798,41 @@ def assert_state(case: dict, post_state: dict, failures: list[str]) -> None:
             )
 
 
+def _answer_match_variants(text: str) -> tuple[str, str, str]:
+    """Return raw, whitespace-normalized, and compact answer variants.
+
+    OpenClaw's streamed token collector can persist visible answers with
+    newlines between subword tokens (`up\nsert`, `pick\n_and\n_place`).
+    Corpus prose checks should not false-negative on that transport artifact.
+    """
+
+    raw = (text or "").lower()
+    spaced = re.sub(r"\s+", " ", raw).strip()
+    compact = re.sub(r"\s+", "", raw)
+    return raw, spaced, compact
+
+
+def _answer_contains(answer_variants: tuple[str, str, str], needle: str) -> bool:
+    raw, spaced, compact = answer_variants
+    needle_raw = needle.lower()
+    needle_spaced = re.sub(r"\s+", " ", needle_raw).strip()
+    needle_compact = re.sub(r"\s+", "", needle_raw)
+    return (
+        needle_raw in raw
+        or needle_spaced in spaced
+        or needle_compact in compact
+    )
+
+
 def assert_answer(case: dict, answer: str, soft_failures: list[str]) -> None:
     must = case.get("expected", {}).get("answer_must_contain") or []
     must_not = case.get("expected", {}).get("answer_must_not_contain") or []
-    a_low = (answer or "").lower()
+    variants = _answer_match_variants(answer or "")
     for needle in must:
-        if needle.lower() not in a_low:
+        if not _answer_contains(variants, needle):
             soft_failures.append(f"answer_must_contain: {needle!r} not found")
     for needle in must_not:
-        if needle.lower() in a_low:
+        if _answer_contains(variants, needle):
             soft_failures.append(f"answer_must_not_contain: {needle!r} unexpectedly present")
 
 
@@ -1018,6 +1148,34 @@ def run_case(case: dict, composer: str, default_pre: dict,
                     recovered = True
                     failures = []  # cleared; case recovered
 
+    # 2026-06-03 opt-in: chain-contamination detection. See module-level
+    # `_DETECT_CHAIN_CONTAMINATION` for rationale. Runs AFTER fail/pass
+    # classification so the existing logic is untouched when disabled;
+    # when enabled, contaminated cases override the classification to
+    # `"contaminated"` and free the chain so the next step gets a fresh
+    # conversationId. The model was never actually invoked for a
+    # contaminated case, so reporting it as a model miss is dishonest.
+    if (_DETECT_CHAIN_CONTAMINATION
+            and chain_id
+            and _looks_like_chain_contamination(answer)):
+        # Pop the stuck conversationId so the next chain step is a clean
+        # re-engagement with the model rather than another echo of the
+        # canned loop-break answer.
+        chain_state.pop(chain_id, None)
+        return CaseResult(
+            case_id=cid,
+            status="contaminated",
+            elapsed_s=round(elapsed, 1),
+            tool_calls=observed,
+            answer=answer[:200],
+            failures=[],
+            soft_failures=[],
+            skip_reason=(
+                "chain conversation echoed bridge loop-break sentinel; "
+                "model not invoked. Chain reset for the next step."
+            ),
+        )
+
     if failures:
         st = "fail"
     elif recovered:
@@ -1138,7 +1296,13 @@ def main() -> int:
         marker = {
             "pass": "✅", "recovered-pass": "🛟", "soft-pass": "🟡",
             "fail": "❌", "skipped": "⏭",
-        }[r.status]
+            # 2026-06-03: contamination marker. Mid-blue circle is
+            # distinct from the ❌ failure marker so a glance at the
+            # log makes the harness-issue vs. model-miss split
+            # immediately obvious. Only emitted when the opt-in
+            # MANYFORGE_SMOKE_DETECT_CHAIN_CONTAMINATION=1 is set.
+            "contaminated": "🔵",
+        }.get(r.status, "?")
         line = f"  {marker} {case['id']:50s}  {r.elapsed_s:>5.1f}s  status={r.status}"
         if r.failures:
             line += f"\n      fail: {r.failures}"
@@ -1150,12 +1314,19 @@ def main() -> int:
     print()
     print("=" * 78)
     counts = {
-        "pass": 0, "recovered-pass": 0, "soft-pass": 0, "fail": 0, "skipped": 0,
+        "pass": 0, "recovered-pass": 0, "soft-pass": 0, "fail": 0,
+        "skipped": 0, "contaminated": 0,
     }
     for r in results:
-        counts[r.status] += 1
+        counts[r.status] = counts.get(r.status, 0) + 1
     n_total = len(results)
-    n_attempted = n_total - counts["skipped"]
+    # Contaminated cases are runner-side issues (the model was never
+    # invoked); they don't count toward "attempted" the same way fails
+    # do. The denominator therefore excludes them, which avoids
+    # depressing the effective rate by harness state-leakage. When the
+    # detector is OFF (the default), `counts['contaminated']` is 0 and
+    # this clause is a no-op.
+    n_attempted = n_total - counts["skipped"] - counts["contaminated"]
     # Effective rate counts pass + recovered-pass + soft-pass
     n_pass_eff = counts["pass"] + counts["recovered-pass"] + counts["soft-pass"]
     print(f"  total cases:      {n_total}")
@@ -1165,6 +1336,12 @@ def main() -> int:
         f"{counts['soft-pass']} soft-pass, {counts['fail']} fail)"
     )
     print(f"  skipped:          {counts['skipped']}")
+    if counts["contaminated"]:
+        print(
+            f"  contaminated:     {counts['contaminated']}  "
+            f"(chain echoed bridge loop-break sentinel; model not invoked; "
+            f"excluded from attempted/effective)"
+        )
     if n_attempted:
         n_first_try = counts["pass"]
         print(

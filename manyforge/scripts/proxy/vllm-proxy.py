@@ -957,6 +957,230 @@ _NORMALIZE_TOOL_NAMES = (
     os.environ.get("OPENCLAW_PROXY_NORMALIZE_TOOL_NAMES", "1") or "1"
 ).strip().lower() in ("1", "true", "yes", "on")
 
+# 2026-06-04: nested MCP-id normalization for OpenClaw tools-mode.
+#
+# Why this mutation exists. OpenClaw bundle-mcp exposes ManyForge tools
+# behind three discovery verbs (tool_search/tool_describe/tool_call). The
+# real ManyForge id appears nested inside `tool_call.arguments.id` and
+# `tool_describe.arguments.id` — NOT in the OpenAI `function.name` field
+# that NORMALIZE_TOOL_NAMES already handles. Cosmos (and probably other
+# models trained on bare canonical ManyForge names) emits one of three
+# wrong shapes:
+#
+#   bare:    "id":"tree_draft_insert_node"
+#   dashed:  "id":"manyforge__tree-draft-insert_node"
+#   MCP loc: "id":"mcp:bundle-mcp:manyforge__tree_draft_insert_node"
+#
+# OpenClaw rejects all three with "Unknown tool id" (verified 2026-06-04
+# from /sandbox/.openclaw/logs/gateway-persistent.log). The model then
+# loops through wrong shapes until it finally emits the canonical
+# `manyforge__<bare_underscored>` form — costing many wasted turns per
+# case and frequently hitting the 5-min composer cap.
+#
+# The fix is structural: rewrite the nested id field to the canonical
+# `manyforge__<bare_underscored>` form before OpenClaw's MCP dispatcher
+# sees it. This makes ALL the loops above succeed on the first try,
+# regardless of which shape the model chose. Each rewrite is logged so
+# the audit shows the original-vs-rewritten pair for forensics.
+#
+# Why text-level substitution. The nested id sits inside an
+# `arguments` STRING (per the OpenAI tool-call wire shape), which in
+# SSE streaming responses is built up across many delta chunks.
+# Doing structural JSON walk per-chunk would require accumulating
+# arguments state across the chunk stream. Text-level regex over
+# the full response body is shorter, idempotent on already-canonical
+# emissions, and works identically on JSON-body and SSE chunk shapes
+# because the JSON-escaped form is the same in both. The regex only
+# matches our specific ManyForge id shapes so false-positive risk
+# (rewriting an unrelated `"id":...` field that happens to look like
+# a ManyForge id) is essentially zero.
+_NORMALIZE_NESTED_MCP_IDS = (
+    os.environ.get("OPENCLAW_PROXY_NORMALIZE_NESTED_MCP_IDS", "1") or "1"
+).strip().lower() in ("1", "true", "yes", "on")
+
+# ManyForge-id surface patterns the nested-MCP-id normalizer matches.
+# These are stable: the spec 485 amendment ADR-0020 locked underscore
+# as the canonical wire form. Adding a new tool would extend the
+# `tree_draft_|scene_draft_|...` alternation. Anything not matching
+# stays untouched.
+import re as _re
+
+# Matches a nested ManyForge id field that is bare (missing the
+# `manyforge__` prefix) but otherwise correctly underscored. We
+# prepend `manyforge__` to canonicalize.
+_NESTED_BARE_ID_PATTERN = _re.compile(
+    r'"id":"(?P<id>'
+    r'(?:tree_draft_|scene_draft_|program_draft_|blackboard_draft_)'
+    r'[a-z0-9_]+'
+    r'|program_read|catalog_read|skills_read|status_read|program_validate'
+    r'|scene_inspect|inspect_isaac_scene|deployment_capabilities_read'
+    r')"'
+)
+
+# Matches dashed forms in the ManyForge surface area. Dashes appear
+# in two places: the `<surface>-draft-` separator (e.g. `tree-draft-`)
+# and the suffix (e.g. `wrap-node` instead of `wrap_node`). Both
+# need conversion to underscores. The optional `manyforge__` prefix
+# is preserved if present.
+#
+# 2026-06-04: extended to cover MIXED-separator forms observed in the
+# wild on Qwen3.6-35B-A3B-NVFP4: `manyforge__tree-draft_wrap_node`
+# (first separator is dash, second is underscore) and the symmetric
+# `tree_draft-X` form. The pattern now requires at least one dash to
+# appear in the `<surface>(_|-)draft(_|-)` slot, so the all-underscore
+# canonical form is still handled by the bare pattern (no double-firing).
+_NESTED_DASHED_ID_PATTERN = _re.compile(
+    r'"id":"(?P<prefix>manyforge__)?(?P<id>'
+    # both separators dash, or first dash + second underscore
+    r'(?:tree|scene|program|blackboard)-draft[-_][a-z0-9_-]+'
+    # first underscore + second dash
+    r'|(?:tree|scene|program|blackboard)_draft-[a-z0-9_-]+'
+    r')"'
+)
+
+# Matches an MCP locator prefix `mcp:<server>:` that some models
+# emit verbatim from the `tool_search` result's `id` field. We strip
+# it to leave the dispatchable `manyforge__<bare>` name.
+_NESTED_MCP_LOCATOR_PATTERN = _re.compile(
+    r'"id":"mcp:[a-zA-Z0-9_-]+:(?P<id>manyforge__[a-z0-9_]+)"'
+)
+
+# Escaped-form variants. In SSE streaming responses, the `arguments`
+# field is itself a JSON-encoded string, so its inner `"id":"..."`
+# field is wire-encoded as `\"id\":\"...\"` (backslash-escaped
+# quotes). The three patterns above only match the plain form;
+# these mirror them for the escaped form so the same normalizer
+# fires regardless of whether the chunk landed in JSON-body or
+# SSE-stream shape. Substitution emits the same escaped wire form
+# back so the surrounding JSON stays valid.
+_NESTED_BARE_ID_ESCAPED_PATTERN = _re.compile(
+    r'\\"id\\":\\"(?P<id>'
+    r'(?:tree_draft_|scene_draft_|program_draft_|blackboard_draft_)'
+    r'[a-z0-9_]+'
+    r'|program_read|catalog_read|skills_read|status_read|program_validate'
+    r'|scene_inspect|inspect_isaac_scene|deployment_capabilities_read'
+    r')\\"'
+)
+
+_NESTED_DASHED_ID_ESCAPED_PATTERN = _re.compile(
+    r'\\"id\\":\\"(?P<prefix>manyforge__)?(?P<id>'
+    # both separators dash, or first dash + second underscore
+    r'(?:tree|scene|program|blackboard)-draft[-_][a-z0-9_-]+'
+    # first underscore + second dash
+    r'|(?:tree|scene|program|blackboard)_draft-[a-z0-9_-]+'
+    r')\\"'
+)
+
+_NESTED_MCP_LOCATOR_ESCAPED_PATTERN = _re.compile(
+    r'\\"id\\":\\"mcp:[a-zA-Z0-9_-]+:(?P<id>manyforge__[a-z0-9_]+)\\"'
+)
+
+
+def _normalize_nested_mcp_ids_in_text(txt: str) -> tuple[str, list[dict]]:
+    """Apply nested-MCP-id rewrites to a response body string. Works on
+    both JSON and SSE shapes because JSON-escaped id strings are
+    identical in both. Returns (new_txt, rewrites_list). The
+    rewrites_list is a list of {original, rewritten} pairs for the
+    mutation-summary log; empty if no change.
+
+    Idempotent: already-canonical `"id":"manyforge__<x>"` strings do
+    not match any pattern and pass through untouched.
+    """
+    if not _NORMALIZE_NESTED_MCP_IDS or not txt:
+        return txt, []
+    rewrites: list[dict] = []
+
+    def _sub_mcp_locator(m: _re.Match) -> str:
+        canonical = m.group("id")
+        original = m.group(0)
+        new_form = f'"id":"{canonical}"'
+        if new_form != original:
+            rewrites.append({
+                "rule": "strip_mcp_locator",
+                "original": original,
+                "rewritten": new_form,
+            })
+        return new_form
+
+    def _sub_dashed(m: _re.Match) -> str:
+        prefix = m.group("prefix") or ""
+        # Convert all dashes in the id body to underscores.
+        bare = m.group("id").replace("-", "_")
+        # Always prepend `manyforge__` — if it was already there, the
+        # regex capture groups preserve it; if not, add it.
+        if not prefix:
+            prefix = "manyforge__"
+        new_form = f'"id":"{prefix}{bare}"'
+        original = m.group(0)
+        if new_form != original:
+            rewrites.append({
+                "rule": "dash_to_underscore" if "-" in m.group("id") else "add_prefix",
+                "original": original,
+                "rewritten": new_form,
+            })
+        return new_form
+
+    def _sub_bare(m: _re.Match) -> str:
+        bare = m.group("id")
+        new_form = f'"id":"manyforge__{bare}"'
+        original = m.group(0)
+        rewrites.append({
+            "rule": "add_manyforge_prefix",
+            "original": original,
+            "rewritten": new_form,
+        })
+        return new_form
+
+    def _sub_mcp_locator_escaped(m: _re.Match) -> str:
+        canonical = m.group("id")
+        original = m.group(0)
+        new_form = f'\\"id\\":\\"{canonical}\\"'
+        if new_form != original:
+            rewrites.append({
+                "rule": "strip_mcp_locator_escaped",
+                "original": original,
+                "rewritten": new_form,
+            })
+        return new_form
+
+    def _sub_dashed_escaped(m: _re.Match) -> str:
+        prefix = m.group("prefix") or ""
+        bare = m.group("id").replace("-", "_")
+        if not prefix:
+            prefix = "manyforge__"
+        new_form = f'\\"id\\":\\"{prefix}{bare}\\"'
+        original = m.group(0)
+        if new_form != original:
+            rewrites.append({
+                "rule": "dash_to_underscore_escaped" if "-" in m.group("id") else "add_prefix_escaped",
+                "original": original,
+                "rewritten": new_form,
+            })
+        return new_form
+
+    def _sub_bare_escaped(m: _re.Match) -> str:
+        bare = m.group("id")
+        new_form = f'\\"id\\":\\"manyforge__{bare}\\"'
+        original = m.group(0)
+        rewrites.append({
+            "rule": "add_manyforge_prefix_escaped",
+            "original": original,
+            "rewritten": new_form,
+        })
+        return new_form
+
+    # Order matters: process MCP-locator first (most specific), then
+    # dashed (catches both prefixed and unprefixed dashed forms),
+    # then bare (catches anything without prefix that survived).
+    # Plain form first, then escaped form for SSE streaming chunks.
+    new_txt = _NESTED_MCP_LOCATOR_PATTERN.sub(_sub_mcp_locator, txt)
+    new_txt = _NESTED_DASHED_ID_PATTERN.sub(_sub_dashed, new_txt)
+    new_txt = _NESTED_BARE_ID_PATTERN.sub(_sub_bare, new_txt)
+    new_txt = _NESTED_MCP_LOCATOR_ESCAPED_PATTERN.sub(_sub_mcp_locator_escaped, new_txt)
+    new_txt = _NESTED_DASHED_ID_ESCAPED_PATTERN.sub(_sub_dashed_escaped, new_txt)
+    new_txt = _NESTED_BARE_ID_ESCAPED_PATTERN.sub(_sub_bare_escaped, new_txt)
+    return new_txt, rewrites
+
 # 2026-06-02: response-side reasoning→content promotion.
 # When vLLM is launched with --reasoning-parser (e.g. qwen3 for cosmos),
 # the parser routes everything inside <think>...</think> blocks to
@@ -1586,9 +1810,10 @@ def _check_loop_short_circuit(
 ) -> tuple[bytes | None, bytes | None, dict | None]:
     """Inspect /v1/chat/completions for runaway loops via 5 detectors.
 
-    Returns (synthetic_sse, mutated_body, trigger_info):
+    Returns (error_json, mutated_body, trigger_info):
       - all None: forward as-is
-      - synthetic_sse set: hard-stop with synthetic SSE (no further forward)
+      - error_json set: hard-stop with an OpenAI-style error body
+        (no further forward)
       - mutated_body set: forward the mutated body (reflection injected)
       - trigger_info {trigger, tool, count, ...}: appended to JSONL log
 
@@ -1656,30 +1881,35 @@ def _check_loop_short_circuit(
             break
     last_name = consecutive_tail[-1]["name"]
 
+    def _loop_error_body(*, trigger: str, tool: str, count: int, detail: str,
+                         namespace: str | None = None) -> bytes:
+        error: dict = {
+            "message": detail,
+            "type": "manyforge_proxy_loop_detected",
+            "param": None,
+            "code": "loop_detected",
+            "loopGuard": {
+                "trigger": trigger,
+                "tool": tool,
+                "count": count,
+            },
+        }
+        if namespace:
+            error["loopGuard"]["namespace"] = namespace
+        return json.dumps({"error": error}, separators=(",", ":")).encode("utf-8")
+
     # ----- HARD STOP at _STOP_AT (existing safety; not gated by trigger flags) -----
     if _STOP_AT > 0 and same_tool_run >= _STOP_AT:
-        model = parsed.get("model") or "unknown"
-        stop_msg = (
-            f"[loop-break] I have called `{last_name}` {same_tool_run} times in this "
-            f"conversation. Repeated retries hit the same validator error. "
-            f"Stopping to avoid runaway. Please refine the request with the "
-            f"specific missing field, pick a different tool, or restate the goal."
+        detail = (
+            f"loop detected: tool '{last_name}' repeated {same_tool_run} "
+            "times in this conversation without recovery"
         )
-        chatcmpl_id = "chatcmpl-loopbreak"
-        chunk1 = {
-            "id": chatcmpl_id, "object": "chat.completion.chunk", "model": model,
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": stop_msg}, "finish_reason": None}],
-        }
-        chunk2 = {
-            "id": chatcmpl_id, "object": "chat.completion.chunk", "model": model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-        }
-        sse = (
-            f"data: {json.dumps(chunk1)}\n\n"
-            f"data: {json.dumps(chunk2)}\n\n"
-            f"data: [DONE]\n\n"
-        )
-        return sse.encode("utf-8"), None, {
+        return _loop_error_body(
+            trigger="hard_stop",
+            tool=last_name,
+            count=same_tool_run,
+            detail=detail,
+        ), None, {
             "trigger": "hard_stop", "tool": last_name, "count": same_tool_run,
         }
 
@@ -1736,30 +1966,21 @@ def _check_loop_short_circuit(
             else:
                 break
         # Hard stop first (regardless of already_injected): the SSE response
-        # cleanly exits the agent loop and prevents unbounded GPU spend.
+        # exits the agent loop and prevents unbounded GPU spend, but returns
+        # an error-shaped response so benchmark scorers do not count it as
+        # a successful assistant answer.
         if _NAMESPACE_STOP_AT > 0 and ns_run >= _NAMESPACE_STOP_AT:
-            model = parsed.get("model") or "unknown"
-            stop_msg = (
-                f"[loop-break] I have made {ns_run} consecutive calls within "
-                f"the `{last_ns}_*` tool family without converging. Stopping "
-                f"to avoid runaway. Please clarify the request or pick a "
-                f"different approach."
+            detail = (
+                f"loop detected: {ns_run} consecutive calls within the "
+                f"'{last_ns}_*' tool family without convergence"
             )
-            chatcmpl_id = "chatcmpl-loopbreak-ns"
-            chunk1 = {
-                "id": chatcmpl_id, "object": "chat.completion.chunk", "model": model,
-                "choices": [{"index": 0, "delta": {"role": "assistant", "content": stop_msg}, "finish_reason": None}],
-            }
-            chunk2 = {
-                "id": chatcmpl_id, "object": "chat.completion.chunk", "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-            sse = (
-                f"data: {json.dumps(chunk1)}\n\n"
-                f"data: {json.dumps(chunk2)}\n\n"
-                f"data: [DONE]\n\n"
-            )
-            return sse.encode("utf-8"), None, {
+            return _loop_error_body(
+                trigger="namespace_hard_stop",
+                tool=last_name,
+                count=ns_run,
+                detail=detail,
+                namespace=last_ns,
+            ), None, {
                 "trigger": "namespace_hard_stop", "tool": last_name,
                 "namespace": last_ns, "count": ns_run,
             }
@@ -1875,27 +2096,28 @@ class ProxyHandler(BaseHTTPRequestHandler):
         #   1. At _REFLECT_AT same-tool calls: INJECT a synthetic user
         #      message into messages[] urging the model to change
         #      tactics, then forward. Model gets a fresh chance.
-        #   2. At _STOP_AT same-tool calls: HARD-STOP with synthetic
-        #      SSE assistant response saying "stuck", no further GPU
-        #      spend. OpenClaw exits its agent loop cleanly.
+        #   2. At _STOP_AT same-tool calls: HARD-STOP with an OpenAI-
+        #      style error body, no further GPU spend. This is failure-
+        #      shaped on purpose; benchmark scorers must not treat a
+        #      loop guard as a successful assistant answer.
         # Both stages are bounded so the model can't escape indefinitely.
         # Configured via OPENCLAW_PROXY_LOOP_REFLECT_AT (default 4) and
         # OPENCLAW_PROXY_LOOP_STOP_AT (default 8). Legacy single-knob
         # OPENCLAW_PROXY_LOOP_TOOL_THRESHOLD still honored.
-        loop_sse, loop_mutated_body, loop_trigger_info = _check_loop_short_circuit(path, body)
-        if loop_sse is not None:
-            # Hard stop — synthesize SSE and return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Content-Length", str(len(loop_sse)))
+        loop_error, loop_mutated_body, loop_trigger_info = _check_loop_short_circuit(path, body)
+        if loop_error is not None:
+            # Hard stop — synthesize an error-shaped response and return.
+            self.send_response(409)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(loop_error)))
             self.end_headers()
-            self.wfile.write(loop_sse)
+            self.wfile.write(loop_error)
             self.wfile.flush()
             _append_log({
                 "ts": int(time.time() * 1000),
                 "event": "proxy_loop_hard_stop",
                 "path": path,
+                "status": 409,
                 "trigger_info": loop_trigger_info,
             })
             return
@@ -2009,6 +2231,33 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "rewrites": normalize_rewrites,
             })
 
+        # 2026-06-04: nested-MCP-id normalization for tools-mode dispatch.
+        # Rewrites broken model emissions of the ManyForge id field
+        # inside `tool_call`/`tool_describe` arguments (bare ids,
+        # dashed forms, MCP-locator prefixes) to the canonical
+        # `manyforge__<bare>` shape OpenClaw accepts. Path-gated to
+        # /v1/chat/completions because that's where the streamed tool
+        # calls land. Operates on the text body (works for both JSON
+        # and SSE shapes since the JSON-escaped id strings are
+        # identical). Idempotent on already-canonical responses.
+        nested_id_rewrites: list[dict] = []
+        if _NORMALIZE_NESTED_MCP_IDS and path.endswith("/v1/chat/completions"):
+            try:
+                resp_text = (resp_body.decode("utf-8") if isinstance(resp_body, bytes)
+                             else (resp_body or ""))
+                new_text, nested_id_rewrites = _normalize_nested_mcp_ids_in_text(resp_text)
+                if nested_id_rewrites:
+                    resp_body = new_text.encode("utf-8")
+            except Exception:
+                nested_id_rewrites = []
+        if nested_id_rewrites:
+            _append_log({
+                "ts": int(time.time() * 1000),
+                "event": "proxy_nested_mcp_id_normalized",
+                "path": path,
+                "rewrites": nested_id_rewrites,
+            })
+
         resp_body_json, resp_body_raw = _try_parse_json(resp_body)
         response_record: dict = {
             "status": resp_status,
@@ -2018,6 +2267,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         }
         if normalize_rewrites:
             response_record["normalize_rewrites"] = normalize_rewrites
+        if nested_id_rewrites:
+            response_record["nested_id_rewrites"] = nested_id_rewrites
         if resp_body_json is not None:
             response_record["body"] = resp_body_json
         else:
@@ -2246,6 +2497,8 @@ def main() -> None:
         mutation_summary.append("malformed_tool_detect=on")
     if _NORMALIZE_TOOL_NAMES:
         mutation_summary.append("normalize_tool_names=on")
+    if _NORMALIZE_NESTED_MCP_IDS:
+        mutation_summary.append("normalize_nested_mcp_ids=on")
     if _GUIDED_TOOL_CALLS:
         mutation_summary.append("guided_tool_calls=on(action-shaped)")
     if _TOOL_PARSER:
