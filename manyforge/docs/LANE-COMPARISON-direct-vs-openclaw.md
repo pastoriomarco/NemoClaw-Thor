@@ -880,13 +880,13 @@ to handle simple prompts.
 
 This runs from a stack where `nemoclaw <sandbox>` exists, `manyforge`
 sources are at `~/workspaces/dev_ws/src/manyforge`, and
-`NemoClaw-Thor` is at `~/workspaces/nemoclaw/src/NemoClaw-Thor`. Adapt
+`NemoClaw-Thor` is at `~/workspaces/dev_ws/src/NemoClaw-Thor`. Adapt
 paths as needed.
 
 **Step 1 — boot vLLM with the production profile.**
 
 ```bash
-cd $HOME/workspaces/nemoclaw/src/NemoClaw-Thor
+cd $HOME/workspaces/dev_ws/src/NemoClaw-Thor
 ./serving/start-model.sh                  # default = cosmos-reason2-8b
 # or explicit:
 # ./serving/start-model.sh cosmos-reason2-8b
@@ -905,7 +905,7 @@ grep "Default vLLM sampling" /tmp/cosmos8b_boot.log
 MCP server + agent profile + workspace AGENTS.md + reasoning flag).
 
 ```bash
-$HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
+$HOME/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
 ```
 
 **Step 3 — point OpenClaw at the served Cosmos id.**
@@ -919,7 +919,7 @@ switch profiles after install, re-run the provisioner.
 **Step 4 — start the OpenClaw bridge (the production lane).**
 
 ```bash
-cd $HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge
+cd $HOME/workspaces/dev_ws/src/NemoClaw-Thor/manyforge
 ./start-openclaw-assistant-bridge.sh   # listens on :8200
 ```
 
@@ -943,7 +943,7 @@ inside the sandbox.
 does the lane-switch + reset for you):
 
 ```bash
-NEMOCLAW=$HOME/workspaces/nemoclaw/src/NemoClaw-Thor
+NEMOCLAW=$HOME/workspaces/dev_ws/src/NemoClaw-Thor
 python3 $NEMOCLAW/manyforge/scripts/debug/lane-parity-diff.py "add a repeat node as root"
 python3 $NEMOCLAW/manyforge/scripts/debug/lane-parity-diff.py \
     "add a box of size 1.0, 0.02, 0.25 in position 0.0, -0.15, 0.125"

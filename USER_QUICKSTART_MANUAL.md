@@ -36,7 +36,7 @@ Important rule:
 From a fresh host shell:
 
 ```bash
-cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor
 source "$HOME/.nvm/nvm.sh"
 nvm use 22
 export PATH="$HOME/.local/bin:$PATH"
@@ -329,7 +329,7 @@ To add Python packages on top of the existing image without rebuilding
 FlashInfer/vLLM from source:
 
 ```bash
-cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 
 # Preserve current image as a backup tag
 docker tag nemoclaw-thor/vllm:latest nemoclaw-thor/vllm:v4-base

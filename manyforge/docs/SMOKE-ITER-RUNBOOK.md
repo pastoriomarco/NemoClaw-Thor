@@ -87,7 +87,7 @@ pkill -f openclaw_assistant_bridge.service
 Start with the iter-32 production env:
 
 ```bash
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd /home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor
 
 PYTHONPATH=$(pwd)/manyforge:${PYTHONPATH:-} \
 OPENCLAW_ASSISTANT_USE_GATEWAY=false \
@@ -118,7 +118,7 @@ Re-provision (re-registers MCP server in openclaw.json so new tools
 are present in the wrapper after gateway restart):
 
 ```bash
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor
+cd /home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor
 ./manyforge/setup-manyforge-assistant.sh my-assistant
 ```
 
@@ -156,7 +156,7 @@ sandbox and re-run the `ensure_sandbox_gateway_running` step above.
 ### 4. Run the smoke iter
 
 ```bash
-cd /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge
+cd /home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor/manyforge
 
 nohup python3 scripts/debug/smoke_corpus_runner.py \
   --corpus scripts/debug/smoke_corpus.yaml \

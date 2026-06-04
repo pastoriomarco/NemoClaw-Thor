@@ -48,7 +48,7 @@ audit.
 Preferred launcher:
 
 ```bash
-cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor
 ./manyforge/start-openclaw-assistant-bridge.sh
 ```
 
@@ -58,7 +58,7 @@ installed by `manyforge/setup-manyforge-assistant.sh`.
 Manual service run:
 
 ```bash
-cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge
+cd ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 

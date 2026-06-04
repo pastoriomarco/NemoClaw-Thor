@@ -34,7 +34,7 @@ From scratch, using the validated v6-pinned image and default profile
 
 ```bash
 # Terminal 1: start the fastest model
-cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 ./serving/start-model.sh
 
 # Terminal 2: wire the sandbox + sanity-check
@@ -108,7 +108,7 @@ the control-plane bring-up live in
 ### First time (after fresh `nemoclaw onboard`)
 
 ```bash
-cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 
 # Terminal 1: start vLLM with the default profile
 ./serving/start-model.sh               # loads cosmos-reason2-8b (production default)

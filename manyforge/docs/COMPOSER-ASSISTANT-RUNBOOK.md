@@ -20,9 +20,9 @@ MCP bridge**. The fallback "direct vLLM" lane is documented in
 To bring the default stack up after a reboot:
 
 ```bash
-cd $HOME/workspaces/nemoclaw/src/NemoClaw-Thor && ./serving/start-model.sh
-$HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
-$HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/start-openclaw-assistant-bridge.sh &
+cd $HOME/workspaces/dev_ws/src/NemoClaw-Thor && ./serving/start-model.sh
+$HOME/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
+$HOME/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/start-openclaw-assistant-bridge.sh &
 cd $HOME/workspaces/dev_ws/src/manyforge && ./scripts/demo-assistant-known-good.sh start
 ```
 
@@ -53,7 +53,7 @@ Brings up composer (:9000), vLLM (:8050), vllm-proxy (:8000), direct
 bridge (:8100). The shared core (`manyforge.common.projection`) is
 auto-imported by the bridge when `MANYFORGE_THOR_ROOT` points at the
 NemoClaw-Thor checkout (defaults to
-`/home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge`).
+`/home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor/manyforge`).
 
 Diagnostic helper: `./scripts/setup-direct.sh` walks the six gates
 (vLLM → proxy → composer → bridge venv → shared core → bridge healthz)
@@ -80,7 +80,7 @@ NEMOCLAW_PROVIDER=custom \
                    --recreate-sandbox --yes-i-accept-third-party-software
 
 # 2. Setup the manyforge layer (skill, MCP server, agent profile).
-$HOME/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
+$HOME/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh my-assistant
 
 # 3. Bring up via launcher.
 cd $HOME/workspaces/dev_ws/src/manyforge
@@ -306,7 +306,7 @@ openshell sandbox exec -n my-assistant --no-tty -- python3 -c \
   'import urllib.request as u; print(u.urlopen("http://host.openshell.internal:8000/v1/models",timeout=3).status)'
 
 # 6 — vLLM tool parser correct
-python3 ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge/tests/test_adapter.py  # run unit tests
+python3 ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/openclaw_assistant_bridge/tests/test_adapter.py  # run unit tests
 
 # 9 — SSRF policy syntax
 openshell policy get my-assistant --full | grep -A2 'method: GET' | grep '/api/assistant/modes'

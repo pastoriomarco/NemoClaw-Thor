@@ -690,7 +690,7 @@ If no mutation env vars are set, the proxy is a pure pass-through logger — sam
 ```bash
 # 1. Copy the proxy into the sandbox
 docker exec openshell-cluster-nemoclaw kubectl exec -n openshell my-assistant -c agent -- mkdir -p /sandbox/.openclaw/proxy
-docker cp /home/tndlux/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge/scripts/proxy/vllm-proxy.py \
+docker cp /home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/scripts/proxy/vllm-proxy.py \
   openshell-cluster-nemoclaw:/tmp/vllm-proxy.py
 docker exec openshell-cluster-nemoclaw kubectl cp /tmp/vllm-proxy.py \
   openshell/my-assistant:/sandbox/.openclaw/proxy/vllm-proxy.py -c agent

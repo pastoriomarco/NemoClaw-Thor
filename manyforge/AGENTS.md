@@ -15,7 +15,7 @@ made:
 |---|---|---|
 | **What is the contract / spec / ADR?** ("what should this do?") | `dev_ws/src/manyforge_specs/` | `manyforge_specs/AGENTS.md` |
 | **What's in the implementation code / tests?** ("how is it written today?") | `dev_ws/src/manyforge/` | `manyforge/AGENTS.md` (a one-page redirect to `manyforge_specs`) |
-| **What does NemoClaw-Thor own for serving + sandbox + integration?** ("how does it run on Thor?") | `nemoclaw/src/NemoClaw-Thor/` | [`NemoClaw-Thor/AGENTS.md`](../AGENTS.md) — the parent of this file |
+| **What does NemoClaw-Thor own for serving + sandbox + integration?** ("how does it run on Thor?") | `dev_ws/src/NemoClaw-Thor/` | [`NemoClaw-Thor/AGENTS.md`](../AGENTS.md) — the parent of this file |
 | **This subtree (integration-only artifacts)** | here | this file |
 
 If your change spans repos (most do): start at

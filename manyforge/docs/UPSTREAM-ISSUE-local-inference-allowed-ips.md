@@ -5,7 +5,7 @@ Suggested labels: bug, network-policy, openshell-integration
 
 > Save and file at https://github.com/NVIDIA/NemoClaw/issues/new — the body
 > below is ready to paste. The validation log referenced as a "live
-> reproduction" is in `nemoclaw/src/NemoClaw-Thor/manyforge/docs/MANYFORGE-MCP-INTEGRATION.md`
+> reproduction" is in `dev_ws/src/NemoClaw-Thor/manyforge/docs/MANYFORGE-MCP-INTEGRATION.md`
 > (validation log "Phase 2 latency leap — 2026-05-05 evening (canonical fix)").
 
 ---

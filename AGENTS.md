@@ -265,7 +265,7 @@ under "First-time NemoClaw onboard recipe". Read it before running
 ### B — Per-session: serve a model and wire NemoClaw to it
 
 ```bash
-cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor
 
 # 1. Start the model (one of the profiles in serving/config.sh)
 ./serving/start-model.sh <profile-slug>

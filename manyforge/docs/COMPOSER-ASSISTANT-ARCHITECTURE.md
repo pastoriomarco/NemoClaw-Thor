@@ -682,7 +682,7 @@ the removals.
 ### F.1 Boot a new model and run targeted-9 smoke
 
 ```bash
-cd ~/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 
 # 1. Stop any existing vLLM container (assumes detached run)
 docker rm -f manyforge-e2e-vllm 2>/dev/null
@@ -889,7 +889,7 @@ cd ~/workspaces/dev_ws/src/manyforge
 ./scripts/demo-assistant-known-good.sh smoke   # blocks on /healthz
 
 # Run the corpus
-cd ~/workspaces/nemoclaw/src/NemoClaw-Thor/manyforge
+cd ~/workspaces/dev_ws/src/NemoClaw-Thor/manyforge
 nohup python3 scripts/debug/smoke_corpus_runner.py \
   --corpus scripts/debug/smoke_corpus.yaml \
   --enable-recovery-turn \

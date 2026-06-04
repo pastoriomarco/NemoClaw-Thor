@@ -112,8 +112,8 @@ through it.
 |---|---|
 | `manyforge/agent-skills/manyforge-composer/SKILL.md` | OpenClaw skill — vocabulary, tool routing, canonical ids, anti-patterns, recovery protocol, worked examples. Frontmatter `metadata.contract` declares the assistant mode the skill is rev'd against; the provisioner refuses to install if the running Composer doesn't expose that mode. |
 | `manyforge/agent-skills/manyforge-composer/manyforge-mcp-bridge.py` | Symlink → `manyforge/scripts/manyforge-mcp-bridge.py` (single-source). Bundled into the skill at install time. The script is a *mode-scoped MCP wrapper*: it fetches the manifest from `/api/assistant/modes/{mode}`, exposes only the tools that mode permits, and forwards each `tools/call` to `/api/assistant/bridge/tools/{toolId}` with a full bounded-autonomy envelope. |
-| `nemoclaw/src/NemoClaw-Thor/manyforge/policies/manyforge-composer.preset.yaml` | NemoClaw custom egress preset opening `host.openshell.internal:9000` to the agent's permitted binaries. |
-| `nemoclaw/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh` | Idempotent provisioner. Verifies that Composer exposes the configured assistant mode (refuses to install otherwise), applies the preset, stages the skill, installs it, registers the MCP server with the mode + principal env. |
+| `dev_ws/src/NemoClaw-Thor/manyforge/policies/manyforge-composer.preset.yaml` | NemoClaw custom egress preset opening `host.openshell.internal:9000` to the agent's permitted binaries. |
+| `dev_ws/src/NemoClaw-Thor/manyforge/setup-manyforge-assistant.sh` | Idempotent provisioner. Verifies that Composer exposes the configured assistant mode (refuses to install otherwise), applies the preset, stages the skill, installs it, registers the MCP server with the mode + principal env. |
 
 ### What the provisioner does — the four official routes
 
@@ -298,7 +298,7 @@ calls) and *"What does the manyforge-composer skill say about Repeat?"*
 ### Reproduce from a clean lane
 
 ```bash
-cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor
 ./manyforge/setup-manyforge-assistant.sh         # default sandbox: my-assistant
 
 # Plus, in the manyforge demo lane:
@@ -347,7 +347,7 @@ Under the post-refactor layout, sibling to the existing
 `manyforge/bridge/` audit-log mount in this repo:
 
 ```
-nemoclaw/src/NemoClaw-Thor/
+dev_ws/src/NemoClaw-Thor/
 └── manyforge/                                   # ManyForge integration scope
     ├── bridge/                                  # audit-log mount for the
     │                                            # in-ManyForge bridge service
@@ -372,7 +372,7 @@ service and setting `MANYFORGE_ASSISTANT_PROVIDER=openclaw`.
 ### Composer-side switch (no code change)
 
 ```bash
-cd ${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor
+cd ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor
 ./manyforge/start-openclaw-assistant-bridge.sh
 
 # in the Composer launch environment:
@@ -752,7 +752,7 @@ shape. Worth quantifying with a real prompt suite (Phase 3 expansion).
 #### How to reproduce
 
 ```bash
-cd nemoclaw/src/NemoClaw-Thor
+cd dev_ws/src/NemoClaw-Thor
 ./manyforge/ab-direct-vs-openclaw.py --runs 5 --json /tmp/ab.json
 ```
 
