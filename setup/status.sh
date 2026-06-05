@@ -401,7 +401,7 @@ except Exception as e:
             warn "Host forward on port ${dashboard_port} is active but OpenClaw gateway is not responding"
             info "The gateway process may not be running inside the sandbox."
             fix "Run: ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
-            fix "Or inside the sandbox: HOME=/sandbox openclaw gateway run &"
+            fix "Or inside the sandbox: HOME=/sandbox openclaw gateway --allow-unconfigured --bind loopback --auth token &"
             record 2
         fi
     else
@@ -450,7 +450,7 @@ if [[ -n "${sandbox_name}" ]]; then
     echo "  If openclaw tui shows 'gateway disconnected':"
     echo "    ./setup/configure-local-provider.sh ${THOR_MODEL_PROFILE}"
     echo "  Or inside the sandbox:"
-    echo "    HOME=/sandbox openclaw gateway run &"
+    echo "    HOME=/sandbox openclaw gateway --allow-unconfigured --bind loopback --auth token &"
     echo ""
     echo "  For temporary outbound access during troubleshooting:"
     echo "    ./apply-policy-additions.sh research-lite"

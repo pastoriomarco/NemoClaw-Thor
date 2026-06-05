@@ -73,6 +73,30 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command not found in PATH: $1"
 }
 
+sandbox_exec_retry() {
+  local label="$1"
+  shift
+  local attempt rc backoff out
+  for attempt in 1 2 3 4 5 6; do
+    set +e
+    out="$(nemoclaw "${SANDBOX}" exec --no-tty -- "$@" 2>&1)"
+    rc=$?
+    set -e
+    if [[ ${rc} -eq 0 ]]; then
+      printf '%s\n' "${out}"
+      return 0
+    fi
+    if [[ ${attempt} -eq 6 ]]; then
+      printf '  ✗ %s failed after %d attempts (rc=%d)\n' "${label}" "${attempt}" "${rc}" >&2
+      printf '%s\n' "${out}" | tail -10 | sed 's/^/    /' >&2
+      return "${rc}"
+    fi
+    backoff=$((2 ** attempt))
+    printf '    %s attempt %d/6 failed (rc=%d); retrying in %ds...\n' "${label}" "${attempt}" "${rc}" "${backoff}" >&2
+    sleep "${backoff}"
+  done
+}
+
 need_cmd nemoclaw
 need_cmd docker
 
@@ -262,7 +286,7 @@ else:
     print("; ".join(changes) + "; hash refreshed")
 PY
 openshell sandbox upload "${SANDBOX}" /tmp/manyforge-patch-openclaw-baseurl.py /tmp/ >/dev/null
-nemoclaw "${SANDBOX}" exec --no-tty -- python3 /tmp/manyforge-patch-openclaw-baseurl.py 2>&1 | tail -1
+sandbox_exec_retry "openclaw.json baseUrl patch" python3 /tmp/manyforge-patch-openclaw-baseurl.py | tail -1
 ok "openclaw.json baseUrl + timeoutSeconds patched (will be picked up by gateway hot-reload or next recover)"
 
 step "Step 1c: set tools.toolSearch.mode=tools (Phase 3 production default)"
@@ -293,7 +317,7 @@ else:
     print(f"toolSearch: {current!r} -> {target!r}; hash refreshed")
 PY
 openshell sandbox upload "${SANDBOX}" /tmp/manyforge-patch-openclaw-toolsearch.py /tmp/ >/dev/null
-nemoclaw "${SANDBOX}" exec --no-tty -- python3 /tmp/manyforge-patch-openclaw-toolsearch.py 2>&1 | tail -1
+sandbox_exec_retry "openclaw.json toolSearch patch" python3 /tmp/manyforge-patch-openclaw-toolsearch.py | tail -1
 ok "openclaw.json tools.toolSearch.mode patched (gateway must be restarted to take effect — see RUNBOOK)"
 
 step "Step 2/5: stage skill (resolves repo symlinks; no /tmp left in persistent state)"
@@ -747,21 +771,24 @@ except Exception as e:
     print(f'PROBE FAILED: {type(e).__name__}: {e}', file=sys.stderr)
     sys.exit(2)
 "
+PROBE_PY_B64="$(printf '%s' "${PROBE_PY}" | base64 | tr -d '\n')"
 for attempt in 1 2 3 4 5; do
-    probe_out="$("${KEX_USER[@]}" "python3 -c '$(printf '%s' "${PROBE_PY}" | sed "s/'/'\\\\''/g")'" 2>&1)"
+    probe_out="$("${KEX_USER[@]}" "printf %s '${PROBE_PY_B64}' | base64 -d | python3 -" 2>&1)"
     probe_rc=$?
     if [[ ${probe_rc} -eq 0 ]]; then
         echo "${probe_out}" | sed 's/^/    /'
         break
     fi
     if [[ ${attempt} -eq 5 ]]; then
-        fail "sandbox reachability probe failed after 5 attempts (using MCP env)."
-        echo "${probe_out}" | tail -10 | sed 's/^/    /'
+        echo "  ✗ sandbox reachability probe failed after 5 attempts (using MCP env)." >&2
+        echo "${probe_out}" | tail -10 | sed 's/^/    /' >&2
         echo "    This means the manyforge MCP bridge will not register its catalog."
         echo "    Smoke results past this point WILL be invalid (model sees only OpenClaw core tools)."
         echo "    Most common cause: HTTP_PROXY forces traffic through OpenShell's egress proxy"
-        echo "    which denies host.openshell.internal:9000 by policy. Ensure NO_PROXY includes"
-        echo "    host.openshell.internal. Current values:"
+        echo "    which denies host.openshell.internal:9000 by policy. Keep host.openshell.internal"
+        echo "    OUT of NO_PROXY; the MCP bridge must use the OpenShell egress proxy."
+        echo "    Verify the active policy contains port 9000 and the bridge Python path"
+        echo "    (/usr/bin/python3.13 on the current sandbox image). Current values:"
         echo "      HTTP_PROXY=${HTTP_PROXY_VAL}"
         echo "      NO_PROXY=${NO_PROXY_VAL}"
         exit 1

@@ -494,8 +494,9 @@ pending_path.write_text("[]\n")
 print("pre-paired")
 PY
 
-# 3. Start the gateway.
-nohup openclaw gateway run --auth none --port 18789 > "$GW_LOG" 2>&1 &
+# 3. Start the gateway. OpenClaw 2026.5.x refuses container bind=auto without
+# authentication, so bind to loopback with token auth instead of auth=none.
+nohup openclaw gateway --allow-unconfigured --bind loopback --auth token > "$GW_LOG" 2>&1 &
 disown
 GW_PID=$!
 sleep 3
@@ -512,7 +513,7 @@ fi
     if ! echo "${gw_result}" | grep -qE "started|already-running"; then
         warn "OpenClaw gateway may not have started correctly"
         info "${gw_result}"
-        fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway run &"
+        fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway --allow-unconfigured --bind loopback --auth token &"
         return 2
     fi
 
@@ -565,7 +566,7 @@ for pid_dir in /proc/[0-9]*; do
     case "$comm" in openclaw*) kill "$pid" 2>/dev/null || true ;; esac
 done
 sleep 2
-nohup openclaw gateway run --auth none --port 18789 > /sandbox/openclaw-gateway.log 2>&1 &
+nohup openclaw gateway --allow-unconfigured --bind loopback --auth token > /sandbox/openclaw-gateway.log 2>&1 &
 disown
 sleep 3
 kill -0 $! 2>/dev/null && echo "restarted" || echo "failed"
@@ -597,7 +598,7 @@ except Exception:
     done
 
     warn "OpenClaw gateway did not stabilize after retry"
-    fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway run &"
+    fix "Inside the sandbox, run: HOME=/sandbox openclaw gateway --allow-unconfigured --bind loopback --auth token &"
     return 2
 }
 

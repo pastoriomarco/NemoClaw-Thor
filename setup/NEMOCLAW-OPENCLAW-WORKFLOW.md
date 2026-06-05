@@ -318,8 +318,8 @@ for d in /proc/[0-9]*; do
 done
 sleep 2
 # Fresh gateway pinned to this session
-HOME=/sandbox nohup openclaw gateway run --auth none --port 18789 \
-    > /sandbox/openclaw-gateway.log 2>&1 &
+	HOME=/sandbox nohup openclaw gateway --allow-unconfigured --bind loopback --auth token \
+	    > /sandbox/openclaw-gateway.log 2>&1 &
 for i in 1 2 3 4 5 6 7 8; do
     sleep 2
     ss -tlnp 2>/dev/null | grep -q ":18789" && break
