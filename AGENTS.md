@@ -233,6 +233,13 @@ lives in `setup/NEMOCLAW-OPENCLAW-WORKFLOW.md` (post-restructure path).
 
 ### A — First-time NemoClaw onboarding on a clean Thor
 
+> **On a Jetson Orin AGX (64 GB), not Thor?** Follow
+> [`ORIN-SETUP.md`](ORIN-SETUP.md) instead — it covers the Orin deltas
+> (NVMe-staged install, the `gemma4-12b-it-gguf-orin` profile, `provider=custom`
+> onboarding, the `~/.nemoclaw` bind mount, gateway auth, etc.). For the whole
+> stack (host → serving → toolchain → composer → run → smoke) see the master
+> index at `manyforge/docs/operations/ORIN_STACK_SETUP.md`.
+
 Manual steps (these stay manual; do not script around them):
 
 1. Install Docker, accept NVIDIA runtime prompts.

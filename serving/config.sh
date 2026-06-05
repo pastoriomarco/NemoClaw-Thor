@@ -171,7 +171,8 @@ Supported model profiles:
     gemma4-e4b-it             BF16 MoE, 8B/4B-active
     gemma4-31b-it-nvfp4       NVFP4 quantized
     gemma4-26b-a4b-it         BF16 MoE 128E/8A
-    gemma4-12b-it-gguf        GGUF Q4_K_XL via llama.cpp + E2B spec-decode (text-only)
+    gemma4-12b-it-gguf        GGUF Q4_K_XL via llama.cpp + E2B spec-decode (text-only, Jetson Thor image)
+    gemma4-12b-it-gguf-orin   same model/recipe as above, Jetson Orin AGX image + NVMe-backed caches
 EOF
 }
 
@@ -546,6 +547,26 @@ resolve_model_profile() {
             # set so the shared post-case finalizer stays defined under `set -u`.
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="gemma4-12b-it-gguf"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
+            THOR_TARGET_KV_CACHE_DTYPE="auto"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
+            THOR_TARGET_MODEL_REASONING="false"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_TOOL_CALL_PARSER="gemma4"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        gemma4-12b-it-gguf-orin)
+            # Jetson Orin AGX 64GB variant of gemma4-12b-it-gguf. Kept in lockstep
+            # with the Thor profile's tuning (128k context, q8_0 KV + flash-attn —
+            # set in prepare_thor_launch_profile); the only deltas are the Orin
+            # llama.cpp image (...:latest-jetson-orin) and the NVMe-backed cache
+            # mounts (/mnt/nova_ssd/...) documented in isaac_ros_custom_bringup/
+            # jetson_orin_storage. The THOR_TARGET_* below are not consumed by
+            # llama.cpp but are kept set so the shared post-case finalizer stays
+            # defined under `set -u` (mirrors the gemma4-12b-it-gguf case).
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="gemma4-12b-it-gguf-orin"
             THOR_TARGET_MAX_MODEL_LEN="131072"
             THOR_TARGET_KV_CACHE_DTYPE="auto"
             THOR_TARGET_MAX_NUM_SEQS="4"

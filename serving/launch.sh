@@ -11,6 +11,12 @@ fi
 prepare_thor_launch_profile() {
     local profile="${1:-${THOR_MODEL_PROFILE:-}}"
 
+    # Snapshot any operator-supplied THOR_HF_CACHE_DIR *before* the generic
+    # default below clobbers it, so platform profiles (e.g. the Orin AGX gemma
+    # profile, which defaults the HF cache to /mnt/nova_ssd) can tell "operator
+    # explicitly set it" from "generic default applied" and honour the override.
+    local _user_hf_cache_dir="${THOR_HF_CACHE_DIR:-}"
+
     THOR_VLLM_IMAGE="${THOR_VLLM_IMAGE:-nemoclaw-thor/vllm:latest}"
     THOR_VLLM_BIND_HOST="${THOR_VLLM_BIND_HOST:-0.0.0.0}"
     THOR_VLLM_PORT="${THOR_VLLM_PORT:-8000}"
@@ -38,6 +44,33 @@ prepare_thor_launch_profile() {
     THOR_LLAMACPP_HF=""
     THOR_LLAMACPP_SPEC_DRAFT_HF=""
     THOR_LLAMACPP_EXTRA_ARGS=()
+
+    # Cache-first serving for the HF-download lane. llama.cpp's `-hf` resolves
+    # the repo's *latest* `main` revision on every launch and re-downloads when
+    # upstream moves — even if a complete copy is already staged. THOR_LLAMACPP_OFFLINE
+    # controls this:
+    #   auto (default) -> serve `--offline` (cached weights) when the repo is
+    #                     already staged; fetch online on first launch only.
+    #   1 / true       -> force `--offline` (never touch the network).
+    #   0 / false      -> force online (re-resolve latest; use to pull updates).
+    # Resolved in check_thor_launch_prereqs, which also warns when a newer
+    # upstream revision exists (without auto-updating).
+    THOR_LLAMACPP_OFFLINE="${THOR_LLAMACPP_OFFLINE:-auto}"
+
+    # llama.cpp HF-download lane cache wiring (host mounts + container env).
+    # Default reproduces the Thor single-mount layout: exactly one persisted
+    # copy under THOR_HF_CACHE_DIR, with LLAMA_CACHE pinned inside it so the
+    # GGUF survives `docker run --rm`. Platform profiles replace these arrays
+    # to match that platform's tested mount layout — see gemma4-12b-it-gguf-orin,
+    # which points them at the NVMe (/mnt/nova_ssd) per isaac_ros_custom_bringup.
+    # THOR_LLAMACPP_CACHE_DIR_HOST is the host dir mounted at llama.cpp's default
+    # ~/.cache/llama.cpp; left empty by the default (Thor) layout.
+    THOR_LLAMACPP_CACHE_DIR_HOST=""
+    THOR_LLAMACPP_HF_MOUNT_ARGS=(-v "${THOR_HF_CACHE_DIR}:/data/models/huggingface")
+    THOR_LLAMACPP_HF_ENV_ARGS=(
+        -e "HF_HOME=/data/models/huggingface"
+        -e "LLAMA_CACHE=/data/models/huggingface/llama.cpp"
+    )
 
     THOR_DOCKER_ENV_ARGS=()
     THOR_VLLM_ARGS=()
@@ -795,6 +828,62 @@ prepare_thor_launch_profile() {
             # serves text-only; --reasoning off matches the Gemma 4 IT recipe.
             THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --reasoning off --temp 1.0 --top-p 0.95 --top-k 64 --jinja)
             ;;
+        gemma4-12b-it-gguf-orin)
+            # Jetson Orin AGX 64GB variant of gemma4-12b-it-gguf. Kept in
+            # lockstep with the Thor profile's serving recipe — same model +
+            # speculative draft, 128k context, q8_0 KV cache (K/V + draft) and
+            # --flash-attn on (q8_0 V-cache requires flash-attention). Only the
+            # runtime image and cache mounts differ:
+            #   * image: ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-orin
+            #   * caches: NVMe-backed (/mnt/nova_ssd/...) so the ~7 GB GGUF + the
+            #     E2B draft stay off the small eMMC and survive `--rm`. The three
+            #     mounts below reproduce the operator's tested standalone
+            #     `docker run` and follow the storage layout documented in
+            #     isaac_ros_custom_bringup/jetson_orin_storage/README.md
+            #     (/mnt/nova_ssd is the ~1 TB NVMe, chown'd to the user). The
+            #     mounts are load-bearing: without them llama.cpp re-downloads
+            #     into the container's ephemeral root FS on every launch.
+            # When updating the Thor gemma4-12b-it-gguf knobs above, mirror the
+            # context / KV / flash-attn values here so the two stay aligned.
+            THOR_LAUNCH_BACKEND="llamacpp"
+            THOR_LAUNCH_MODEL_SOURCE="unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL (llama.cpp, Orin AGX)"
+            THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-orin}"
+            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL}"
+            THOR_LLAMACPP_SPEC_DRAFT_HF="${THOR_LLAMACPP_SPEC_DRAFT_HF:-unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL}"
+            THOR_LLAMACPP_SPEC_DRAFT_NGL="${THOR_LLAMACPP_SPEC_DRAFT_NGL:-999}"
+            THOR_LLAMACPP_SPEC_DRAFT_CTX="${THOR_LLAMACPP_SPEC_DRAFT_CTX:-131072}"
+            THOR_LLAMACPP_SPEC_DRAFT_N_MAX="${THOR_LLAMACPP_SPEC_DRAFT_N_MAX:-6}"
+            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-131072}"
+            THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
+            # q8_0 KV cache + flash-attn (mirrors the Thor profile; see its
+            # comment for the rationale). gemma's hybrid attention keeps the KV
+            # tiny (~0.4 GB at 128k), so 128k fits comfortably on Orin's 64 GB.
+            THOR_LLAMACPP_CACHE_TYPE_K="${THOR_LLAMACPP_CACHE_TYPE_K:-q8_0}"
+            THOR_LLAMACPP_CACHE_TYPE_V="${THOR_LLAMACPP_CACHE_TYPE_V:-q8_0}"
+            THOR_LLAMACPP_DRAFT_CACHE_TYPE_K="${THOR_LLAMACPP_DRAFT_CACHE_TYPE_K:-q8_0}"
+            THOR_LLAMACPP_DRAFT_CACHE_TYPE_V="${THOR_LLAMACPP_DRAFT_CACHE_TYPE_V:-q8_0}"
+            THOR_LLAMACPP_FLASH_ATTN="${THOR_LLAMACPP_FLASH_ATTN:-on}"
+            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --reasoning off --temp 1.0 --top-p 0.95 --top-k 64 --jinja)
+
+            # NVMe-backed cache roots (host side). Honour an explicit operator
+            # THOR_HF_CACHE_DIR; otherwise default to the documented Orin path.
+            if [[ -z "${_user_hf_cache_dir}" ]]; then
+                THOR_HF_CACHE_DIR="/mnt/nova_ssd/hf-cache-orin"
+            fi
+            THOR_LLAMACPP_CACHE_DIR_HOST="${THOR_LLAMACPP_CACHE_DIR_HOST:-/mnt/nova_ssd/llama-cpp-cache}"
+
+            # Reproduce the operator's three-mount layout exactly. The HF cache
+            # is mounted at both the vLLM-convention path and llama.cpp's default
+            # ~/.cache/huggingface; the GGUF download cache at llama.cpp's
+            # default ~/.cache/llama.cpp. No HF_HOME/LLAMA_CACHE env overrides —
+            # the container defaults already resolve to the mounted paths.
+            THOR_LLAMACPP_HF_MOUNT_ARGS=(
+                -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface"
+                -v "${THOR_HF_CACHE_DIR}:/root/.cache/huggingface"
+                -v "${THOR_LLAMACPP_CACHE_DIR_HOST}:/root/.cache/llama.cpp"
+            )
+            THOR_LLAMACPP_HF_ENV_ARGS=()
+            ;;
         *)
             fail "Unsupported model profile: ${profile}"
             print_supported_model_profiles
@@ -871,6 +960,36 @@ check_thor_launch_prereqs() {
             if [[ -n "${THOR_LLAMACPP_SPEC_DRAFT_HF:-}" ]]; then
                 info "Speculative draft: ${THOR_LLAMACPP_SPEC_DRAFT_HF}"
             fi
+            # Pre-create the platform GGUF download cache (e.g. the Orin NVMe
+            # path) so the bind-mount source exists and is owned by the invoking
+            # user rather than auto-created as root by the docker daemon.
+            if [[ -n "${THOR_LLAMACPP_CACHE_DIR_HOST:-}" ]]; then
+                mkdir -p "${THOR_LLAMACPP_CACHE_DIR_HOST}"
+            fi
+            # Resolve cache-first serving (see THOR_LLAMACPP_OFFLINE in
+            # prepare_thor_launch_profile). 'auto' -> offline iff the model is
+            # already staged, so we reuse the cached weights instead of letting
+            # `-hf` re-resolve 'latest' and re-download when upstream moves.
+            case "${THOR_LLAMACPP_OFFLINE:-auto}" in
+                auto)
+                    if _thor_hf_repo_is_cached "${THOR_LLAMACPP_HF}"; then
+                        THOR_LLAMACPP_OFFLINE=1
+                        info "Model staged in cache → serving offline (cached weights, no re-download)."
+                        _thor_hf_warn_if_update "${THOR_LLAMACPP_HF}"
+                    else
+                        THOR_LLAMACPP_OFFLINE=0
+                        info "Model not staged → first-time online fetch from Hugging Face."
+                    fi
+                    ;;
+                1|true)
+                    info "THOR_LLAMACPP_OFFLINE=${THOR_LLAMACPP_OFFLINE} → forcing offline (cached weights only)."
+                    THOR_LLAMACPP_OFFLINE=1
+                    ;;
+                *)
+                    info "THOR_LLAMACPP_OFFLINE=${THOR_LLAMACPP_OFFLINE} → online (will re-resolve latest / fetch updates)."
+                    THOR_LLAMACPP_OFFLINE=0
+                    ;;
+            esac
         elif [[ ! -f "${THOR_LLAMACPP_MODEL_PATH:-}" ]]; then
             fail "Model file not found: ${THOR_LLAMACPP_MODEL_PATH:-<not set>}"
             fix "Download the GGUF model first."
@@ -905,7 +1024,12 @@ print_thor_launch_summary() {
                 echo "  Draft model:        (none)"
             fi
             echo "  Context (total):    ${THOR_LLAMACPP_CTX}"
-            echo "  Download cache:     ${THOR_HF_CACHE_DIR}/llama.cpp (single persisted copy)"
+            if [[ -n "${THOR_LLAMACPP_CACHE_DIR_HOST:-}" ]]; then
+                echo "  HF cache (host):    ${THOR_HF_CACHE_DIR}"
+                echo "  llama.cpp cache:    ${THOR_LLAMACPP_CACHE_DIR_HOST}"
+            else
+                echo "  Download cache:     ${THOR_HF_CACHE_DIR}/llama.cpp (single persisted copy)"
+            fi
         else
             echo "  Model:              ${THOR_LLAMACPP_MODEL_PATH}"
             if [[ -f "${THOR_LLAMACPP_DRAFT_PATH:-}" ]]; then
@@ -1004,6 +1128,36 @@ run_thor_vllm_container() {
         vllm serve "${THOR_LAUNCH_MODEL_SOURCE}" "${THOR_VLLM_ARGS[@]}"
 }
 
+# Host HF-cache dir for a repo spec ("org/name[:quant]" -> .../models--org--name).
+_thor_hf_repo_cache_dir() {
+    local repo="${1%%:*}"
+    printf '%s/models--%s' "${THOR_HF_CACHE_DIR}" "${repo//\//--}"
+}
+
+# True if an HF GGUF repo is already staged: a resolvable .gguf snapshot exists
+# and there is no half-finished .downloadInProgress blob.
+_thor_hf_repo_is_cached() {
+    local dir; dir="$(_thor_hf_repo_cache_dir "$1")"
+    [[ -d "${dir}/snapshots" ]] || return 1
+    find "${dir}/snapshots" -name '*.gguf' 2>/dev/null | head -1 | grep -q . || return 1
+    ! ls "${dir}"/blobs/*.downloadInProgress >/dev/null 2>&1
+}
+
+# Best-effort, non-fatal: warn if upstream main != the cached revision, so the
+# operator knows a newer copy exists without us silently re-downloading it.
+_thor_hf_warn_if_update() {
+    local repo="${1%%:*}" dir cached latest
+    dir="$(_thor_hf_repo_cache_dir "$1")"
+    cached="$(cat "${dir}/refs/main" 2>/dev/null || true)"
+    [[ -n "${cached}" ]] || return 0
+    latest="$(curl -fsS --max-time 5 "https://huggingface.co/api/models/${repo}/revision/main" 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("sha",""))' 2>/dev/null || true)"
+    if [[ -n "${latest}" && "${latest}" != "${cached}" ]]; then
+        warn "${repo}: newer revision available upstream (cached ${cached:0:12}…, latest ${latest:0:12}…)."
+        warn "  Serving the staged copy. To update: THOR_LLAMACPP_OFFLINE=0 ./serving/start-model.sh ${THOR_MODEL_PROFILE}"
+    fi
+}
+
 run_thor_llamacpp_container() {
     local docker_tty_args=()
     local docker_name_args=()
@@ -1044,6 +1198,11 @@ run_thor_llamacpp_container() {
     [[ -n "${THOR_LLAMACPP_DRAFT_CACHE_TYPE_K:-}" ]] && kv_args+=(--cache-type-k-draft "${THOR_LLAMACPP_DRAFT_CACHE_TYPE_K}")
     [[ -n "${THOR_LLAMACPP_DRAFT_CACHE_TYPE_V:-}" ]] && kv_args+=(--cache-type-v-draft "${THOR_LLAMACPP_DRAFT_CACHE_TYPE_V}")
 
+    # Cache-first serving: --offline forces llama.cpp to use the staged HF cache
+    # and skip the network re-resolve/download (resolved in check_thor_launch_prereqs).
+    local offline_args=()
+    [[ "${THOR_LLAMACPP_OFFLINE:-}" == "1" || "${THOR_LLAMACPP_OFFLINE:-}" == "true" ]] && offline_args+=(--offline)
+
     if [[ -n "${THOR_LLAMACPP_HF:-}" ]]; then
         # HF auto-download lane (e.g. gemma4-12b-it-gguf). -hf/--spec-draft-hf
         # fetch the GGUFs on first launch. llama.cpp downloads to LLAMA_CACHE
@@ -1066,15 +1225,15 @@ run_thor_llamacpp_container() {
             "${docker_name_args[@]}" \
             --runtime nvidia --network host \
             ${HF_TOKEN:+-e "HF_TOKEN=${HF_TOKEN}"} \
-            -e "HF_HOME=/data/models/huggingface" \
-            -e "LLAMA_CACHE=/data/models/huggingface/llama.cpp" \
-            -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface" \
+            "${THOR_LLAMACPP_HF_ENV_ARGS[@]}" \
+            "${THOR_LLAMACPP_HF_MOUNT_ARGS[@]}" \
             "${THOR_LLAMACPP_IMAGE}" \
             llama-server \
                 "${hf_args[@]}" \
                 -c "${THOR_LLAMACPP_CTX}" \
                 -ngl "${THOR_LLAMACPP_NGL:-999}" \
                 ${kv_args[@]+"${kv_args[@]}"} \
+                ${offline_args[@]+"${offline_args[@]}"} \
                 "${common_args[@]}" \
                 ${THOR_LLAMACPP_EXTRA_ARGS[@]+"${THOR_LLAMACPP_EXTRA_ARGS[@]}"}
         return

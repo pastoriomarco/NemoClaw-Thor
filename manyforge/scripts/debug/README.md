@@ -35,6 +35,16 @@ launched by `start-openclaw-assistant-bridge.sh` /
   bridge IP `172.18.0.2` (OpenClaw lane). See
   [LANE-COMPARISON-direct-vs-openclaw.md §8.2](../../docs/LANE-COMPARISON-direct-vs-openclaw.md)
   for the production matrix this script generates.
+- `pipeline_message_monitor.py` — live, read-only tail of **every inter-component
+  message** during a smoke: runner→composer HTTP, bridge↔agent
+  (`openclaw_request_*`), agent→`vllm-proxy:8000`→llama.cpp:8050 (model, tokens,
+  tool_calls, **mutations**), and the model log. Use it to watch a run as it
+  happens and catch issues per-case. **Field-path note (don't repeat my bug):**
+  the proxy JSONL stores the request body under `request.body.*` (not
+  `request.*`), mutations under `request.mutation.mutations`, and HTTP status
+  under `response.status`; composer status comes from the uvicorn
+  `"…HTTP/1.1" <status>` line, *not* the `…<ms>ms` duration. Always cross-check a
+  surprising conclusion against the raw log by `requestId`.
 
 ## When to reach for this
 
