@@ -1,0 +1,1273 @@
+{
+  "corpus": "/home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus.yaml",
+  "composer": "http://127.0.0.1:9000",
+  "runtime_flags": [],
+  "results": [
+    {
+      "case_id": "P1_wrap_root_specific",
+      "status": "fail",
+      "elapsed_s": 175.3,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'repeat' not found",
+        "answer_must_contain: 'root' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "P2_scene_add_specific",
+      "status": "fail",
+      "elapsed_s": 119.9,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 1162.7,
+          "ts": "2026-06-05 01:08:16,615",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Added box obstacle to the scene:\n- **ID**: `box_obstacle_01`\n- **Dimensions**: 1.0m x 0.02m x 0.25m\n- **Position**: [0.0, -0.15, 0.125] (world frame)",
+      "failures": [
+        "state_after[scene.objects[*].shape.box_dims] expected 'contains [1.0, 0.02, 0.25]', got ['<MISSING>', '<MISSING>']"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "P2b_scene_add_cylinder_diameter",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "P3_tree_insert_runtime_obj_specific",
+      "status": "fail",
+      "elapsed_s": 175.1,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'upsert' not found",
+        "answer_must_contain: 'graspable' not found",
+        "answer_must_contain: 'pick_and_place' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "WRAP_root_generic",
+      "status": "soft-pass",
+      "elapsed_s": 174.7,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "WRAP_root_medium",
+      "status": "fail",
+      "elapsed_s": 175.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_add_generic",
+      "status": "fail",
+      "elapsed_s": 174.5,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'box' not found",
+        "answer_must_contain: 'added' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_add_medium",
+      "status": "pass",
+      "elapsed_s": 60.7,
+      "tool_calls": [
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-05 01:20:49,366",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 1026.2,
+          "ts": "2026-06-05 01:21:01,356",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Added a sphere obstacle to the scene:\n- **Object ID**: `sphere_obstacle`\n- **Shape**: Sphere, radius 0.05m\n- **Pose**: Position [1.3, 0.49, 0.06] (placed in front of the robot base)\n- **Frame**: `univ",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "TREE_insert_runtime_generic",
+      "status": "pass",
+      "elapsed_s": 26.9,
+      "tool_calls": [],
+      "answer": "I see you want to add a node that places a graspable object somewhere in the behavior tree. To ensure I place it in the correct location, could you please specify which node it should be a child of, o",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "TREE_insert_runtime_medium",
+      "status": "fail",
+      "elapsed_s": 174.7,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "INSERT_position_first_specific",
+      "status": "fail",
+      "elapsed_s": 168.9,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 4.4,
+          "ts": "2026-06-05 01:26:40,530",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 4.3,
+          "ts": "2026-06-05 01:26:47,224"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 4.2,
+          "ts": "2026-06-05 01:26:55,133"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 4.8,
+          "ts": "2026-06-05 01:27:07,054"
+        }
+      ],
+      "answer": "The `wait_for_signal_bool` node requires a `key` parameter that is a `field_ref` binding. I attempted to use `start_pick` and `${blackboard:start_pick}`, but the validation failed.\n\nBased on the reque",
+      "failures": [
+        "state_after[program.tree.children[0].id] expected 'wait_for_signal_bool', got 'command_gripper'"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "INSERT_position_after_named_medium",
+      "status": "pass",
+      "elapsed_s": 138.7,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.2,
+          "ts": "2026-06-05 01:27:58,855",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 5.6,
+          "ts": "2026-06-05 01:28:01,547"
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 3.8,
+          "ts": "2026-06-05 01:29:16,834",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 1015.8,
+          "ts": "2026-06-05 01:29:25,233"
+        }
+      ],
+      "answer": "I have successfully added a 2-second timer node to the behavior tree.\n\n- **Node**: `timer_node` (Kind: `timer`)\n- **Parameters**: `duration_s`: 2.0\n- **Placement**: Added as a child of the root sequen",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "INSERT_position_before_named_generic",
+      "status": "fail",
+      "elapsed_s": 142.3,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 5.7,
+          "ts": "2026-06-05 01:30:31,352",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "tree_draft_insert_node",
+          "status": 200,
+          "duration_ms": 988.7,
+          "ts": "2026-06-05 01:31:54,381",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Added a 2-second timer (`wait_before_place`) before the `move_to_drop` action in the `pick_and_place` sequence.",
+      "failures": [
+        "expected NO tool calls; observed ['catalog_read', 'tree_draft_insert_node']"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARALLEL_safety_specific",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "PARALLEL_concurrent_medium",
+      "status": "fail",
+      "elapsed_s": 180.1,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 5.6,
+          "ts": "2026-06-05 01:32:45,463"
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 5.3,
+          "ts": "2026-06-05 01:34:24,142"
+        }
+      ],
+      "answer": "NemoClaw assistant timed out after 180.000s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARALLEL_generic",
+      "status": "soft-pass",
+      "elapsed_s": 50.3,
+      "tool_calls": [],
+      "answer": "Which node should the parallel be a child of?",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'where' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "FALLBACK_retry_specific",
+      "status": "fail",
+      "elapsed_s": 176.5,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'fallback' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "FALLBACK_alternate_medium",
+      "status": "fail",
+      "elapsed_s": 176.6,
+      "tool_calls": [
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.3,
+          "ts": "2026-06-05 01:41:44,448"
+        }
+      ],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "FALLBACK_generic",
+      "status": "fail",
+      "elapsed_s": 49.9,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.4,
+          "ts": "2026-06-05 01:42:25,135"
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-05 01:42:41,399"
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.4,
+          "ts": "2026-06-05 01:42:45,301"
+        }
+      ],
+      "answer": "I've identified the request to add a fallback. Could you please specify where in the behavior tree you would like the fallback node placed (e.g., as a child of a specific node, after a certain step, o",
+      "failures": [
+        "expected NO tool calls; observed ['catalog_read', 'catalog_read', 'catalog_read']"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "UPDATE_params_specific",
+      "status": "fail",
+      "elapsed_s": 176.4,
+      "tool_calls": [
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 5.3,
+          "ts": "2026-06-05 01:42:48,427"
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 2.5,
+          "ts": "2026-06-05 01:44:49,867"
+        },
+        {
+          "tool": "catalog_read",
+          "status": 200,
+          "duration_ms": 7.3,
+          "ts": "2026-06-05 01:45:12,230"
+        },
+        {
+          "tool": "tree_draft_update_node_params",
+          "status": 200,
+          "duration_ms": 938.0,
+          "ts": "2026-06-05 01:45:31,669"
+        }
+      ],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "UPDATE_params_medium",
+      "status": "pass",
+      "elapsed_s": 62.6,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_update_node_params",
+          "status": 200,
+          "duration_ms": 1113.7,
+          "ts": "2026-06-05 01:46:39,048",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Updated `move_to_pick_approach` velocity scale to 0.5.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "UPDATE_params_generic",
+      "status": "fail",
+      "elapsed_s": 175.2,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "DELETE_named_specific",
+      "status": "pass",
+      "elapsed_s": 47.7,
+      "tool_calls": [
+        {
+          "tool": "tree_draft_delete_node",
+          "status": 200,
+          "duration_ms": 1131.5,
+          "ts": "2026-06-05 01:50:26,356",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Deleted the node `move_to_pick_approach`.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "DELETE_kind_medium",
+      "status": "fail",
+      "elapsed_s": 174.4,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'tree_draft_delete_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "DELETE_generic",
+      "status": "fail",
+      "elapsed_s": 175.8,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "MOVE_swap_specific",
+      "status": "fail",
+      "elapsed_s": 175.7,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "MOVE_reorder_medium",
+      "status": "fail",
+      "elapsed_s": 174.6,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'tree_draft_move_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "MOVE_generic",
+      "status": "pass",
+      "elapsed_s": 49.0,
+      "tool_calls": [],
+      "answer": "Which step would you like to move earlier, and where in the sequence should it be placed?",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "REPLACE_subtree_specific",
+      "status": "fail",
+      "elapsed_s": 175.4,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'replace' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "REPLACE_simple_medium",
+      "status": "fail",
+      "elapsed_s": 175.0,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'tree_draft_replace_subtree' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_update_pose_specific",
+      "status": "fail",
+      "elapsed_s": 176.5,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_update_size_medium",
+      "status": "pass",
+      "elapsed_s": 71.2,
+      "tool_calls": [
+        {
+          "tool": "program_read",
+          "status": 200,
+          "duration_ms": 2.4,
+          "ts": "2026-06-05 02:12:46,997",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "scene_draft_update_object",
+          "status": 200,
+          "duration_ms": 2.0,
+          "ts": "2026-06-05 02:12:56,103",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "scene_draft_update_object",
+          "status": 200,
+          "duration_ms": 1180.8,
+          "ts": "2026-06-05 02:13:04,230"
+        }
+      ],
+      "answer": "Updated the `graspable` object dimensions.\n- **Object ID**: `graspable`\n- **New Dimensions**: `[0.2, 0.01, 0.01]` (Width doubled from 0.1 to 0.2)\n- **Pose**: Retained original values.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_remove_specific",
+      "status": "fail",
+      "elapsed_s": 175.7,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "SCENE_remove_generic",
+      "status": "fail",
+      "elapsed_s": 175.2,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARAM_add_specific",
+      "status": "pass",
+      "elapsed_s": 46.9,
+      "tool_calls": [
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 1.9,
+          "ts": "2026-06-05 02:19:31,923",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 2.0,
+          "ts": "2026-06-05 02:19:35,577"
+        },
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 1062.0,
+          "ts": "2026-06-05 02:19:44,042"
+        }
+      ],
+      "answer": "Added the `max_velocity` program parameter:\n- **Type**: float\n- **Default**: 0.5\n- **Description**: Maximum velocity for the robot.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARAM_modify_medium",
+      "status": "pass",
+      "elapsed_s": 32.5,
+      "tool_calls": [
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 1.9,
+          "ts": "2026-06-05 02:20:08,343",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 1.9,
+          "ts": "2026-06-05 02:20:11,518"
+        },
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 1104.1,
+          "ts": "2026-06-05 02:20:18,703"
+        }
+      ],
+      "answer": "Updated the `velocity_scale` program parameter default value to `0.25`.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PARAM_delete_specific",
+      "status": "pass",
+      "elapsed_s": 37.9,
+      "tool_calls": [
+        {
+          "tool": "program_draft_upsert_parameters",
+          "status": 200,
+          "duration_ms": 944.3,
+          "ts": "2026-06-05 02:20:27,357"
+        },
+        {
+          "tool": "program_draft_remove_parameters",
+          "status": 200,
+          "duration_ms": 1044.2,
+          "ts": "2026-06-05 02:20:59,297",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Removed the `legacy_offset` parameter from the program.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "BB_add_specific",
+      "status": "pass",
+      "elapsed_s": 47.1,
+      "tool_calls": [
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 2.2,
+          "ts": "2026-06-05 02:21:33,513",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 2.0,
+          "ts": "2026-06-05 02:21:37,524"
+        },
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 1026.5,
+          "ts": "2026-06-05 02:21:45,835"
+        }
+      ],
+      "answer": "Added blackboard key `target_pose` of type `pose`.\n\n- Key ID: `target_pose_id_123`\n- Key Name: `target_pose`\n- Namespace: `default`",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "BB_modify_medium",
+      "status": "pass",
+      "elapsed_s": 174.4,
+      "tool_calls": [
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 865.2,
+          "ts": "2026-06-05 02:21:55,475"
+        }
+      ],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "BB_delete_specific",
+      "status": "pass",
+      "elapsed_s": 133.1,
+      "tool_calls": [
+        {
+          "tool": "blackboard_draft_upsert_keys",
+          "status": 200,
+          "duration_ms": 920.6,
+          "ts": "2026-06-05 02:24:52,024"
+        },
+        {
+          "tool": "blackboard_draft_remove_keys",
+          "status": 200,
+          "duration_ms": 1082.6,
+          "ts": "2026-06-05 02:26:59,410",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Deleted blackboard key `scratch_value`.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_01_scene_ground",
+      "status": "pass",
+      "elapsed_s": 50.8,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 2.1,
+          "ts": "2026-06-05 02:27:44,565",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 853.2,
+          "ts": "2026-06-05 02:27:51,028"
+        }
+      ],
+      "answer": "Added a ground plane to the scene:\n- **ID**: `ground_plane`\n- **Type**: `box`\n- **Dimensions**: 2.0m x 2.0m x 0.01m\n- **Pose**: Centered at `[0, 0, 0]` in the `universe` frame.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_02_scene_graspable",
+      "status": "pass",
+      "elapsed_s": 25.0,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 847.4,
+          "ts": "2026-06-05 02:28:15,895",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Added a graspable cube to the scene:\n- **ID**: `graspable`\n- **Type**: `box`\n- **Dimensions**: 0.05m x 0.05m x 0.05m\n- **Pose**: At `[0.4, 0.0, 0.05]` in the `universe` frame.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_03_scene_pick_pad",
+      "status": "pass",
+      "elapsed_s": 32.2,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 1145.9,
+          "ts": "2026-06-05 02:28:47,580",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "Added a pick pad to the scene:\n- **ID**: `pick_pad`\n- **Type**: `box`\n- **Dimensions**: 0.2m x 0.2m x 0.025m\n- **Pose**: At `[0.4, 0.0, 0.012]` in the `universe` frame.",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_04_scene_place_pad",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_05_tree_root",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_06_approach",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_07_descend",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_08_close_gripper",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_09_attach",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_10_lift",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_11_transport",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_12_place_descend",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_13_detach",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_14_upsert",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_15_open_gripper",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_16_retract",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_17_home",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_18_repeat_root",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_19_safety_parallel",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "PnP_20_grip_force",
+      "status": "fail",
+      "elapsed_s": 0.1,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: loop_detected: loop detected: tool 'scene_draft_add_object' repeated 3 times (same_args) without recovery",
+      "failures": [
+        "chat HTTP 502"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_wrap_existing_motion_with_retry",
+      "status": "fail",
+      "elapsed_s": 174.6,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)",
+        "state_after[program.tree.children[*].id] expected 'contains retry', got ['command_gripper', 'move_manipulator_action', 'move_manipulator_action', 'command_gripper', 'attach_object_to_link', 'move_manipulator_action', 'move_manipulator_action', 'move_manipulator_action', 'command_gripper', 'detach_object_from_link', 'move_manipulator_action', 'move_manipulator_action']"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'retry' not found",
+        "answer_must_contain: 'move_to_pick' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_update_existing_motion_speed",
+      "status": "fail",
+      "elapsed_s": 174.6,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'tree_draft_update_node_params' not observed (or never reached 2xx)",
+        "state_after[program.tree.children[name=move_to_pick_approach].params.velocity_scale] expected 0.25, got '${param:velocity_scale}'"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_scene_add_static_fixture_not_runtime",
+      "status": "pass",
+      "elapsed_s": 50.2,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 2.2,
+          "ts": "2026-06-05 02:35:25,217",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        },
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 887.2,
+          "ts": "2026-06-05 02:35:31,711"
+        }
+      ],
+      "answer": "Added a static safety wall to the scene.\n\n*   **Object ID:** `safety_wall`\n*   **Shape:** Box (0.4m x 0.02m x 0.2m)\n*   **Pose:** [0.2, -0.45, 0.1] (Universe Frame)",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_scene_update_graspable_pose",
+      "status": "fail",
+      "elapsed_s": 175.2,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_runtime_remove_then_restore_graspable",
+      "status": "fail",
+      "elapsed_s": 174.7,
+      "tool_calls": [],
+      "answer": "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+      "failures": [
+        "expected tool 'scene_inspect' not observed (or never reached 2xx)",
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)",
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'runtime' not found",
+        "answer_must_contain: 'graspable' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CUR_runtime_update_graspable_pose_each_cycle",
+      "status": "fail",
+      "elapsed_s": 175.4,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'runtime' not found",
+        "answer_must_contain: 'pose' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CLARIFY_scene_remove_pronoun",
+      "status": "fail",
+      "elapsed_s": 176.2,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found",
+        "answer_must_contain: 'object' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CLARIFY_tree_wrap_pronoun",
+      "status": "fail",
+      "elapsed_s": 179.3,
+      "tool_calls": [],
+      "answer": "NemoClaw assistant rejected request: timeout: OpenClaw agent exceeded timeout 170.0s",
+      "failures": [
+        "chat HTTP 504"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'which' not found",
+        "answer_must_contain: 'step' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "CLARIFY_motion_generic",
+      "status": "soft-pass",
+      "elapsed_s": 36.0,
+      "tool_calls": [],
+      "answer": "I need to know which specific location or target you're referring to when you say \"over there.\" Could you provide a coordinate, a description of a nearby object, or a specific target name?",
+      "failures": [],
+      "soft_failures": [
+        "answer_must_contain: 'where' not found"
+      ],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "ISAAC_import_floor_and_graspable",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "ISAAC_reject_all_scene_import",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "ISAAC_runtime_colliders_from_selection",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "FUTURE_deployment_set_robot_and_gripper_from_isaac",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "FUTURE_apply_pick_place_skill_from_scene",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "FUTURE_preview_plan_before_mutating",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+Running 75 cases against http://127.0.0.1:9000
+  (no catalogHash yet)
+
+  ✅ P1_wrap_root_specific                                35.9s  status=pass
+  ❌ P2_scene_add_specific                                 9.4s  status=fail
+      fail: ["args_contain[shape.type] expected 'box', got '<MISSING>' (also tried aliases: ['sceneResource.shape.type', 'shapeType']) on tool 'scene_draft_add_object'", "state_after[scene.objects[*].shape.box_dims] expected 'contains [1.0, 0.02, 0.25]', got []"]
+  [SKIP] P2b_scene_add_cylinder_diameter                     status=future (use --include-future to run)
+  ✅ P3_tree_insert_runtime_obj_specific                  28.3s  status=pass
+  ❌ WRAP_root_generic                                     8.8s  status=fail
+      fail: ["expected NO tool calls; observed ['tree_draft_wrap_node']"]
+  ✅ WRAP_root_medium                                      9.0s  status=pass
+  ✅ SCENE_add_generic                                     9.3s  status=pass
+  ❌ SCENE_add_medium                                      8.5s  status=fail
+      fail: ["args_contain[shape.sphere_radius_m] expected 0.05, got '<MISSING>' (also tried aliases: []) on tool 'scene_draft_add_object'"]
+  ❌ TREE_insert_runtime_generic                          86.3s  status=fail
+      fail: ["expected NO tool calls; observed ['catalog_read', 'tree_draft_insert_node', 'tree_draft_insert_node']"]
+  ❌ TREE_insert_runtime_medium                          145.9s  status=fail
+      fail: ["args_contain[node.id] expected 'upsert_collision_object', got 'sequence' (also tried aliases: []) on tool 'tree_draft_insert_node'", "args_contain[node.params.object_id] expected 'graspable', got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'"]
+  ❌ INSERT_position_first_specific                      164.5s  status=fail
+      fail: ['chat HTTP 502']
+  ❌ INSERT_position_after_named_medium                   26.1s  status=fail
+      fail: ["args_contain[parentName] expected 'pick_and_place', got '<MISSING>' (also tried aliases: ['afterName', 'beforeName']) on tool 'tree_draft_insert_node'"]
+  ❌ INSERT_position_before_named_generic                 83.9s  status=fail
+      fail: ["expected NO tool calls; observed ['catalog_read', 'tree_draft_insert_node', 'tree_draft_move_node']"]
+  [SKIP] PARALLEL_safety_specific                            status=future (use --include-future to run)
+  ❌ PARALLEL_concurrent_medium                          170.1s  status=fail
+      fail: ['chat HTTP 504']
+  ❌ PARALLEL_generic                                     98.0s  status=fail
+      fail: ["expected NO tool calls; observed ['program_read', 'tree_draft_insert_node', 'tree_draft_insert_node', 'tree_draft_insert_node', 'tree_draft_insert_node', 'tree_draft_insert_node', 'tree_draft_insert_node', 'tree_draft_insert_node', 'tree_draft_insert_node']"]
+  ✅ FALLBACK_retry_specific                              91.2s  status=pass
+  ❌ FALLBACK_alternate_medium                           170.1s  status=fail
+      fail: ['chat HTTP 504']
+  ❌ FALLBACK_generic                                     15.9s  status=fail
+      fail: ["expected NO tool calls; observed ['program_read', 'tree_draft_wrap_node']"]
+  ✅ UPDATE_params_specific                                8.2s  status=pass
+  ✅ UPDATE_params_medium                                  8.4s  status=pass
+  ❌ UPDATE_params_generic                                14.6s  status=fail
+      fail: ["expected NO tool calls; observed ['program_read', 'program_draft_upsert_parameters']"]
+  ✅ DELETE_named_specific                                 7.6s  status=pass
+  ✅ DELETE_kind_medium                                    7.2s  status=pass
+  ✅ DELETE_generic                                        7.3s  status=pass
+  ✅ MOVE_swap_specific                                    8.7s  status=pass
+  ✅ MOVE_reorder_medium                                   9.7s  status=pass
+  🟡 MOVE_generic                                         13.7s  status=soft-pass
+  ❌ REPLACE_subtree_specific                            170.1s  status=fail
+      fail: ['chat HTTP 504']
+  ✅ REPLACE_simple_medium                                 9.6s  status=pass
+  ❌ SCENE_update_pose_specific                           11.5s  status=fail
+      fail: ["expected tool 'scene_draft_update_object' not observed (or never reached 2xx)", 'state_after[scene.objects[object_id=graspable].pose_in_universe.position_m] expected [0.5, 0.1, 0.05], got [0.3, -0.3, 0.15]']
+  ✅ SCENE_update_size_medium                             16.8s  status=pass
+  ✅ SCENE_remove_specific                                 9.4s  status=pass
+  🟡 SCENE_remove_generic                                 33.9s  status=soft-pass
+  ✅ PARAM_add_specific                                    8.6s  status=pass
+  ❌ PARAM_modify_medium                                   9.1s  status=fail
+      fail: ["args_contain[parameters] expected [{'name': 'velocity_scale', 'type': 'float', 'default': 0.25}], got [{'default': 0.25, 'description': 'The velocity scale for manipulator actions.', 'name': 'velocity_scale', 'type': 'float'}] (also tried aliases: []) on tool 'program_draft_upsert_parameters'"]
+  ✅ PARAM_delete_specific                                10.0s  status=pass
+  ❌ BB_add_specific                                      19.6s  status=fail
+      fail: ["args_contain[keys] expected [{'id': 'target_pose', 'type': 'pose', 'key': 'target_pose'}], got [{'description': 'The target pose for the pick-and-place operation.', 'id': 'target_pose_key', 'key': 'target_pose', 'type': 'pose'}] (also tried aliases: []) on tool 'blackboard_draft_upsert_keys'"]
+  ❌ BB_modify_medium                                     17.8s  status=fail
+      fail: ["args_contain[keys] expected [{'id': 'grip_force', 'type': 'float'}], got [{'description': 'Seed blackboard key inserted by the smoke harness.', 'id': 'grip_force', 'key': 'grip_force', 'type': 'float'}] (also tried aliases: []) on tool 'blackboard_draft_upsert_keys'"]
+  ✅ BB_delete_specific                                   13.8s  status=pass
+  ❌ PnP_01_scene_ground                                   9.4s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+  ❌ PnP_02_scene_graspable                               15.9s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+  ❌ PnP_03_scene_pick_pad                                 8.7s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+  ❌ PnP_04_scene_place_pad                               11.9s  status=fail
+      fail: ["expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"]
+  ✅ PnP_05_tree_root                                      7.2s  status=pass
+  ✅ PnP_06_approach                                      17.5s  status=pass
+  ❌ PnP_07_descend                                       14.6s  status=fail
+      fail: ["args_contain[parentName] expected 'pick_and_place', got '<MISSING>' (also tried aliases: ['afterName', 'beforeName']) on tool 'tree_draft_insert_node'"]
+  ❌ PnP_08_close_gripper                                 17.1s  status=fail
+      fail: ["args_contain[parentName] expected 'pick_and_place', got '<MISSING>' (also tried aliases: ['afterName', 'beforeName']) on tool 'tree_draft_insert_node'", "args_contain[node.params.position] expected 0.66, got 1.0 (also tried aliases: []) on tool 'tree_draft_insert_node'"]
+  ❌ PnP_09_attach                                         9.7s  status=fail
+      fail: ["args_contain[parentName] expected 'pick_and_place', got '<MISSING>' (also tried aliases: ['afterName', 'beforeName']) on tool 'tree_draft_insert_node'"]
+  ✅ PnP_10_lift                                          15.8s  status=pass
+  ✅ PnP_11_transport                                     13.7s  status=pass
+  ✅ PnP_12_place_descend                                 12.0s  status=pass
+  ✅ PnP_13_detach                                        16.1s  status=pass
+  ❌ PnP_14_upsert                                        17.6s  status=fail
+      fail: ["args_contain[node.params.pose.position] expected [0.0, 0.4, 0.05], got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'"]
+  ✅ PnP_15_open_gripper                                  17.7s  status=pass
+  ✅ PnP_16_retract                                       19.8s  status=pass
+  ✅ PnP_17_home                                          18.2s  status=pass
+  ✅ PnP_18_repeat_root                                   12.1s  status=pass
+  [SKIP] PnP_19_safety_parallel                              status=future (use --include-future to run)
+  ❌ PnP_20_grip_force                                   154.0s  status=fail
+      fail: ["args_contain[params.grip_force] expected 40, got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_update_node_params'"]
+  ❌ CUR_wrap_existing_motion_with_retry                  78.2s  status=fail
+      fail: ["expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)"]
+  ✅ CUR_update_existing_motion_speed                      9.3s  status=pass
+  ❌ CUR_scene_add_static_fixture_not_runtime             10.8s  status=fail
+      fail: ["args_contain[shape.type] expected 'box', got '<MISSING>' (also tried aliases: ['sceneResource.shape.type', 'shapeType']) on tool 'scene_draft_add_object'"]
+  ❌ CUR_scene_update_graspable_pose                      25.5s  status=fail
+      fail: ['state_after[scene.objects[object_id=graspable].pose_in_universe.position_m] expected [0.35, -0.25, 0.15], got [0.3, -0.3, 0.15]']
+  ❌ CUR_runtime_remove_then_restore_graspable            77.1s  status=fail
+      fail: ["expected tool 'scene_inspect' not observed (or never reached 2xx)", "args_contain[node.id] expected 'remove_collision_object', got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'", "args_contain[node.params.object_id] expected 'graspable', got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'", "args_contain[node.id] expected 'upsert_collision_object', got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'", "args_contain[node.params.object_id] expected 'graspable', got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'", "args_contain[node.params.shape_type] expected 'box', got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'", "args_contain[node.params.box_dimensions_m] expected [0.1, 0.01, 0.01], got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'", "args_contain[node.params.pose.frame_id] expected 'universe', got '<MISSING>' (also tried aliases: []) on tool 'tree_draft_insert_node'"]
+  🟡 CUR_runtime_update_graspable_pose_each_cycle         13.9s  status=soft-pass
+  🟡 CLARIFY_scene_remove_pronoun                          9.4s  status=soft-pass
+  🟡 CLARIFY_tree_wrap_pronoun                            13.9s  status=soft-pass
+  🟡 CLARIFY_motion_generic                               85.5s  status=soft-pass
+  [SKIP] ISAAC_import_floor_and_graspable                    status=future (use --include-future to run)
+  [SKIP] ISAAC_reject_all_scene_import                       status=future (use --include-future to run)
+  [SKIP] ISAAC_runtime_colliders_from_selection              status=future (use --include-future to run)
+  [SKIP] FUTURE_deployment_set_robot_and_gripper_from_isaac  status=future (use --include-future to run)
+  [SKIP] FUTURE_apply_pick_place_skill_from_scene            status=future (use --include-future to run)
+  [SKIP] FUTURE_preview_plan_before_mutating                 status=future (use --include-future to run)
+
+==============================================================================
+  total cases:      75
+  attempted:        66  (29 pass, 0 recovered, 6 soft-pass, 31 fail)
+  skipped:          9
+  first-try rate:   29/66  (43.9%)
+  effective rate:   35/66  (53.0%)
+
+  full report: /tmp/gemma-smoke/direct-report.json
