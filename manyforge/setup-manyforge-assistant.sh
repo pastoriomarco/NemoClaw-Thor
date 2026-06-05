@@ -69,15 +69,24 @@ fail() {
   exit 1
 }
 
+SANDBOX_EXEC_ATTEMPTS="${MANYFORGE_SANDBOX_EXEC_ATTEMPTS:-8}"
+SANDBOX_EXEC_MAX_BACKOFF_S="${MANYFORGE_SANDBOX_EXEC_MAX_BACKOFF_S:-20}"
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command not found in PATH: $1"
+}
+
+sandbox_exec_is_retryable_error() {
+  local text="$1"
+  printf '%s' "${text}" | grep -qiE \
+    'phase:[[:space:]]*Provisioning|sandbox .*not ready|not ready \(phase:|status:[[:space:]]*Unavailable|DeadlineExceeded|context deadline|connection refused|ECONNREFUSED|socket hang up|transport is closing|temporarily unavailable|no healthy upstream'
 }
 
 sandbox_exec_retry() {
   local label="$1"
   shift
   local attempt rc backoff out
-  for attempt in 1 2 3 4 5 6; do
+  for ((attempt = 1; attempt <= SANDBOX_EXEC_ATTEMPTS; attempt++)); do
     set +e
     out="$(nemoclaw "${SANDBOX}" exec --no-tty -- "$@" 2>&1)"
     rc=$?
@@ -86,13 +95,21 @@ sandbox_exec_retry() {
       printf '%s\n' "${out}"
       return 0
     fi
-    if [[ ${attempt} -eq 6 ]]; then
+    if ! sandbox_exec_is_retryable_error "${out}"; then
+      printf '  ✗ %s failed with a non-retryable error (rc=%d)\n' "${label}" "${rc}" >&2
+      printf '%s\n' "${out}" | tail -10 | sed 's/^/    /' >&2
+      return "${rc}"
+    fi
+    if [[ ${attempt} -eq ${SANDBOX_EXEC_ATTEMPTS} ]]; then
       printf '  ✗ %s failed after %d attempts (rc=%d)\n' "${label}" "${attempt}" "${rc}" >&2
       printf '%s\n' "${out}" | tail -10 | sed 's/^/    /' >&2
       return "${rc}"
     fi
     backoff=$((2 ** attempt))
-    printf '    %s attempt %d/6 failed (rc=%d); retrying in %ds...\n' "${label}" "${attempt}" "${rc}" "${backoff}" >&2
+    if (( backoff > SANDBOX_EXEC_MAX_BACKOFF_S )); then
+      backoff="${SANDBOX_EXEC_MAX_BACKOFF_S}"
+    fi
+    printf '    %s attempt %d/%d failed (rc=%d); retrying in %ds...\n' "${label}" "${attempt}" "${SANDBOX_EXEC_ATTEMPTS}" "${rc}" "${backoff}" >&2
     sleep "${backoff}"
   done
 }
@@ -117,7 +134,7 @@ step "Sandbox check: ${SANDBOX}"
 # blocking the gate even when the sandbox is fully up. The exec probe
 # actually connects to the OpenShell exec endpoint and runs a command,
 # which is a stronger liveness signal than `status` anyway.
-if ! nemoclaw "${SANDBOX}" exec --no-tty -- true >/dev/null 2>&1; then
+if ! sandbox_exec_retry "initial sandbox liveness probe" true >/dev/null; then
   fail "Sandbox '${SANDBOX}' not found or unhealthy. Run 'nemoclaw list' to inspect."
 fi
 ok "sandbox ${SANDBOX} is up"
@@ -355,6 +372,35 @@ step "Step 3/5: install skill 'manyforge-composer'"
 # runs as the sandbox user (uid 998, HOME=/sandbox) via the OpenShell
 # exec endpoint, so we don't need `su sandbox -c`.
 KEX_USER=(nemoclaw "${SANDBOX}" exec --no-tty -- bash -c)
+
+sandbox_bash_retry() {
+  local label="$1"
+  local script="$2"
+  sandbox_exec_retry "${label}" bash -c "${script}"
+}
+
+sandbox_bash_optional() {
+  local label="$1"
+  local script="$2"
+  local out rc
+  set +e
+  out="$(sandbox_bash_retry "${label}" "${script}" 2>&1)"
+  rc=$?
+  set -e
+  if [[ ${rc} -eq 0 ]]; then
+    printf '%s\n' "${out}"
+    return 0
+  fi
+  printf '  ! optional diagnostic skipped: %s\n' "${label}" >&2
+  printf '%s\n' "${out}" | tail -8 | sed 's/^/    /' >&2
+  return 0
+}
+
+sandbox_settle() {
+  local label="${1:-sandbox settle}"
+  sandbox_bash_retry "${label}" "true" >/dev/null
+}
+
 SKILL_REMOTE_DIR="/sandbox/.openclaw/skills/manyforge-composer"
 # Concatenated sha256 of every staged file. Order-stable (sorted by
 # filename) so we don't trip on directory-iteration nondeterminism.
@@ -455,9 +501,9 @@ MCP_CONFIG_JSON=$(cat <<JSON
 {"command":"python3","args":["${MCP_BRIDGE_PATH}"],"env":{"MANYFORGE_COMPOSER_BASE":"${COMPOSER_BASE}","MANYFORGE_ASSISTANT_MODE":"${ASSISTANT_MODE}","MANYFORGE_PRINCIPAL":"${MCP_PRINCIPAL}","HTTP_PROXY":"${HTTP_PROXY_VAL}","HTTPS_PROXY":"${HTTP_PROXY_VAL}","NO_PROXY":"${NO_PROXY_VAL}","http_proxy":"${HTTP_PROXY_VAL}","https_proxy":"${HTTP_PROXY_VAL}","no_proxy":"${NO_PROXY_VAL}"}}
 JSON
 )
-"${KEX_USER[@]}" "openclaw mcp set manyforge '${MCP_CONFIG_JSON}'" >/dev/null
+sandbox_bash_retry "register manyforge MCP server" "openclaw mcp set manyforge '${MCP_CONFIG_JSON}'" >/dev/null
 ok "MCP server 'manyforge' registered (mode: ${ASSISTANT_MODE}; principal: ${MCP_PRINCIPAL})"
-"${KEX_USER[@]}" "openclaw mcp show manyforge" 2>&1 | sed 's/^/    /'
+sandbox_bash_optional "show manyforge MCP server" "openclaw mcp show manyforge" 2>&1 | sed 's/^/    /'
 
 step "Step 5/6: install dedicated OpenClaw agent profile 'manyforge-composer'"
 
@@ -546,9 +592,10 @@ os.replace(tmp, path)
 print("manyforge-composer")
 PY
 )"
-"${KEX_USER[@]}" "printf %s '${PROFILE_SCRIPT_B64}' | base64 -d | python3 -" >/dev/null
+sandbox_bash_retry "install manyforge-composer agent profile" "printf %s '${PROFILE_SCRIPT_B64}' | base64 -d | python3 -" >/dev/null
 ok "agent profile 'manyforge-composer' installed"
-"${KEX_USER[@]}" "openclaw agents list --json 2>/dev/null | head -c 1200 || openclaw agents list" 2>&1 | sed 's/^/    /'
+sandbox_settle "sandbox settle after agent profile install"
+sandbox_bash_optional "list OpenClaw agents" "openclaw agents list --json 2>/dev/null | head -c 1200 || openclaw agents list" 2>&1 | sed 's/^/    /'
 
 step "Step 5b/6: install workspace guidance file (AGENTS.md)"
 # AGENTS.md is injected into every agent run via OpenClaw's standard
@@ -588,10 +635,10 @@ if [[ -f "${WORKSPACE_OVERLAY}" ]]; then
 else
   ok "  using canonical only (no platform overlay at ${WORKSPACE_OVERLAY})"
 fi
-"${KEX_USER[@]}" "mkdir -p ${WORKSPACE_DIR_REMOTE}" >/dev/null
+sandbox_bash_retry "create OpenClaw workspace dir" "mkdir -p ${WORKSPACE_DIR_REMOTE}" >/dev/null
 WS_B64="$(base64 -w0 < "${WORKSPACE_TMP}")"
-"${KEX_USER[@]}" "printf %s '${WS_B64}' | base64 -d > ${WORKSPACE_DIR_REMOTE}/AGENTS.md" >/dev/null
-"${KEX_USER[@]}" "rm -f ${WORKSPACE_DIR_REMOTE}/TOOLS.md" >/dev/null
+sandbox_bash_retry "install OpenClaw workspace AGENTS.md" "printf %s '${WS_B64}' | base64 -d > ${WORKSPACE_DIR_REMOTE}/AGENTS.md" >/dev/null
+sandbox_bash_retry "remove stale OpenClaw workspace TOOLS.md" "rm -f ${WORKSPACE_DIR_REMOTE}/TOOLS.md" >/dev/null
 # Empty workspace stub files (2026-05-08): suppress OpenClaw's
 # "[MISSING] Expected at: ..." placeholder lines for SOUL.md /
 # IDENTITY.md / USER.md. OpenClaw's runtime checks for these
@@ -603,10 +650,10 @@ WS_B64="$(base64 -w0 < "${WORKSPACE_TMP}")"
 # replace the MISSING placeholder with a near-zero-cost include.
 # Saves ~300 chars of system prompt per turn × every turn.
 for stub in SOUL.md IDENTITY.md USER.md; do
-  "${KEX_USER[@]}" "test -e ${WORKSPACE_DIR_REMOTE}/${stub} || echo '<!-- intentionally empty: stub by setup-manyforge-assistant.sh -->' > ${WORKSPACE_DIR_REMOTE}/${stub}" >/dev/null
+  sandbox_bash_retry "ensure OpenClaw workspace ${stub} stub" "test -e ${WORKSPACE_DIR_REMOTE}/${stub} || echo '<!-- intentionally empty: stub by setup-manyforge-assistant.sh -->' > ${WORKSPACE_DIR_REMOTE}/${stub}" >/dev/null
 done
 ok "installed AGENTS.md into ${WORKSPACE_DIR_REMOTE} (+ empty SOUL/IDENTITY/USER stubs; removed any stale TOOLS.md)"
-"${KEX_USER[@]}" "ls -la ${WORKSPACE_DIR_REMOTE}/" 2>&1 | sed 's/^/    /'
+sandbox_bash_optional "list OpenClaw workspace dir" "ls -la ${WORKSPACE_DIR_REMOTE}/" 2>&1 | sed 's/^/    /'
 
 step "Step 6/6: enable OpenClaw internal reasoning loop on the active model"
 # Sets `models.providers.inference.models[].reasoning = true` on the
@@ -667,7 +714,7 @@ with open(tmp, "w", encoding="utf-8") as handle:
 os.replace(tmp, path)
 PY
 )"
-"${KEX_USER[@]}" "printf %s '${REASONING_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
+sandbox_bash_retry "enable OpenClaw model.reasoning" "printf %s '${REASONING_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
 ok "OpenClaw model.reasoning=true ensured on active inference model"
 
 # 2026-05-10 (iter 32): route OpenClaw's compaction calls through the
@@ -719,7 +766,7 @@ with open(tmp, "w", encoding="utf-8") as handle:
 os.replace(tmp, path)
 PY
 )"
-"${KEX_USER[@]}" "printf %s '${COMPACTION_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
+sandbox_bash_retry "route OpenClaw compaction model" "printf %s '${COMPACTION_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
 ok "OpenClaw agents.defaults.compaction.model routed to the active inference model"
 
 step "Composer reachability check (mode-scoped manifest)"
