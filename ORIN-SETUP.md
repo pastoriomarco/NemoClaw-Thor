@@ -17,6 +17,20 @@ memory budget, **slower prefill** (≈240 tok/s on 24k-token prompts → multi-t
 agent cases run near the 170 s wall), and a **fully NVMe-staged install** (the
 ~30 GB eMMC must stay free; everything below lives on `/mnt/nova_ssd`).
 
+## Repository availability
+
+Prefer the sibling checkout layout under `${HOME}/workspaces/dev_ws/src/`.
+If a referenced repo is missing locally, inspect or clone the matching GitHub
+repo under `https://github.com/pastoriomarco/` before treating the path as
+stale.
+
+| Repo | Preferred local path | Accepted alternate local path | Remote |
+|---|---|---|---|
+| `NemoClaw-Thor` | `${HOME}/workspaces/dev_ws/src/NemoClaw-Thor` | `${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor` | `https://github.com/pastoriomarco/NemoClaw-Thor` |
+| `manyforge` | `${HOME}/workspaces/dev_ws/src/manyforge` | - | `https://github.com/pastoriomarco/manyforge` |
+| `isaac_ros_custom_bringup` | `${HOME}/workspaces/dev_ws/src/isaac_ros_custom_bringup` | `${HOME}/workspaces/isaac_ros-dev/src/isaac_ros_custom_bringup` | `https://github.com/pastoriomarco/isaac_ros_custom_bringup` |
+| `manyforge_specs` | `${HOME}/workspaces/dev_ws/src/manyforge_specs` | - | `https://github.com/pastoriomarco/manyforge_specs` |
+
 ---
 
 ## 0. Host prerequisites
@@ -24,7 +38,8 @@ agent cases run near the 170 s wall), and a **fully NVMe-staged install** (the
 - NVMe at `/mnt/nova_ssd`, Docker `data-root` = `/mnt/nova_ssd/docker`, and the
   bind-mount storage layout (`~/.cache`, `~/.local`, `/usr/local`, `/tmp`, … →
   `/mnt/nova_ssd`). This is **step 0** and is documented in
-  [`isaac_ros_custom_bringup/jetson_orin_storage/README.md`](../isaac_ros_custom_bringup/jetson_orin_storage/README.md).
+  [`isaac_ros_custom_bringup/jetson_orin_storage/README.md`](../isaac_ros_custom_bringup/jetson_orin_storage/README.md)
+  (or the GitHub fallback above if the sibling checkout is absent).
 - Passwordless `sudo` (used for `apt`, a bind mount, and `drop_caches`).
 
 ---

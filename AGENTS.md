@@ -19,6 +19,20 @@ question. Land in the right one before making a change:
 | **What's in the implementation code / tests?** ("how is it written today?") | `dev_ws/src/manyforge/` | `manyforge/AGENTS.md` (one-page redirect to `manyforge_specs`) |
 | **How does it run on Thor — serving, sandbox, integration?** ("how do we deploy and operate?") | this repo (`NemoClaw-Thor/`) | this file, plus the integration subtree's own [`manyforge/AGENTS.md`](manyforge/AGENTS.md) |
 
+### Repository locations and fallbacks
+
+Prefer local checkouts under `${HOME}/workspaces/dev_ws/src/`. If a referenced
+sibling repo is missing locally, do **not** assume the documentation is stale:
+clone or inspect the matching GitHub repo under
+`https://github.com/pastoriomarco/`.
+
+| Repo | Preferred local path | Accepted alternate local path | Remote |
+|---|---|---|---|
+| `NemoClaw-Thor` | `${HOME}/workspaces/dev_ws/src/NemoClaw-Thor` | `${HOME}/workspaces/nemoclaw/src/NemoClaw-Thor` | `https://github.com/pastoriomarco/NemoClaw-Thor` |
+| `manyforge` | `${HOME}/workspaces/dev_ws/src/manyforge` | - | `https://github.com/pastoriomarco/manyforge` |
+| `manyforge_specs` | `${HOME}/workspaces/dev_ws/src/manyforge_specs` | - | `https://github.com/pastoriomarco/manyforge_specs` |
+| `isaac_ros_custom_bringup` | `${HOME}/workspaces/dev_ws/src/isaac_ros_custom_bringup` | `${HOME}/workspaces/isaac_ros-dev/src/isaac_ros_custom_bringup` | `https://github.com/pastoriomarco/isaac_ros_custom_bringup` |
+
 If your change spans repos (most do): start at
 `manyforge_specs/AGENTS.md`, walk down to `dev_ws/src/manyforge/`, then
 back here for the runtime artifacts. Don't write spec-level content
