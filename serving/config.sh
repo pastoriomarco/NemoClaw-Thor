@@ -546,7 +546,7 @@ resolve_model_profile() {
             # set so the shared post-case finalizer stays defined under `set -u`.
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="gemma4-12b-it-gguf"
-            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_MAX_MODEL_LEN="131072"
             THOR_TARGET_KV_CACHE_DTYPE="auto"
             THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"

@@ -775,10 +775,21 @@ prepare_thor_launch_profile() {
             THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL}"
             THOR_LLAMACPP_SPEC_DRAFT_HF="${THOR_LLAMACPP_SPEC_DRAFT_HF:-unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL}"
             THOR_LLAMACPP_SPEC_DRAFT_NGL="${THOR_LLAMACPP_SPEC_DRAFT_NGL:-999}"
-            THOR_LLAMACPP_SPEC_DRAFT_CTX="${THOR_LLAMACPP_SPEC_DRAFT_CTX:-65536}"
+            THOR_LLAMACPP_SPEC_DRAFT_CTX="${THOR_LLAMACPP_SPEC_DRAFT_CTX:-131072}"
             THOR_LLAMACPP_SPEC_DRAFT_N_MAX="${THOR_LLAMACPP_SPEC_DRAFT_N_MAX:-6}"
-            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-65536}"
+            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-131072}"
             THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
+            # 128k context (within the GGUF's trained n_ctx_train); a quantized
+            # KV cache keeps memory low. llama.cpp has no fp8 KV; q8_0 (8-bit)
+            # is the equivalent. q8_0 V-cache needs flash-attention
+            # (--flash-attn on|off|auto). Draft KV is quantized too. gemma's
+            # hybrid attention (3 global + SWA layers) makes the KV tiny
+            # regardless (~0.4 GB at 128k). All overridable via THOR_LLAMACPP_*.
+            THOR_LLAMACPP_CACHE_TYPE_K="${THOR_LLAMACPP_CACHE_TYPE_K:-q8_0}"
+            THOR_LLAMACPP_CACHE_TYPE_V="${THOR_LLAMACPP_CACHE_TYPE_V:-q8_0}"
+            THOR_LLAMACPP_DRAFT_CACHE_TYPE_K="${THOR_LLAMACPP_DRAFT_CACHE_TYPE_K:-q8_0}"
+            THOR_LLAMACPP_DRAFT_CACHE_TYPE_V="${THOR_LLAMACPP_DRAFT_CACHE_TYPE_V:-q8_0}"
+            THOR_LLAMACPP_FLASH_ATTN="${THOR_LLAMACPP_FLASH_ATTN:-on}"
             # Server-default sampling + serving flags (clients may override).
             # --jinja enables the model's tool-call chat template; --no-mmproj
             # serves text-only; --reasoning off matches the Gemma 4 IT recipe.
@@ -1023,6 +1034,16 @@ run_thor_llamacpp_container() {
         --alias "${THOR_MODEL_ID}"
     )
 
+    # Optional KV-cache quantization + flash-attention (memory control for
+    # large context). q8_0 ~= fp8 (llama.cpp has no fp8 KV type). q8_0 V-cache
+    # needs flash-attn enabled.
+    local kv_args=()
+    [[ -n "${THOR_LLAMACPP_FLASH_ATTN:-}" ]] && kv_args+=(--flash-attn "${THOR_LLAMACPP_FLASH_ATTN}")
+    [[ -n "${THOR_LLAMACPP_CACHE_TYPE_K:-}" ]] && kv_args+=(--cache-type-k "${THOR_LLAMACPP_CACHE_TYPE_K}")
+    [[ -n "${THOR_LLAMACPP_CACHE_TYPE_V:-}" ]] && kv_args+=(--cache-type-v "${THOR_LLAMACPP_CACHE_TYPE_V}")
+    [[ -n "${THOR_LLAMACPP_DRAFT_CACHE_TYPE_K:-}" ]] && kv_args+=(--cache-type-k-draft "${THOR_LLAMACPP_DRAFT_CACHE_TYPE_K}")
+    [[ -n "${THOR_LLAMACPP_DRAFT_CACHE_TYPE_V:-}" ]] && kv_args+=(--cache-type-v-draft "${THOR_LLAMACPP_DRAFT_CACHE_TYPE_V}")
+
     if [[ -n "${THOR_LLAMACPP_HF:-}" ]]; then
         # HF auto-download lane (e.g. gemma4-12b-it-gguf). -hf/--spec-draft-hf
         # fetch the GGUFs on first launch. llama.cpp downloads to LLAMA_CACHE
@@ -1053,6 +1074,7 @@ run_thor_llamacpp_container() {
                 "${hf_args[@]}" \
                 -c "${THOR_LLAMACPP_CTX}" \
                 -ngl "${THOR_LLAMACPP_NGL:-999}" \
+                ${kv_args[@]+"${kv_args[@]}"} \
                 "${common_args[@]}" \
                 ${THOR_LLAMACPP_EXTRA_ARGS[@]+"${THOR_LLAMACPP_EXTRA_ARGS[@]}"}
         return
