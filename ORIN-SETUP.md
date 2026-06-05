@@ -194,11 +194,13 @@ already on the NVMe via the `~/.local` bind mount.)
 
 **Start the model first** (onboard probes the inference endpoint). Then:
 ```bash
+# v0.0.59 renamed "compatible-endpoint" to "custom".
+# The provider key is only required to be non-empty for local serving.
 NEMOCLAW_NON_INTERACTIVE=1 \
-NEMOCLAW_PROVIDER=custom \                       # v0.0.59 renamed "compatible-endpoint" → "custom"
+NEMOCLAW_PROVIDER=custom \
 NEMOCLAW_ENDPOINT_URL=http://127.0.0.1:8000/v1 \
 NEMOCLAW_MODEL=gemma4-12b-it-gguf-orin \
-NEMOCLAW_PROVIDER_KEY=dummy-local-key \          # any non-empty value; NOT checked for local serving
+NEMOCLAW_PROVIDER_KEY=dummy-local-key \
 nemoclaw onboard --non-interactive --yes --fresh --name my-assistant --yes-i-accept-third-party-software
 ```
 First run builds the sandbox image (~12 min, on the NVMe via docker data-root)
@@ -219,6 +221,12 @@ docker exec -d "$cid" bash -c 'cd /sandbox; HOME=/sandbox exec openclaw gateway 
 ```
 
 ### Wire the manyforge integration
+This step requires Composer to be running on `:9000` with a deployment loaded
+that exposes the `composer-assistant` mode. For normal Orin stack bring-up,
+skip this manual command and let `manyforge/scripts/launch-orin-gemma.sh`
+run it after Composer is up. Run it by hand only when repairing or validating
+an already-running stack:
+
 ```bash
 manyforge/setup-manyforge-assistant.sh my-assistant   # skill + MCP server + manyforge egress preset + agent profile
 ```
