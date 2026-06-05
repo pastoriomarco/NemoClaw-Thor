@@ -41,12 +41,12 @@ docker run -d --rm --name manyforge-e2e-composer --network host \
   -v "$MF:/workspace" -v manyforge_build-cache:/tmp/manyforge-build -w /workspace \
   -e MANYFORGE_ASSISTANT_PROVIDER=openclaw \
   -e MANYFORGE_ASSISTANT_ENDPOINT_URL="$ENDPOINT" \
-  -e MANYFORGE_ASSISTANT_TIMEOUT_S=180 \
+  -e MANYFORGE_ASSISTANT_TIMEOUT_S=320 \
   manyforge-dev:latest \
   bash -lc "python -m manyforge_composer \
     --catalog-path /workspace/manyforge_behavior/resources/node_catalog.yaml \
     --host 0.0.0.0 --port 9000 --hmi-port 8081 --mcp-http \
-    --assistant-provider openclaw --assistant-endpoint $ENDPOINT --assistant-timeout-s 180" \
+    --assistant-provider openclaw --assistant-endpoint $ENDPOINT --assistant-timeout-s 320" \
   >/dev/null 2>&1 || { log "composer docker run FAILED"; exit 11; }
 ok=0
 for i in $(seq 1 60); do
@@ -66,7 +66,7 @@ OPENCLAW_ASSISTANT_AGENT=manyforge-composer \
 OPENCLAW_ASSISTANT_LOCAL=false OPENCLAW_ASSISTANT_USE_GATEWAY=false \
 OPENCLAW_ASSISTANT_TOOL_SURFACE="$MODE" \
 OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2 OPENCLAW_ASSISTANT_COMPACT_TIMEOUT_S=120 \
-OPENCLAW_ASSISTANT_TIMEOUT_S=170 \
+OPENCLAW_ASSISTANT_TIMEOUT_S=300 \
 MANYFORGE_STATE_CONTEXT=first_then_every_n MANYFORGE_STATE_CONTEXT_EVERY_N=3 \
 "$BR/.venv/bin/python" -m openclaw_assistant_bridge.service \
   >"$OUT/bridge-openclaw-$MODE.log" 2>&1 &

@@ -473,6 +473,32 @@ def _reset_loop_history_for_tests() -> None:
     _loop_history.clear()
 
 
+async def _loop_history_clear(conv_key: tuple[str, str]) -> bool:
+    """Drop ONE conversation's loop-history. Returns True if anything was
+    dropped.
+
+    2026-06-05 (FIX: chained-conversation cascade). The per-conversation
+    history is keyed only by ``(conversationId, assistantMode)`` and persists
+    across turns. A benchmark/operator flow that reuses one conversationId
+    across many DISTINCT user prompts (e.g. the PnP build chain) legitimately
+    calls the same tool family across turns; those fingerprints accumulate and
+    trip ``bridge_loop_detected_stop`` on a later turn, after which EVERY
+    subsequent turn on that conversationId short-circuits (409 -> composer 502)
+    without ever invoking the model — a cascade.
+
+    Fix: clear the conversation's history after a turn that reaches a
+    SUCCESSFUL final answer (200). Genuinely-stuck turns FAIL (nonzero exit /
+    loop-stop) and do NOT hit the success path, so their fingerprints persist
+    and cross-turn detection of repeatedly-FAILING loops is preserved. This
+    does not weaken within-turn detection (that is the gateway's job + the
+    mid-turn reflection injector). Endorsed by external review as the durable
+    fix vs. the ``--no-chain-session`` measurement workaround (which loses
+    conversational memory).
+    """
+    async with _loop_history_lock:
+        return _loop_history.pop(conv_key, None) is not None
+
+
 async def _record_history_from_result(
     *,
     conv_key: tuple[str, str],
@@ -1205,6 +1231,18 @@ async def assistant(request: Request) -> JSONResponse:
         promptChars=len(prompt),
         toolSurface=cfg.tool_surface,
     )
+    # FIX (2026-06-05): this turn reached a successful final answer, so it is
+    # not a stuck loop. Clear the conversation's loop-history so legitimately-
+    # repeated tool use across DISTINCT later user prompts on the same
+    # conversationId does not accumulate into a false bridge_loop_detected_stop
+    # cascade. Failing turns never reach here, so real stuck-loop detection
+    # (across repeatedly-FAILING turns) is preserved.
+    if await _loop_history_clear(loop_conv_key):
+        _log_event(
+            "bridge_loop_history_cleared_on_success",
+            requestId=request_id,
+            conversationKey=list(loop_conv_key),
+        )
     _record_outcome("success", transport, time.perf_counter() - handler_started)
     ACTIVE_REQUESTS.dec()
     return JSONResponse(status_code=200, content=body)
