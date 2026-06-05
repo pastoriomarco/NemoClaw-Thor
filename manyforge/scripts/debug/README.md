@@ -130,3 +130,32 @@ restart the proxies between major test campaigns.
 If a proxy dies (e.g. the sandbox tears down its docker bridge), you
 can relaunch it with the same command — `allow_reuse_address=True` so
 the listen port comes back immediately.
+
+## Cell runners: `run-cell-direct.sh` / `run-cell-openclaw.sh`
+
+Self-contained single-lane smoke-cell runners (added 2026-06-05). Each brings
+up the composer for its lane + starts the bridge as a survivable child, runs
+the full `smoke_corpus_runner.py`, and tears the bridge down. They reuse an
+already-running model + vllm-proxy (bring those up first via
+`scripts/launch.sh` or `serving/start-model.sh`). Env knobs: `SMOKE_CELL_OUT`
+(output dir), `SMOKE_MODEL_ID` (direct lane), `OPENCLAW_ASSISTANT_SANDBOX`,
+`MODE=tools|code` (openclaw), `FILTER` (single-case probe), `REPORT`.
+
+### OpenClaw 2026.5.22 tool-surface fix (IMPORTANT — corrects earlier docs)
+
+Earlier notes (REBUILD-FINDINGS / BLOCKER / PHASE-0) state the `tool_search_code`
+shim is "unconditional / not toggleable" and `tools.toolSearch` is "silently
+ignored." **That is not the whole story.** Verified 2026-06-05 on OpenClaw
+2026.5.22: the offered surface is controlled by **`tools.codeMode`**, not
+`tools.toolSearch.mode` alone:
+
+- **Real tools surface** (`tool_search` / `tool_describe` / `tool_call`):
+  `tools.codeMode=false` + `tools.toolSearch={enabled:true,mode:"tools"}` +
+  `tools.profile="full"`.
+- **Code surface** (`tool_search_code`): `tools.codeMode=true`.
+
+The running gateway **caches** this config — it must be killed
+(`pkill -9 -x openclaw`) so it respawns and re-reads `openclaw.json`.
+`run-cell-openclaw.sh` does this automatically per `MODE`. With the tools
+surface, the agent dispatches real composer tools instead of looping on
+`import openclaw.tools` (a QuickJS error) in the code worker.
