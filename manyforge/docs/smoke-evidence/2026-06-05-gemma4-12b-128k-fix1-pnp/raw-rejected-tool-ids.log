@@ -1,0 +1,39 @@
+# Raw rejected tool-call envelopes — captured from the in-sandbox OpenClaw
+# gateway log (/sandbox/.openclaw/logs/gateway-persistent.log), my-assistant
+# sandbox, gemma-4-12b-it tools+code surface, PnP chain.
+#
+# PROOF for root-cause #2: in EVERY rejected envelope the `id` field is PRESENT
+# but MALFORMED — kebab-cased segments (manyforge__scene-draft-add-object) or
+# the manyforge__ prefix dropped (bare tree_draft_insert_node), or a mix
+# (manyforge__tree-draft-wrap_node). The dispatcher does an exact-match lookup
+# on the canonical double-underscore id (manyforge__scene_draft_add_object) and
+# returns "Unknown tool id". The model's "I omitted the id" self-explanation is
+# a HALLUCINATED misdiagnosis — the id is right there, just mangled.
+
+# ---- tools surface (tool_call / tool_describe) — id PRESENT, dash-mangled ----
+2026-06-05T12:28:22Z [tools] tool_call failed: Unknown tool id: manyforge__scene-draft-add-object raw_params={"id":"manyforge__scene-draft-add-object","args":{"objectId":"ground_plane","pose":{"frame_id":"base_link","position_m":[0,0,0],"orientation_xyzw":[0,0,0,1]},"shape":{"box_dimensions_m":[2,2,0.01],"type":"box"}}}
+2026-06-05T12:30:53Z [tools] tool_call failed: Unknown tool id: manyforge__program-read raw_params={"id":"manyforge__program-read"}
+2026-06-05T12:32:15Z [tools] tool_describe failed: Unknown tool id: manyforge__tree-draft-insert-node raw_params={"id":"manyforge__tree-draft-insert-node"}
+2026-06-05T12:47:31Z [tools] tool_call failed: Unknown tool id: manyforge__scene-draft-add-object raw_params={"id":"manyforge__scene-draft-add-object","args":{"objectId":"ground_plane","pose":{"frame_id":"base_link","position_m":[0,0,0],"orientation_xyzw":[0,0,0,1]},"shape":{"box_dimensions_m":[2,2,0.01],"type":"box"}}}
+2026-06-05T12:50:01Z [tools] tool_call failed: Unknown tool id: manyforge__program-read raw_params={"id":"manyforge__program-read","args":{}}
+
+# ---- code surface (tool_search_code -> openclaw.tools.call) — bare / dashed ----
+2026-06-05T12:14:42Z [tools] tool_search_code failed: Error: Unknown tool id: tree_draft_insert_node raw_params={"code":"const r = await openclaw.tools.call('tree_draft_insert_node', { nodeName: 'reset_graspable_pose', parentName: 'return_rest', node: {...} }); return r;"}
+2026-06-05T12:14:50Z [tools] tool_search_code failed: Error: Unknown tool id: manyforge__tree-draft-insert-node raw_params={"code":"const r = await openclaw.tools.call('manyforge__tree-draft-insert-node', {...}); return r;"}
+2026-06-05T12:14:52Z [tools] tool_search_code failed: Error: Unknown tool id: tree_draft_insert_node raw_params={"code":"const r = await openclaw.tools.describe('tree_draft_insert_node'); return r;"}
+2026-06-05T12:16:32Z [tools] tool_search_code failed: Error: Unknown tool id: manyforge__tree-draft-wrap_node raw_params={"code":"const r = await openclaw.tools.call('manyforge__tree-draft-wrap_node', {...}); return r;"}
+
+# ---- consequence: in-sandbox GATEWAY loop detector (distinct from bridge fix #1) ----
+2026-06-05T12:53:33Z [agent/embedded] embedded run agent end: isError=true model=cosmos-reason2-8b error=409 loop detected: tool 'tool_call' repeated 8 times in this conversation without recovery
+
+# ---- model's (incorrect) self-diagnosis, repeated across PnP_08..17 ----
+2026-06-05T12:57:55Z "The previous attempts failed because the `tool_call` was being sent without the required `id` field … the OpenClaw tool dispatcher requires the tool name to be passed as the `id`."
+2026-06-05T13:01:42Z "I have been omitting the mandatory `id` field for the `tool_call` function itself, which is required by the OpenClaw dispatcher…"
+# (id was present in every captured envelope — see above. The model never
+#  identifies the actual dash-vs-underscore / missing-prefix mangling.)
+
+# NOTE ON PROVENANCE: gateway-persistent.log's last write was ~13:09 (the
+# immediately-preceding fixed-bridge PnP run, stopped at the 180s cap); the
+# 14:46+ re-run's gateway was restarted and logs elsewhere. The envelope SHAPES
+# are deterministic across runs (same model, same tools surface) — these lines
+# are representative of the 9/19 re-run's PnP_08..17 failures.
