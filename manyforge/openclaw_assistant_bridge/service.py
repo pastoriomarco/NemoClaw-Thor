@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import collections
 import json
 import os
+import re
 import shlex
 import time
 from collections import OrderedDict
@@ -179,6 +181,29 @@ _ACTIVE_PROCESSES: dict[str, asyncio.subprocess.Process] = {}
 _ACTIVE_REQUESTS: dict[str, dict[str, Any]] = {}
 _CANCELLED: set[str] = set()
 
+# Session health quarantine for OpenClaw lock/timeout failures.
+#
+# OpenClaw sessions are stateful. If an agent turn times out while holding the
+# session write lock, later turns with the same session id can fail immediately
+# with opaque 502s. Keep the containment explicit: mark the session poisoned,
+# attempt guarded cleanup, and refuse to reuse it until recovery succeeds.
+_POISONED_SESSIONS_MAX = int(
+    os.environ.get("OPENCLAW_ASSISTANT_POISONED_SESSIONS_MAX", "128") or "128"
+)
+_SESSION_LOCK_CLEANUP_ENABLED = (
+    os.environ.get("OPENCLAW_ASSISTANT_LOCK_CLEANUP_ENABLED", "true").lower()
+    in {"1", "true", "yes", "on"}
+)
+_SESSION_LOCK_CLEANUP_TIMEOUT_S = float(
+    os.environ.get("OPENCLAW_ASSISTANT_LOCK_CLEANUP_TIMEOUT_S", "8") or "8"
+)
+_SESSION_LOCK_CLEANUP_SIGKILL = (
+    os.environ.get("OPENCLAW_ASSISTANT_LOCK_CLEANUP_SIGKILL", "true").lower()
+    in {"1", "true", "yes", "on"}
+)
+_poisoned_sessions: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+_poisoned_sessions_lock = asyncio.Lock()
+
 
 def _principal_for(cfg: "AdapterConfig") -> str:
     """The principal the in-sandbox MCP bridge subprocess uses on
@@ -186,6 +211,149 @@ def _principal_for(cfg: "AdapterConfig") -> str:
     the provisioner in setup-manyforge-assistant.sh
     (`openclaw-${SANDBOX}`)."""
     return f"openclaw-{cfg.sandbox}"
+
+
+def _session_lock_path(config: AdapterConfig, session_id: str) -> str:
+    """Best-known OpenClaw session lock path inside the sandbox.
+
+    OpenClaw stores shell-out agent session logs under
+    ``/sandbox/.openclaw/agents/<agent>/sessions``. The lock file is
+    advisory state for one session JSONL. The path is used only for guarded
+    cleanup/diagnostics; if OpenClaw changes it, cleanup will fail closed by
+    leaving the session quarantined.
+    """
+    safe_session = session_id.replace("/", "_")
+    return (
+        f"/sandbox/.openclaw/agents/{config.agent}/sessions/"
+        f"{safe_session}.jsonl.lock"
+    )
+
+
+_LOCK_PID_RE = re.compile(r"(?:pid\s*[=:]\s*|pid=)(\d+)", re.IGNORECASE)
+
+
+def _extract_lock_holder_pid(text: str) -> int | None:
+    """Extract ``pid=123`` style lock-owner hints from OpenClaw errors."""
+    if not text:
+        return None
+    match = _LOCK_PID_RE.search(text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _is_session_lock_error(text: str) -> bool:
+    lowered = (text or "").lower()
+    return "sessionwritelocktimeouterror" in lowered or "session file locked" in lowered
+
+
+def _session_poison_code(reason: str) -> str:
+    if reason in {"timeout", "compact_timeout"}:
+        return reason
+    if reason in {"session_lock_timeout", "compact_session_lock_timeout"}:
+        return "session_lock_timeout"
+    return "session_lock_poisoned"
+
+
+async def _session_poison_mark(
+    *,
+    session_id: str,
+    request_id: str,
+    reason: str,
+    detail: str,
+    lock_path: str | None = None,
+    lock_holder_pid: int | None = None,
+) -> dict[str, Any]:
+    """Quarantine an OpenClaw session after timeout/lock corruption.
+
+    The quarantine prevents a single stuck OpenClaw session from cascading into
+    many later Composer 502s. Recovery may clear this entry later, but until
+    then the bridge returns an explicit session-health error before dispatch.
+    """
+    if not session_id:
+        return {}
+    entry = {
+        "sessionId": session_id,
+        "requestId": request_id,
+        "reason": reason,
+        "detail": detail[:1500],
+        "lockPath": lock_path,
+        "lockHolderPid": lock_holder_pid,
+        "poisonedAt": time.time(),
+        "lastRecoveryAttemptAt": None,
+        "lastRecovery": None,
+    }
+    async with _poisoned_sessions_lock:
+        existing = _poisoned_sessions.get(session_id)
+        if existing:
+            existing.update({k: v for k, v in entry.items() if v is not None})
+            entry = dict(existing)
+            _poisoned_sessions.move_to_end(session_id)
+        else:
+            _poisoned_sessions[session_id] = dict(entry)
+        while len(_poisoned_sessions) > _POISONED_SESSIONS_MAX:
+            _poisoned_sessions.popitem(last=False)
+    _log_event(
+        "openclaw_session_poisoned",
+        requestId=request_id,
+        sessionId=session_id,
+        reason=reason,
+        lockPath=lock_path,
+        lockHolderPid=lock_holder_pid,
+    )
+    return entry
+
+
+async def _session_poison_clear(session_id: str, *, request_id: str, reason: str) -> bool:
+    async with _poisoned_sessions_lock:
+        removed = _poisoned_sessions.pop(session_id, None)
+    if removed is not None:
+        _log_event(
+            "openclaw_session_poison_cleared",
+            requestId=request_id,
+            sessionId=session_id,
+            reason=reason,
+        )
+        return True
+    return False
+
+
+def _session_poison_snapshot(session_id: str) -> dict[str, Any] | None:
+    entry = _poisoned_sessions.get(session_id)
+    if entry is None:
+        return None
+    return dict(entry)
+
+
+def _reset_session_poison_for_tests() -> None:
+    """Drop all quarantined-session state. Test-only entry point."""
+    _poisoned_sessions.clear()
+
+
+def _session_health_error_body(
+    *,
+    request_id: str,
+    session_id: str,
+    code: str,
+    detail: str,
+    poison: dict[str, Any] | None = None,
+    recovery: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    body = error_envelope(request_id=request_id, code=code, detail=detail)
+    body["sessionHealth"] = {
+        "state": "poisoned",
+        "sessionId": session_id,
+        "poison": poison or _session_poison_snapshot(session_id),
+        "recovery": recovery,
+    }
+    body["warnings"].append(
+        f"openclaw_session_poisoned: session {session_id!r} is quarantined; "
+        "retry with a fresh session or after recovery clears the lock"
+    )
+    return body
 
 
 async def _bind_principal_async(principal: str, request_id: str) -> None:
@@ -878,6 +1046,39 @@ async def assistant(request: Request) -> JSONResponse:
     REQUEST_DURATION.labels(stage="prompt_build", transport=transport).observe(prompt_ms / 1000.0)
     timeout_s = _request_timeout(payload, cfg.timeout_s)
     session_id = str(payload.get("conversationId") or request_id)
+    poison = _session_poison_snapshot(session_id)
+    if poison is not None:
+        recovery = await _recover_poisoned_session(
+            cfg,
+            session_id=session_id,
+            request_id=request_id,
+            reason=str(poison.get("reason") or "previous_failure"),
+            detail=str(poison.get("detail") or ""),
+        )
+        if recovery.get("recovered") is not True:
+            _log_event(
+                "openclaw_session_poisoned_rejected",
+                requestId=request_id,
+                sessionId=session_id,
+                recoveryStatus=recovery.get("status"),
+                reason=poison.get("reason"),
+            )
+            body = _session_health_error_body(
+                request_id=request_id,
+                session_id=session_id,
+                code=_session_poison_code(str(poison.get("reason") or "")),
+                detail=(
+                    "OpenClaw session is quarantined after a previous "
+                    f"{poison.get('reason') or 'failure'} and recovery did not "
+                    "clear it. Start a fresh conversation/session or restart "
+                    "the OpenClaw sandbox gateway before retrying."
+                ),
+                poison=poison,
+                recovery=recovery,
+            )
+            _record_outcome("session_lock_poisoned", transport, time.perf_counter() - handler_started)
+            ACTIVE_REQUESTS.dec()
+            return JSONResponse(status_code=423, content=body)
     _ACTIVE_REQUESTS[request_id] = {
         "startedPerf": time.perf_counter(),
         "stage": "dispatching_openclaw_gateway" if cfg.use_gateway else "dispatching_openclaw",
@@ -991,11 +1192,17 @@ async def assistant(request: Request) -> JSONResponse:
                     session_id=session_id,
                 )
             try:
-                await _run_agent(
+                compact_result = await _run_agent(
                     request_id=f"{request_id}-compact",
                     command=compact_command,
                     timeout_s=_COMPACT_TIMEOUT_S,
                 )
+                if compact_result.returncode != 0:
+                    compact_detail = (
+                        f"OpenClaw compact exited with code {compact_result.returncode}: "
+                        f"{(compact_result.stderr or compact_result.stdout)[:1000]}"
+                    )
+                    raise RuntimeError(compact_detail)
                 COMPACT_FIRES_TOTAL.labels(outcome="succeeded").inc()
                 REQUEST_DURATION.labels(stage="compact", transport=transport).observe(
                     time.perf_counter() - compact_started_perf
@@ -1008,19 +1215,62 @@ async def assistant(request: Request) -> JSONResponse:
                     transport=transport,
                 )
             except Exception as compact_exc:  # noqa: BLE001
-                # Compaction failed (timeout, gateway error, etc.) —
-                # don't fail the user request; proceed with the
-                # un-compacted session. The user-facing error rate
-                # is what we care about; compaction is best-effort.
+                # Most compaction failures remain best-effort. Timeout and
+                # session-lock shaped failures are different: they can leave
+                # OpenClaw holding the session write lock, and continuing with
+                # the real request would poison the rest of a chained
+                # conversation. Quarantine those sessions immediately.
                 COMPACT_FIRES_TOTAL.labels(outcome="failed").inc()
+                compact_detail = f"{type(compact_exc).__name__}: {compact_exc}"
                 _log_event(
                     "openclaw_compact_fire_failed",
                     requestId=request_id,
                     sessionKey=session_key,
                     sessionCount=session_count,
-                    error=f"{type(compact_exc).__name__}: {compact_exc}",
+                    error=compact_detail,
                     transport=transport,
                 )
+                compact_reason = None
+                if isinstance(compact_exc, asyncio.TimeoutError):
+                    compact_reason = "compact_timeout"
+                elif _is_session_lock_error(compact_detail):
+                    compact_reason = "compact_session_lock_timeout"
+                if compact_reason is not None:
+                    poison = await _session_poison_mark(
+                        session_id=session_id,
+                        request_id=request_id,
+                        reason=compact_reason,
+                        detail=compact_detail,
+                        lock_path=_session_lock_path(cfg, session_id),
+                        lock_holder_pid=_extract_lock_holder_pid(compact_detail),
+                    )
+                    recovery = await _recover_poisoned_session(
+                        cfg,
+                        session_id=session_id,
+                        request_id=request_id,
+                        reason=compact_reason,
+                        detail=compact_detail,
+                    )
+                    await _CIRCUIT_BREAKER.record_failure(transport)
+                    body = _session_health_error_body(
+                        request_id=request_id,
+                        session_id=session_id,
+                        code=_session_poison_code(compact_reason),
+                        detail=(
+                            "OpenClaw compaction failed in a way that can leave "
+                            "the session lock held; the session was quarantined "
+                            "before dispatching the user request."
+                        ),
+                        poison=poison,
+                        recovery=recovery,
+                    )
+                    _record_outcome(
+                        _session_poison_code(compact_reason),
+                        transport,
+                        time.perf_counter() - handler_started,
+                    )
+                    ACTIVE_REQUESTS.dec()
+                    return JSONResponse(status_code=423, content=body)
 
         if cfg.use_gateway:
             command = build_gateway_chat_completions_command(
@@ -1052,28 +1302,89 @@ async def assistant(request: Request) -> JSONResponse:
         )
     except asyncio.TimeoutError:
         await _kill_sandbox_agent(cfg, session_id=session_id)
+        timeout_detail = f"OpenClaw agent exceeded timeout {timeout_s:.1f}s"
+        poison = await _session_poison_mark(
+            session_id=session_id,
+            request_id=request_id,
+            reason="timeout",
+            detail=timeout_detail,
+            lock_path=_session_lock_path(cfg, session_id),
+        )
+        recovery = await _recover_poisoned_session(
+            cfg,
+            session_id=session_id,
+            request_id=request_id,
+            reason="timeout",
+            detail=timeout_detail,
+        )
         await _CIRCUIT_BREAKER.record_failure(transport)
         _log_event(
             "openclaw_request_timeout",
             requestId=request_id,
             timeoutS=timeout_s,
             toolSurfaceScope="assistant_mode",
+            sessionId=session_id,
+            recoveryStatus=recovery.get("status"),
+            recovered=bool(recovery.get("recovered")),
         )
-        body = error_envelope(
+        body = _session_health_error_body(
             request_id=request_id,
+            session_id=session_id,
             code="timeout",
-            detail=f"OpenClaw agent exceeded timeout {timeout_s:.1f}s",
+            detail=timeout_detail,
+            poison=poison,
+            recovery=recovery,
         )
         _record_outcome("timeout", transport, time.perf_counter() - handler_started)
         ACTIVE_REQUESTS.dec()
         return JSONResponse(status_code=504, content=body)
     except RuntimeError as exc:
+        runtime_detail = str(exc)
+        if _is_session_lock_error(runtime_detail):
+            poison = await _session_poison_mark(
+                session_id=session_id,
+                request_id=request_id,
+                reason="session_lock_timeout",
+                detail=runtime_detail,
+                lock_path=_session_lock_path(cfg, session_id),
+                lock_holder_pid=_extract_lock_holder_pid(runtime_detail),
+            )
+            recovery = await _recover_poisoned_session(
+                cfg,
+                session_id=session_id,
+                request_id=request_id,
+                reason="session_lock_timeout",
+                detail=runtime_detail,
+            )
+            await _CIRCUIT_BREAKER.record_failure(transport)
+            _log_event(
+                "openclaw_request_session_lock_timeout",
+                requestId=request_id,
+                sessionId=session_id,
+                recoveryStatus=recovery.get("status"),
+                recovered=bool(recovery.get("recovered")),
+            )
+            body = _session_health_error_body(
+                request_id=request_id,
+                session_id=session_id,
+                code="session_lock_timeout",
+                detail=runtime_detail,
+                poison=poison,
+                recovery=recovery,
+            )
+            _record_outcome(
+                "session_lock_timeout",
+                transport,
+                time.perf_counter() - handler_started,
+            )
+            ACTIVE_REQUESTS.dec()
+            return JSONResponse(status_code=423, content=body)
         await _CIRCUIT_BREAKER.record_failure(transport)
-        _log_event("openclaw_request_error", requestId=request_id, detail=str(exc))
+        _log_event("openclaw_request_error", requestId=request_id, detail=runtime_detail)
         body = error_envelope(
             request_id=request_id,
             code="upstream_call_error",
-            detail=str(exc),
+            detail=runtime_detail,
         )
         _record_outcome("upstream_call_error", transport, time.perf_counter() - handler_started)
         ACTIVE_REQUESTS.dec()
@@ -1125,6 +1436,33 @@ async def assistant(request: Request) -> JSONResponse:
             stderr_excerpt=(result.stderr or "")[:1500],
             stdout_excerpt=(result.stdout or "")[:1500],
         )
+        if _is_session_lock_error(detail):
+            poison = await _session_poison_mark(
+                session_id=session_id,
+                request_id=request_id,
+                reason="session_lock_timeout",
+                detail=detail,
+                lock_path=_session_lock_path(cfg, session_id),
+                lock_holder_pid=_extract_lock_holder_pid(detail),
+            )
+            recovery = await _recover_poisoned_session(
+                cfg,
+                session_id=session_id,
+                request_id=request_id,
+                reason="session_lock_timeout",
+                detail=detail,
+            )
+            body = _session_health_error_body(
+                request_id=request_id,
+                session_id=session_id,
+                code="session_lock_timeout",
+                detail=detail,
+                poison=poison,
+                recovery=recovery,
+            )
+            _record_outcome("session_lock_timeout", transport, time.perf_counter() - handler_started)
+            ACTIVE_REQUESTS.dec()
+            return JSONResponse(status_code=423, content=body)
         body = error_envelope(
             request_id=request_id,
             code="upstream_call_error",
@@ -1319,36 +1657,291 @@ def _record_outcome(status: str, transport: str, total_seconds: float) -> None:
 async def _kill_sandbox_agent(config: AdapterConfig, *, session_id: str) -> None:
     if not session_id:
         return
-    remote = "pkill -f " + shlex.quote(session_id) + " || true"
-    command = [
-        "docker",
-        "exec",
-        config.cluster_container,
-        "kubectl",
-        "exec",
-        "-n",
-        config.namespace,
-        config.sandbox,
-        "-c",
-        config.container,
-        "--",
-        "sh",
-        "-lc",
-        remote,
-    ]
+    remote = "pkill -f -- " + shlex.quote(session_id) + " || true"
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await asyncio.wait_for(proc.wait(), timeout=5.0)
+        await _run_sandbox_exec(config, remote, timeout_s=5.0)
     except Exception as exc:  # noqa: BLE001
         _log_event(
             "openclaw_sandbox_kill_failed",
             sessionId=session_id,
             detail=f"{type(exc).__name__}: {exc}",
         )
+
+
+def _sandbox_exec_command(config: AdapterConfig, remote: str) -> list[str]:
+    return [
+        "nemoclaw",
+        config.sandbox,
+        "exec",
+        "--no-tty",
+        "--",
+        "bash",
+        "-lc",
+        remote,
+    ]
+
+
+async def _run_sandbox_exec(
+    config: AdapterConfig,
+    remote: str,
+    *,
+    timeout_s: float,
+) -> tuple[int, str, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *_sandbox_exec_command(config, remote),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+    return (
+        proc.returncode if proc.returncode is not None else -1,
+        stdout_b.decode("utf-8", errors="replace"),
+        stderr_b.decode("utf-8", errors="replace"),
+    )
+
+
+def _session_lock_cleanup_script(
+    *,
+    agent: str,
+    session_id: str,
+    pid_hint: int | None,
+    cleanup_enabled: bool,
+    sigkill_enabled: bool,
+    wait_s: float,
+) -> str:
+    """Return a single-line sandbox command for guarded lock cleanup."""
+    script = f"""
+import fcntl, json, os, re, signal, time
+agent = {agent!r}
+session_id = {session_id!r}
+pid_hint = {pid_hint!r}
+cleanup_enabled = {cleanup_enabled!r}
+sigkill_enabled = {sigkill_enabled!r}
+wait_s = {wait_s!r}
+safe_session = session_id.replace("/", "_")
+lock_path = f"/sandbox/.openclaw/agents/{{agent}}/sessions/{{safe_session}}.jsonl.lock"
+result = {{
+    "lockPath": lock_path,
+    "lockExists": os.path.exists(lock_path),
+    "cleanupEnabled": cleanup_enabled,
+    "sigkillEnabled": sigkill_enabled,
+    "status": "unknown",
+}}
+def read_text(path, limit=1024):
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(limit).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+def remove_if_unlocked(path):
+    try:
+        with open(path, "a+") as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False, "lock_busy"
+            try:
+                os.remove(path)
+                return True, "unlocked_lock_removed"
+            except FileNotFoundError:
+                return True, "unlocked_lock_already_gone"
+            except Exception as exc:
+                return False, f"unlocked_lock_remove_failed: {{type(exc).__name__}}: {{exc}}"
+    except Exception as exc:
+        return False, f"lock_probe_failed: {{type(exc).__name__}}: {{exc}}"
+lock_text = read_text(lock_path)
+result["lockTextExcerpt"] = lock_text[:300]
+pid = pid_hint
+if not pid and lock_text:
+    m = re.search(r"(?:pid\\s*[=:]\\s*|pid=)(\\d+)", lock_text, re.I)
+    if m:
+        try:
+            pid = int(m.group(1))
+        except Exception:
+            pid = None
+result["lockHolderPid"] = pid
+if not os.path.exists(lock_path):
+    result["status"] = "no_lock"
+    result["recovered"] = True
+    print(json.dumps(result, sort_keys=True))
+    raise SystemExit(0)
+removed_unlocked, unlocked_status = remove_if_unlocked(lock_path)
+result["lockProbeStatus"] = unlocked_status
+if removed_unlocked:
+    result["status"] = unlocked_status
+    result["recovered"] = True
+    print(json.dumps(result, sort_keys=True))
+    raise SystemExit(0)
+if not pid:
+    result["status"] = "lock_present_no_pid"
+    result["recovered"] = False
+    print(json.dumps(result, sort_keys=True))
+    raise SystemExit(0)
+proc_dir = f"/proc/{{pid}}"
+alive = os.path.exists(proc_dir)
+result["pidAlive"] = alive
+if not alive:
+    try:
+        os.remove(lock_path)
+        result["status"] = "stale_lock_removed"
+        result["recovered"] = True
+    except Exception as exc:
+        result["status"] = "stale_lock_remove_failed"
+        result["recovered"] = False
+        result["error"] = f"{{type(exc).__name__}}: {{exc}}"
+    print(json.dumps(result, sort_keys=True))
+    raise SystemExit(0)
+comm = read_text(f"{{proc_dir}}/comm", 200).strip()
+cmdline = read_text(f"{{proc_dir}}/cmdline", 4096).replace("\\x00", " ").strip()
+result["processComm"] = comm
+result["processCmdlineExcerpt"] = cmdline[:500]
+owner_ok = "openclaw" in comm.lower() or "openclaw" in cmdline.lower()
+result["ownerVerified"] = owner_ok
+if not owner_ok:
+    result["status"] = "refused_owner_mismatch"
+    result["recovered"] = False
+    print(json.dumps(result, sort_keys=True))
+    raise SystemExit(0)
+if not cleanup_enabled:
+    result["status"] = "owner_alive_cleanup_disabled"
+    result["recovered"] = False
+    print(json.dumps(result, sort_keys=True))
+    raise SystemExit(0)
+try:
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + max(0.1, wait_s)
+    while time.monotonic() < deadline and os.path.exists(proc_dir):
+        time.sleep(0.1)
+    if os.path.exists(proc_dir) and sigkill_enabled:
+        os.kill(pid, signal.SIGKILL)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and os.path.exists(proc_dir):
+            time.sleep(0.1)
+    if os.path.exists(proc_dir):
+        result["status"] = "owner_kill_failed"
+        result["recovered"] = False
+    else:
+        try:
+            os.remove(lock_path)
+            result["status"] = "owner_killed_lock_removed"
+            result["recovered"] = True
+        except FileNotFoundError:
+            result["status"] = "owner_killed_lock_already_gone"
+            result["recovered"] = True
+        except Exception as exc:
+            result["status"] = "owner_killed_lock_remove_failed"
+            result["recovered"] = False
+            result["error"] = f"{{type(exc).__name__}}: {{exc}}"
+except ProcessLookupError:
+    try:
+        os.remove(lock_path)
+        result["status"] = "owner_disappeared_lock_removed"
+        result["recovered"] = True
+    except Exception as exc:
+        result["status"] = "owner_disappeared_lock_remove_failed"
+        result["recovered"] = False
+        result["error"] = f"{{type(exc).__name__}}: {{exc}}"
+except Exception as exc:
+    result["status"] = "cleanup_exception"
+    result["recovered"] = False
+    result["error"] = f"{{type(exc).__name__}}: {{exc}}"
+print(json.dumps(result, sort_keys=True))
+"""
+    encoded = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    python_code = f"import base64; exec(base64.b64decode({encoded!r}).decode())"
+    return "python3 -c " + shlex.quote(python_code)
+
+
+async def _recover_poisoned_session(
+    config: AdapterConfig,
+    *,
+    session_id: str,
+    request_id: str,
+    reason: str,
+    detail: str,
+) -> dict[str, Any]:
+    """Attempt guarded recovery for a quarantined OpenClaw session."""
+    pid_hint = _extract_lock_holder_pid(detail)
+    lock_path = _session_lock_path(config, session_id)
+    recovery: dict[str, Any] = {
+        "reason": reason,
+        "lockPath": lock_path,
+        "pidHint": pid_hint,
+        "recovered": False,
+    }
+    _log_event(
+        "openclaw_session_recovery_started",
+        requestId=request_id,
+        sessionId=session_id,
+        reason=reason,
+        lockPath=lock_path,
+        pidHint=pid_hint,
+        cleanupEnabled=_SESSION_LOCK_CLEANUP_ENABLED,
+    )
+    try:
+        returncode, stdout, stderr = await _run_sandbox_exec(
+            config,
+            _session_lock_cleanup_script(
+                agent=config.agent,
+                session_id=session_id,
+                pid_hint=pid_hint,
+                cleanup_enabled=_SESSION_LOCK_CLEANUP_ENABLED,
+                sigkill_enabled=_SESSION_LOCK_CLEANUP_SIGKILL,
+                wait_s=_SESSION_LOCK_CLEANUP_TIMEOUT_S,
+            ),
+            timeout_s=max(5.0, _SESSION_LOCK_CLEANUP_TIMEOUT_S + 5.0),
+        )
+        recovery["returncode"] = returncode
+        recovery["stderrExcerpt"] = stderr[:500]
+        try:
+            parsed = json.loads(stdout.strip().splitlines()[-1])
+            if isinstance(parsed, dict):
+                recovery.update(parsed)
+        except Exception:
+            recovery["stdoutExcerpt"] = stdout[:1000]
+        if recovery.get("recovered") is True:
+            await _session_poison_clear(
+                session_id,
+                request_id=request_id,
+                reason=str(recovery.get("status") or "recovered"),
+            )
+        else:
+            async with _poisoned_sessions_lock:
+                entry = _poisoned_sessions.get(session_id)
+                if entry is not None:
+                    entry["lastRecoveryAttemptAt"] = time.time()
+                    entry["lastRecovery"] = dict(recovery)
+                    _poisoned_sessions.move_to_end(session_id)
+        _log_event(
+            "openclaw_session_recovery_finished",
+            requestId=request_id,
+            sessionId=session_id,
+            recovered=bool(recovery.get("recovered")),
+            status=recovery.get("status"),
+            lockHolderPid=recovery.get("lockHolderPid"),
+            ownerVerified=recovery.get("ownerVerified"),
+        )
+        return recovery
+    except Exception as exc:  # noqa: BLE001
+        recovery.update(
+            {
+                "status": "recovery_command_failed",
+                "recovered": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        async with _poisoned_sessions_lock:
+            entry = _poisoned_sessions.get(session_id)
+            if entry is not None:
+                entry["lastRecoveryAttemptAt"] = time.time()
+                entry["lastRecovery"] = dict(recovery)
+        _log_event(
+            "openclaw_session_recovery_failed",
+            requestId=request_id,
+            sessionId=session_id,
+            detail=recovery["error"],
+        )
+        return recovery
 
 
 def main() -> None:

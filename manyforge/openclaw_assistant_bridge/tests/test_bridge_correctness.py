@@ -26,7 +26,9 @@ flagged and the per-commit fixes for them:
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
+import shlex
 from pathlib import Path
 
 import pytest
@@ -221,8 +223,10 @@ def fresh_history():
     """Reset the module-level history before/after every test."""
     from openclaw_assistant_bridge import service
     service._reset_loop_history_for_tests()
+    service._reset_session_poison_for_tests()
     yield service
     service._reset_loop_history_for_tests()
+    service._reset_session_poison_for_tests()
 
 
 def test_loop_history_records_and_reads_fingerprints(fresh_history) -> None:
@@ -699,6 +703,101 @@ def test_record_history_from_result_handles_malformed_stdout(fresh_history) -> N
 
     n = asyncio.get_event_loop().run_until_complete(run())
     assert n == 0
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw timeout/session-lock containment
+# ---------------------------------------------------------------------------
+
+
+def test_extract_lock_holder_pid_handles_openclaw_errors(fresh_history) -> None:
+    service = fresh_history
+    text = (
+        "SessionWriteLockTimeoutError: session file locked "
+        "(timeout 60000ms): pid=72731 "
+        "/sandbox/.openclaw/agents/manyforge-composer/sessions/x.jsonl.lock"
+    )
+    assert service._extract_lock_holder_pid(text) == 72731
+    assert service._is_session_lock_error(text) is True
+    assert service._is_session_lock_error("ordinary validation error") is False
+
+
+def test_session_poison_mark_snapshot_and_clear(fresh_history) -> None:
+    service = fresh_history
+
+    async def run() -> None:
+        entry = await service._session_poison_mark(
+            session_id="chain-pnp",
+            request_id="req-1",
+            reason="session_lock_timeout",
+            detail="locked: pid=123",
+            lock_path="/sandbox/.openclaw/agents/a/sessions/chain-pnp.jsonl.lock",
+            lock_holder_pid=123,
+        )
+        assert entry["sessionId"] == "chain-pnp"
+        assert entry["reason"] == "session_lock_timeout"
+        snap = service._session_poison_snapshot("chain-pnp")
+        assert snap is not None
+        assert snap["lockHolderPid"] == 123
+        cleared = await service._session_poison_clear(
+            "chain-pnp",
+            request_id="req-2",
+            reason="unit_test",
+        )
+        assert cleared is True
+        assert service._session_poison_snapshot("chain-pnp") is None
+
+    asyncio.get_event_loop().run_until_complete(run())
+
+
+def test_session_health_error_body_is_explicit(fresh_history) -> None:
+    service = fresh_history
+    body = service._session_health_error_body(
+        request_id="req",
+        session_id="conv",
+        code="session_lock_timeout",
+        detail="session lock is poisoned",
+        poison={"reason": "timeout"},
+        recovery={"recovered": False, "status": "owner_alive_cleanup_disabled"},
+    )
+    assert body["error"]["code"] == "session_lock_timeout"
+    assert body["sessionHealth"]["state"] == "poisoned"
+    assert body["sessionHealth"]["sessionId"] == "conv"
+    assert body["sessionHealth"]["recovery"]["recovered"] is False
+    assert any("openclaw_session_poisoned" in w for w in body["warnings"])
+
+
+def test_sandbox_exec_command_uses_nemoclaw_entrypoint(fresh_history) -> None:
+    service = fresh_history
+    from openclaw_assistant_bridge.adapter import AdapterConfig
+
+    cfg = AdapterConfig(sandbox="my-assistant")
+    command = service._sandbox_exec_command(cfg, "true")
+    assert command[:4] == ["nemoclaw", "my-assistant", "exec", "--no-tty"]
+    assert command[-3:] == ["bash", "-lc", "true"]
+
+
+def test_cleanup_script_is_guarded_by_owner_verification(fresh_history) -> None:
+    service = fresh_history
+    command = service._session_lock_cleanup_script(
+        agent="manyforge-composer",
+        session_id="chain-pnp",
+        pid_hint=72731,
+        cleanup_enabled=True,
+        sigkill_enabled=True,
+        wait_s=0.5,
+    )
+    assert "python3 -c" in command
+    python_code = shlex.split(command)[2]
+    match = re.search(r"b64decode\('([^']+)'\)", python_code)
+    assert match is not None
+    script = base64.b64decode(match.group(1)).decode("utf-8")
+    assert "fcntl.LOCK_EX | fcntl.LOCK_NB" in script
+    assert "unlocked_lock_removed" in script
+    assert "owner_ok =" in script
+    assert "refused_owner_mismatch" in script
+    assert "os.remove(lock_path)" in script
+    assert "cleanup_enabled" in script
 
 
 # ---------------------------------------------------------------------------
