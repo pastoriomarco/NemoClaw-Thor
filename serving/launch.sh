@@ -29,6 +29,16 @@ prepare_thor_launch_profile() {
     THOR_CHAT_TEMPLATE_HOST_DIR="${THOR_CHAT_TEMPLATE_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/templates}"
     THOR_MODS_HOST_DIR="${THOR_MODS_HOST_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/docker/mods" && pwd)}"
 
+    # Backend selector + llama.cpp HF-download lane state. Default to the vLLM
+    # backend; profiles that serve GGUF via llama.cpp (e.g. gemma4-12b-it-gguf)
+    # set THOR_LAUNCH_BACKEND=llamacpp and the THOR_LLAMACPP_HF* vars below.
+    # Initialised here so the summary/run/prereq helpers stay defined under
+    # `set -u` regardless of which backend a profile selects.
+    THOR_LAUNCH_BACKEND="${THOR_LAUNCH_BACKEND:-vllm}"
+    THOR_LLAMACPP_HF=""
+    THOR_LLAMACPP_SPEC_DRAFT_HF=""
+    THOR_LLAMACPP_EXTRA_ARGS=()
+
     THOR_DOCKER_ENV_ARGS=()
     THOR_VLLM_ARGS=()
 
@@ -750,6 +760,30 @@ prepare_thor_launch_profile() {
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
             )
             ;;
+        gemma4-12b-it-gguf)
+            # llama.cpp GGUF lane — Gemma 4 12B (unsloth UD-Q4_K_XL) with the
+            # Gemma 4 E2B GGUF as the speculative draft, both auto-downloaded
+            # from HF on first launch. Mirrors the standalone jetson-ai-lab
+            # Thor `llama-server -hf ...` command, but host/port/alias are
+            # injected by run_thor_llamacpp_container from THOR_VLLM_BIND_HOST /
+            # THOR_VLLM_PORT / THOR_MODEL_ID so the composer assistant lane
+            # reaches it on the usual contract (model on THOR_VLLM_PORT, the
+            # launcher's vllm-proxy fronts :8000).
+            THOR_LAUNCH_BACKEND="llamacpp"
+            THOR_LAUNCH_MODEL_SOURCE="unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL (llama.cpp)"
+            THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-thor}"
+            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL}"
+            THOR_LLAMACPP_SPEC_DRAFT_HF="${THOR_LLAMACPP_SPEC_DRAFT_HF:-unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL}"
+            THOR_LLAMACPP_SPEC_DRAFT_NGL="${THOR_LLAMACPP_SPEC_DRAFT_NGL:-999}"
+            THOR_LLAMACPP_SPEC_DRAFT_CTX="${THOR_LLAMACPP_SPEC_DRAFT_CTX:-65536}"
+            THOR_LLAMACPP_SPEC_DRAFT_N_MAX="${THOR_LLAMACPP_SPEC_DRAFT_N_MAX:-6}"
+            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-65536}"
+            THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
+            # Server-default sampling + serving flags (clients may override).
+            # --jinja enables the model's tool-call chat template; --no-mmproj
+            # serves text-only; --reasoning off matches the Gemma 4 IT recipe.
+            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --reasoning off --temp 1.0 --top-p 0.95 --top-k 64 --jinja)
+            ;;
         *)
             fail "Unsupported model profile: ${profile}"
             print_supported_model_profiles
@@ -819,12 +853,18 @@ check_thor_launch_prereqs() {
     fi
 
     if [[ "${THOR_LAUNCH_BACKEND:-vllm}" == "llamacpp" ]]; then
-        if [[ ! -f "${THOR_LLAMACPP_MODEL_PATH:-}" ]]; then
+        if [[ -n "${THOR_LLAMACPP_HF:-}" ]]; then
+            # HF-download lane: llama-server fetches the GGUF on first launch,
+            # so there is no local file to validate here.
+            info "llama.cpp HF-repo lane: ${THOR_LLAMACPP_HF} (auto-downloaded on first launch)"
+            if [[ -n "${THOR_LLAMACPP_SPEC_DRAFT_HF:-}" ]]; then
+                info "Speculative draft: ${THOR_LLAMACPP_SPEC_DRAFT_HF}"
+            fi
+        elif [[ ! -f "${THOR_LLAMACPP_MODEL_PATH:-}" ]]; then
             fail "Model file not found: ${THOR_LLAMACPP_MODEL_PATH:-<not set>}"
             fix "Download the GGUF model first."
             return 1
-        fi
-        if [[ -n "${THOR_LLAMACPP_DRAFT_PATH:-}" && ! -f "${THOR_LLAMACPP_DRAFT_PATH}" ]]; then
+        elif [[ -n "${THOR_LLAMACPP_DRAFT_PATH:-}" && ! -f "${THOR_LLAMACPP_DRAFT_PATH}" ]]; then
             warn "Draft model not found: ${THOR_LLAMACPP_DRAFT_PATH}"
             info "Speculative decoding will be disabled. Download the draft model to enable it."
         fi
@@ -845,16 +885,28 @@ print_thor_launch_summary() {
     if [[ "${THOR_LAUNCH_BACKEND:-vllm}" == "llamacpp" ]]; then
         echo "  Backend:            llama.cpp (llama-server)"
         echo "  Image:              ${THOR_LLAMACPP_IMAGE}"
-        echo "  Model:              ${THOR_LLAMACPP_MODEL_PATH}"
-        if [[ -f "${THOR_LLAMACPP_DRAFT_PATH:-}" ]]; then
-            echo "  Draft model:        ${THOR_LLAMACPP_DRAFT_PATH}"
-            echo "  Draft tokens:       ${THOR_LLAMACPP_DRAFT_N}"
+        if [[ -n "${THOR_LLAMACPP_HF:-}" ]]; then
+            echo "  Model (HF):         ${THOR_LLAMACPP_HF}"
+            if [[ -n "${THOR_LLAMACPP_SPEC_DRAFT_HF:-}" ]]; then
+                echo "  Draft (HF):         ${THOR_LLAMACPP_SPEC_DRAFT_HF}"
+                echo "  Draft n-max:        ${THOR_LLAMACPP_SPEC_DRAFT_N_MAX:-6}"
+            else
+                echo "  Draft model:        (none)"
+            fi
+            echo "  Context (total):    ${THOR_LLAMACPP_CTX}"
+            echo "  Download cache:     ${THOR_HF_CACHE_DIR}/llama.cpp (single persisted copy)"
         else
-            echo "  Draft model:        (none)"
+            echo "  Model:              ${THOR_LLAMACPP_MODEL_PATH}"
+            if [[ -f "${THOR_LLAMACPP_DRAFT_PATH:-}" ]]; then
+                echo "  Draft model:        ${THOR_LLAMACPP_DRAFT_PATH}"
+                echo "  Draft tokens:       ${THOR_LLAMACPP_DRAFT_N}"
+            else
+                echo "  Draft model:        (none)"
+            fi
+            echo "  Context (total):    ${THOR_LLAMACPP_CTX}"
+            echo "  Parallel slots:     ${THOR_LLAMACPP_PARALLEL}"
+            echo "  KV cache type:      K=${THOR_LLAMACPP_CACHE_TYPE_K} V=${THOR_LLAMACPP_CACHE_TYPE_V}"
         fi
-        echo "  Context (total):    ${THOR_LLAMACPP_CTX}"
-        echo "  Parallel slots:     ${THOR_LLAMACPP_PARALLEL}"
-        echo "  KV cache type:      K=${THOR_LLAMACPP_CACHE_TYPE_K} V=${THOR_LLAMACPP_CACHE_TYPE_V}"
     else
         echo "  Image:              ${THOR_VLLM_IMAGE}"
         echo "  KV cache dtype:     ${THOR_LAUNCH_KV_CACHE_DTYPE}"
@@ -943,12 +995,70 @@ run_thor_vllm_container() {
 
 run_thor_llamacpp_container() {
     local docker_tty_args=()
+    local docker_name_args=()
 
-    if [[ -t 0 && -t 1 ]]; then
+    # THOR_DETACH=1: background the container and return (manyforge assistant
+    # lane). THOR_CONTAINER_NAME: pin the name so the launcher's liveness and
+    # served-model-id checks can find it. Mirrors run_thor_vllm_container.
+    if [[ "${THOR_DETACH:-0}" == "1" ]]; then
+        docker_tty_args=(-d)
+    elif [[ -t 0 && -t 1 ]]; then
         docker_tty_args=(-i -t)
     fi
+    if [[ -n "${THOR_CONTAINER_NAME:-}" ]]; then
+        docker_name_args=(--name "${THOR_CONTAINER_NAME}")
+    fi
 
-    # Map host paths under THOR_HF_CACHE_DIR to /data/models inside the container.
+    local docker_rm_args=(--rm)
+    [[ "${THOR_NO_RM:-0}" == "1" ]] && docker_rm_args=()
+
+    # --alias makes llama-server report THOR_MODEL_ID as the /v1/models id, so
+    # the manyforge served-model-id readiness check (served == MODEL_PROFILE)
+    # and the configure-local-provider model id line up. --host/--port wire
+    # into the proxy chain (model on THOR_VLLM_PORT; the launcher's vllm-proxy
+    # fronts :8000 when enabled).
+    local common_args=(
+        --host "${THOR_VLLM_BIND_HOST}"
+        --port "${THOR_VLLM_PORT}"
+        --alias "${THOR_MODEL_ID}"
+    )
+
+    if [[ -n "${THOR_LLAMACPP_HF:-}" ]]; then
+        # HF auto-download lane (e.g. gemma4-12b-it-gguf). -hf/--spec-draft-hf
+        # fetch the GGUFs on first launch. llama.cpp downloads to LLAMA_CACHE
+        # (NOT the HF hub layout vLLM uses), so we pin LLAMA_CACHE to a subdir
+        # of the single ~/thor-hf-cache mount: exactly one persisted copy on
+        # the host (~/thor-hf-cache/llama.cpp), reused across --rm restarts.
+        # HF_HOME is set to the same mount so any hub-style metadata also lands
+        # there rather than in an unmounted path that vanishes on --rm.
+        local hf_args=(-hf "${THOR_LLAMACPP_HF}")
+        if [[ -n "${THOR_LLAMACPP_SPEC_DRAFT_HF:-}" ]]; then
+            hf_args+=(
+                --spec-draft-hf "${THOR_LLAMACPP_SPEC_DRAFT_HF}"
+                --spec-draft-ngl "${THOR_LLAMACPP_SPEC_DRAFT_NGL:-999}"
+                --spec-draft-ctx-size "${THOR_LLAMACPP_SPEC_DRAFT_CTX:-${THOR_LLAMACPP_CTX}}"
+                --spec-draft-n-max "${THOR_LLAMACPP_SPEC_DRAFT_N_MAX:-6}"
+            )
+        fi
+        docker run "${docker_rm_args[@]}" \
+            "${docker_tty_args[@]}" \
+            "${docker_name_args[@]}" \
+            --runtime nvidia --network host \
+            ${HF_TOKEN:+-e "HF_TOKEN=${HF_TOKEN}"} \
+            -e "HF_HOME=/data/models/huggingface" \
+            -e "LLAMA_CACHE=/data/models/huggingface/llama.cpp" \
+            -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface" \
+            "${THOR_LLAMACPP_IMAGE}" \
+            llama-server \
+                "${hf_args[@]}" \
+                -c "${THOR_LLAMACPP_CTX}" \
+                -ngl "${THOR_LLAMACPP_NGL:-999}" \
+                "${common_args[@]}" \
+                ${THOR_LLAMACPP_EXTRA_ARGS[@]+"${THOR_LLAMACPP_EXTRA_ARGS[@]}"}
+        return
+    fi
+
+    # Local-file lane: map host paths under THOR_HF_CACHE_DIR to /data/models.
     local model_container_path="/data/models/${THOR_LLAMACPP_MODEL_PATH#"${THOR_HF_CACHE_DIR}/"}"
 
     local draft_args=()
@@ -957,16 +1067,16 @@ run_thor_llamacpp_container() {
         draft_args=(-md "${draft_container_path}" --draft "${THOR_LLAMACPP_DRAFT_N}")
     fi
 
-    docker run --rm \
+    docker run "${docker_rm_args[@]}" \
         "${docker_tty_args[@]}" \
+        "${docker_name_args[@]}" \
         --runtime nvidia --network host \
         -v "${THOR_HF_CACHE_DIR}:/data/models" \
         "${THOR_LLAMACPP_IMAGE}" \
         llama-server \
             -m "${model_container_path}" \
             "${draft_args[@]}" \
-            --host "${THOR_VLLM_BIND_HOST}" \
-            --port "${THOR_VLLM_PORT}" \
+            "${common_args[@]}" \
             -np "${THOR_LLAMACPP_PARALLEL}" \
             -c "${THOR_LLAMACPP_CTX}" \
             --cache-type-k "${THOR_LLAMACPP_CACHE_TYPE_K}" \

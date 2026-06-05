@@ -171,6 +171,7 @@ Supported model profiles:
     gemma4-e4b-it             BF16 MoE, 8B/4B-active
     gemma4-31b-it-nvfp4       NVFP4 quantized
     gemma4-26b-a4b-it         BF16 MoE 128E/8A
+    gemma4-12b-it-gguf        GGUF Q4_K_XL via llama.cpp + E2B spec-decode (text-only)
 EOF
 }
 
@@ -530,6 +531,26 @@ resolve_model_profile() {
             THOR_TARGET_MAX_NUM_SEQS="17"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="4"
             THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_TOOL_CALL_PARSER="gemma4"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        gemma4-12b-it-gguf)
+            # Gemma 4 12B IT — GGUF (unsloth UD-Q4_K_XL) served by llama.cpp,
+            # with Gemma 4 E2B as the speculative draft. Text-only (--no-mmproj),
+            # 64K context. Runs through the manyforge composer assistant lane on
+            # the same host/port/served-id contract as the vLLM profiles. The
+            # llama.cpp HF-download lane lives in run_thor_llamacpp_container
+            # (launch.sh); the launch vars are set in prepare_thor_launch_profile.
+            # The THOR_TARGET_* below are not consumed by llama.cpp but are kept
+            # set so the shared post-case finalizer stays defined under `set -u`.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="gemma4-12b-it-gguf"
+            THOR_TARGET_MAX_MODEL_LEN="65536"
+            THOR_TARGET_KV_CACHE_DTYPE="auto"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
+            THOR_TARGET_MODEL_REASONING="false"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="gemma4"
             THOR_TARGET_QUANTIZATION=""
