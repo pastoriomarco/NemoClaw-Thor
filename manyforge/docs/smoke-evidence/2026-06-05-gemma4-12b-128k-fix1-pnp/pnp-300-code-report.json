@@ -1,0 +1,255 @@
+{
+  "corpus": "/home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus.yaml",
+  "composer": "http://127.0.0.1:9000",
+  "runtime_flags": [],
+  "results": [
+    {
+      "case_id": "PnP_01_scene_ground",
+      "status": "pass",
+      "elapsed_s": 81.5,
+      "tool_calls": [
+        {
+          "tool": "scene_draft_add_object",
+          "status": 200,
+          "duration_ms": 844.2,
+          "ts": "2026-06-05 13:41:11,735",
+          "arguments": {},
+          "bridge_status": "completed",
+          "bridge_error": null
+        }
+      ],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_02_scene_graspable",
+      "status": "fail",
+      "elapsed_s": 6.1,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_03_scene_pick_pad",
+      "status": "fail",
+      "elapsed_s": 11.5,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_04_scene_place_pad",
+      "status": "fail",
+      "elapsed_s": 6.0,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'scene_draft_add_object' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_05_tree_root",
+      "status": "fail",
+      "elapsed_s": 11.6,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'program_read' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_06_approach",
+      "status": "fail",
+      "elapsed_s": 6.0,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_07_descend",
+      "status": "fail",
+      "elapsed_s": 11.8,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_08_close_gripper",
+      "status": "fail",
+      "elapsed_s": 6.0,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_09_attach",
+      "status": "fail",
+      "elapsed_s": 11.8,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_10_lift",
+      "status": "fail",
+      "elapsed_s": 6.2,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_11_transport",
+      "status": "fail",
+      "elapsed_s": 11.8,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_12_place_descend",
+      "status": "fail",
+      "elapsed_s": 5.7,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_13_detach",
+      "status": "fail",
+      "elapsed_s": 12.2,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_14_upsert",
+      "status": "fail",
+      "elapsed_s": 6.1,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_15_open_gripper",
+      "status": "fail",
+      "elapsed_s": 12.2,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_16_retract",
+      "status": "fail",
+      "elapsed_s": 6.0,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_17_home",
+      "status": "fail",
+      "elapsed_s": 11.9,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_18_repeat_root",
+      "status": "fail",
+      "elapsed_s": 6.2,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)",
+        "state_after[program.tree.id] expected 'repeat', got 'sequence'",
+        "state_after[program.tree.params.num_cycles] expected -1, got '<MISSING>'"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    },
+    {
+      "case_id": "PnP_19_safety_parallel",
+      "status": "skipped",
+      "elapsed_s": 0.0,
+      "tool_calls": [],
+      "answer": "",
+      "failures": [],
+      "soft_failures": [],
+      "skip_reason": "status=future (use --include-future to run)"
+    },
+    {
+      "case_id": "PnP_20_grip_force",
+      "status": "fail",
+      "elapsed_s": 12.0,
+      "tool_calls": [],
+      "answer": "409 loop detected: tool 'tool_search_code' repeated 8 times in this conversation without recovery",
+      "failures": [
+        "expected tool 'tree_draft_update_node_params' not observed (or never reached 2xx)"
+      ],
+      "soft_failures": [],
+      "skip_reason": ""
+    }
+  ]
+}

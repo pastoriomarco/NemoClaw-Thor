@@ -92,33 +92,53 @@ In 2 of the 10, the model gives up on tool calls and emits a confident prose
 "the program is complete / fully built" final answer **without ever landing the
 inserts**. Silent fabricated success — more dangerous than an honest error.
 
-## Proposed fix #2 (for discussion — NOT yet implemented)
+## Fix #2 — REFRAMED: the normalizer already exists but never fired
 
-The earlier "infer `id` = tool name" idea is **rejected**: the `id` is present,
-and the top-level OpenAI function name is just `tool_call` (the ManyForge tool
-id lives in the envelope's `id`/`args`), so there is nothing to infer — the
-present id is merely mis-separated. The evidence supports a **narrow, tested id
-normalizer at the dispatch boundary** (protocol repair, not intent shaping):
+The "narrow id normalizer at the dispatch boundary" already exists in the
+proxy: `scripts/proxy/vllm-proxy.py` `_NORMALIZE_NESTED_MCP_IDS`
+(`OPENCLAW_PROXY_NORMALIZE_NESTED_MCP_IDS`, default-on, added 2026-06-04). It
+rewrites nested ManyForge ids (bare / dashed / MCP-locator) to canonical
+`manyforge__<underscored>` via text-level regex over the response body before
+OpenClaw's dispatcher parses the tool call. The bridge also carries a primer
+rule (`adapter.py` Rule 0b) telling the model to copy the `name` field verbatim.
 
-- Scope: OpenClaw discovery `tool_call` / `tool_describe` / `tool_search_code`
-  id resolution only.
-- Canonicalize the supplied id: replace `-` with `_` in the tool segment
-  (preserve the `manyforge__` double-underscore prefix); if a bare known tool
-  name is given, prepend `manyforge__`.
-- Resolve against the known tool registry; **repair only if it maps to exactly
-  one known tool.** Reject on unknown / ambiguous / conflicting shapes
-  (no silent guessing).
-- Log every repair as `tool_call_id_repaired` (from→to) for auditability.
+**Yet on this gemma run it never fired.** Proxy mutation log
+(`/tmp/manyforge-assistant-e2e/vllm-proxy.jsonl`, 865 mutation records):
+**zero** nested-id rewrite-rule hits (`strip_mcp_locator` / prepend / dash→
+underscore), while the mangled forms reached the wire anyway —
+`scene-draft-add-object` ×139, `program-read` ×288 (canonical forms also present
+×870/880; gemma emits both). The proxy IS in the path: the in-sandbox gateway's
+`baseUrl` is `http://host.openshell.internal:8000/v1` → proxy `:8000` → model
+`:8050`.
 
-**Before writing it:** confirmed the failing shape from one raw envelope
-(`raw-rejected-tool-ids.log`); the next step is to locate the exact dispatch
-reject point (the `Unknown tool id` thrower) and add the normalizer there with
-a unit test over the captured id variants.
+So fix #2 is **debug-and-extend, not greenfield.** Three concrete defects:
 
-Alternatives considered: **primer hardening** (inject the canonical-id rule) is
-weak/model-specific; **accepting as a gemma limitation** (prefer the direct
-lane, which has no gateway and is PnP-immune) is premature given a clean
-protocol-repair path.
+1. **Non-firing on the response path.** `manyforge__scene-draft-add-object`
+   *should* match `_NESTED_DASHED_ID_PATTERN` (`scene-draft[-_]…`) yet produced
+   0 rewrites. Either the response-side rewrite is not applied under the
+   `compat` proxy profile / streaming shape, or gemma emits the tool call in a
+   shape the regex misses (e.g. id inside chat *content*, not the escaped
+   `\"id\":\"…\"` tool-call arguments string). **Needs the actual response body
+   inspected to see the exact wire shape of the id.**
+2. **Pattern gap — flat/non-draft dashed tools.** The dashed pattern only
+   handles `<surface>-draft-…`; flat tools (`program_read`, `scene_inspect`,
+   `catalog_read`, …) are covered only in underscore form, so
+   `manyforge__program-read` (×288) slips through entirely.
+3. **Code mode entirely unprotected.** In `tool_search_code` the id is a JS
+   string literal (`openclaw.tools.call('tree_draft_insert_node', …)`), not a
+   `"id":"…"` JSON field, so no pattern fires. This is why the **code lane
+   scored 1/19 (5.3%)** — only PnP_01 passed; PnP_02–20 fast-failed in 6–12s.
+
+Recommended sequence: (a) capture one raw *response* body containing a mangled
+id to fix defect 1 at the source; (b) extend the dashed/bare patterns to flat
+tools (defect 2); (c) add a code-surface JS-string id rewrite (defect 3) or
+accept code mode as unviable for gemma. Each rewrite already logs an
+original→rewritten pair for audit.
+
+Alternatives: **primer hardening** (Rule 0b already exists; gemma ignores it) is
+proven weak. **Accept as a gemma limitation** and prefer the **direct lane**
+(no gateway, no nested-id ABI, PnP-immune) remains a legitimate fallback if the
+proxy rewrite can't be made to fire reliably.
 
 ## Reproduce
 

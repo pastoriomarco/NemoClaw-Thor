@@ -1029,12 +1029,21 @@ _NESTED_BARE_ID_PATTERN = _re.compile(
 # `tree_draft-X` form. The pattern now requires at least one dash to
 # appear in the `<surface>(_|-)draft(_|-)` slot, so the all-underscore
 # canonical form is still handled by the bare pattern (no double-firing).
+#
+# 2026-06-05: extended to cover DASHED FLAT (non-draft) read/inspect tools
+# observed on gemma-4-12b: `manyforge__program-read`, `scene-inspect`, etc.
+# The bare pattern already handles their underscore form; this branch adds
+# the dashed form (each contains a dash, so no double-firing with bare).
 _NESTED_DASHED_ID_PATTERN = _re.compile(
     r'"id":"(?P<prefix>manyforge__)?(?P<id>'
     # both separators dash, or first dash + second underscore
     r'(?:tree|scene|program|blackboard)-draft[-_][a-z0-9_-]+'
     # first underscore + second dash
     r'|(?:tree|scene|program|blackboard)_draft-[a-z0-9_-]+'
+    # dashed flat read/inspect tools (no `draft` segment)
+    r'|(?:program|catalog|skills|status)-read'
+    r'|program-validate|scene-inspect|inspect-isaac-scene'
+    r'|deployment-capabilities-read'
     r')"'
 )
 
@@ -1068,6 +1077,10 @@ _NESTED_DASHED_ID_ESCAPED_PATTERN = _re.compile(
     r'(?:tree|scene|program|blackboard)-draft[-_][a-z0-9_-]+'
     # first underscore + second dash
     r'|(?:tree|scene|program|blackboard)_draft-[a-z0-9_-]+'
+    # dashed flat read/inspect tools (no `draft` segment)
+    r'|(?:program|catalog|skills|status)-read'
+    r'|program-validate|scene-inspect|inspect-isaac-scene'
+    r'|deployment-capabilities-read'
     r')\\"'
 )
 
@@ -1180,6 +1193,110 @@ def _normalize_nested_mcp_ids_in_text(txt: str) -> tuple[str, list[dict]]:
     new_txt = _NESTED_DASHED_ID_ESCAPED_PATTERN.sub(_sub_dashed_escaped, new_txt)
     new_txt = _NESTED_BARE_ID_ESCAPED_PATTERN.sub(_sub_bare_escaped, new_txt)
     return new_txt, rewrites
+
+
+# 2026-06-05: streaming-aware nested-id normalizer.
+#
+# Why the text-regex above is not enough. OpenClaw streams chat completions
+# as SSE: `tool_calls[*].function.arguments` is emitted ONE TOKEN PER
+# `data:` event (verified empirically — a 38-char id like
+# `manyforge__scene_draft_add_object` arrives as ~10+ separate chunks,
+# longest fragment ~33 chars, with full chunk boilerplate
+# `"}}]}}],"created":…\n\ndata: {…"arguments":"` between every token). So
+# the complete `"id":"…"` substring exists NOWHERE in the response body and
+# `_normalize_nested_mcp_ids_in_text` matches nothing (0 rewrites across a
+# whole PnP run on gemma-4-12b — see docs/smoke-evidence/.../
+# sse-fragmentation-proof.md).
+#
+# Since the proxy already BUFFERS the full response (see the handler), we can
+# do a structural pass: parse every `data:` chunk, reassemble each
+# (choice_index, tool_call_index) `function.arguments` fragment stream into
+# the complete arguments string, canonicalize the nested ManyForge id in that
+# now-contiguous string by REUSING `_normalize_nested_mcp_ids_in_text`, and —
+# if it changed — write the corrected full arguments into that tool call's
+# FIRST arguments-bearing chunk and blank the rest. OpenClaw concatenates the
+# fragments, so first=full + rest="" yields the canonical assembled id while
+# keeping every other field and chunk boundary byte-identical.
+def _normalize_nested_mcp_ids_streaming(txt: str) -> tuple[str, list[dict]]:
+    """SSE-aware variant of the nested-MCP-id normalizer. Returns
+    (new_txt, rewrites). For non-SSE bodies (no `data:` events) returns the
+    input unchanged with no rewrites — callers use the text-regex variant for
+    the plain-JSON shape. Any structural surprise falls back to no-op so a
+    parse hiccup never corrupts the stream."""
+    if not _NORMALIZE_NESTED_MCP_IDS or not txt or "data:" not in txt:
+        return txt, []
+    try:
+        lines = txt.split("\n")
+        # Collect parsed `data:` chunk objects with their line index.
+        chunks: list[tuple[int, dict]] = []
+        for i, line in enumerate(lines):
+            s = line.strip()
+            if not s.startswith("data:"):
+                continue
+            payload = s[len("data:"):].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                obj = json.loads(payload)
+            except Exception:
+                continue
+            chunks.append((i, obj))
+        if not chunks:
+            return txt, []
+
+        # Accumulate arguments fragments per (choice_index, tool_call_index).
+        # locs records (chunk_pos, choice_index, tc_list_pos) so we can write
+        # the corrected value back into the exact chunk it came from.
+        acc: dict[tuple[int, int], dict] = {}
+        for cpos, (_li, obj) in enumerate(chunks):
+            for choice in obj.get("choices", []) or []:
+                ci = choice.get("index", 0)
+                delta = choice.get("delta") or {}
+                for tpos, tc in enumerate(delta.get("tool_calls", []) or []):
+                    if not isinstance(tc, dict):
+                        continue
+                    ti = tc.get("index", tpos)
+                    fn = tc.get("function") or {}
+                    if "arguments" not in fn:
+                        continue
+                    rec = acc.setdefault((ci, ti), {"frags": [], "locs": []})
+                    rec["frags"].append(fn.get("arguments") or "")
+                    rec["locs"].append((cpos, ci, tpos))
+        if not acc:
+            return txt, []
+
+        all_rewrites: list[dict] = []
+        changed_chunks: set[int] = set()
+        for (_ci, _ti), rec in acc.items():
+            assembled = "".join(rec["frags"])
+            if not assembled or '"id"' not in assembled:
+                continue
+            new_assembled, rw = _normalize_nested_mcp_ids_in_text(assembled)
+            if not rw or new_assembled == assembled:
+                continue
+            all_rewrites.extend(rw)
+            for n, (cpos, ci, tpos) in enumerate(rec["locs"]):
+                _li, obj = chunks[cpos]
+                for choice in obj.get("choices", []) or []:
+                    if choice.get("index", 0) != ci:
+                        continue
+                    tcs = (choice.get("delta") or {}).get("tool_calls") or []
+                    if 0 <= tpos < len(tcs) and isinstance(tcs[tpos], dict) \
+                            and "function" in tcs[tpos]:
+                        tcs[tpos]["function"]["arguments"] = (
+                            new_assembled if n == 0 else ""
+                        )
+                changed_chunks.add(cpos)
+
+        if not all_rewrites:
+            return txt, []
+        for cpos in changed_chunks:
+            li, obj = chunks[cpos]
+            lines[li] = "data: " + json.dumps(obj, separators=(",", ":"))
+        return "\n".join(lines), all_rewrites
+    except Exception:
+        # Never let a normalization bug corrupt the response stream.
+        return txt, []
 
 # 2026-06-02: response-side reasoning→content promotion.
 # When vLLM is launched with --reasoning-parser (e.g. qwen3 for cosmos),
@@ -2245,7 +2362,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
             try:
                 resp_text = (resp_body.decode("utf-8") if isinstance(resp_body, bytes)
                              else (resp_body or ""))
-                new_text, nested_id_rewrites = _normalize_nested_mcp_ids_in_text(resp_text)
+                # SSE responses fragment `function.arguments` one token per
+                # `data:` event, so the contiguous `"id":"…"` the text-regex
+                # needs never appears in the body. Use the structural,
+                # reassemble-then-normalize variant for the streaming shape;
+                # fall back to the text-regex for plain-JSON bodies.
+                if "data:" in resp_text:
+                    new_text, nested_id_rewrites = _normalize_nested_mcp_ids_streaming(resp_text)
+                else:
+                    new_text, nested_id_rewrites = _normalize_nested_mcp_ids_in_text(resp_text)
                 if nested_id_rewrites:
                     resp_body = new_text.encode("utf-8")
             except Exception:
