@@ -33,14 +33,57 @@ stale.
 
 ---
 
-## 0. Host prerequisites
-- Docker + NVIDIA runtime (`default-runtime: nvidia`), usable **without sudo**.
-- NVMe at `/mnt/nova_ssd`, Docker `data-root` = `/mnt/nova_ssd/docker`, and the
-  bind-mount storage layout (`~/.cache`, `~/.local`, `/usr/local`, `/tmp`, … →
-  `/mnt/nova_ssd`). This is **step 0** and is documented in
-  [`isaac_ros_custom_bringup/jetson_orin_storage/README.md`](../isaac_ros_custom_bringup/jetson_orin_storage/README.md)
-  (or the GitHub fallback above if the sibling checkout is absent).
-- Passwordless `sudo` (used for `apt`, a bind mount, and `drop_caches`).
+## 0. Host storage and runtime prerequisites
+
+The canonical, command-heavy NVMe host-storage recipe lives in
+[`isaac_ros_custom_bringup/jetson_orin_storage/README.md`](../isaac_ros_custom_bringup/jetson_orin_storage/README.md)
+(or the GitHub fallback above if the sibling checkout is absent). This section
+is the compact contract that NemoClaw/OpenShell/OpenClaw depends on.
+
+Required host contract:
+
+- `/mnt/nova_ssd` exists, is persistent in `/etc/fstab`, and has enough free
+  space for Docker images, GGUF/model caches, OpenClaw/NemoClaw state, and temp
+  files.
+- Docker uses the NVMe: `"data-root": "/mnt/nova_ssd/docker"` in
+  `/etc/docker/daemon.json`, NVIDIA is the default runtime, and the user can run
+  Docker **without sudo**.
+- Large user/toolchain paths are NVMe-backed using bind mounts, not symlinks:
+  at minimum `~/.cache`, `~/.local`, `/usr/local`, `/tmp`, and `/var/tmp`.
+- Model/cache directories are on the NVMe and owned by the user:
+  `/mnt/nova_ssd/hf-cache-orin`, `/mnt/nova_ssd/llama-cpp-cache`, and
+  `/mnt/nova_ssd/opt`.
+- `~/.nemoclaw` is a real directory or bind mount backed by NVMe, never a
+  symlink. NemoClaw v0.0.59 rejects a symlinked config directory as a possible
+  symlink attack.
+- Passwordless `sudo` is available for the setup flow (`apt`, one-time bind
+  mounts, and `drop_caches`).
+
+Quick verification:
+
+```bash
+findmnt /mnt/nova_ssd
+findmnt -T "$HOME/.cache"
+findmnt -T "$HOME/.local"
+findmnt -T "$HOME/.nemoclaw" || true
+test ! -L "$HOME/.nemoclaw"
+
+docker info | grep -E 'Docker Root Dir|Default Runtime|Runtimes|Storage Driver'
+df -h / /mnt/nova_ssd
+ls -ld /mnt/nova_ssd \
+       /mnt/nova_ssd/hf-cache-orin \
+       /mnt/nova_ssd/llama-cpp-cache \
+       /mnt/nova_ssd/opt \
+       /mnt/nova_ssd/nemoclaw-state/nemoclaw
+```
+
+Expected checks:
+
+- `findmnt /mnt/nova_ssd` shows the NVMe mount.
+- `docker info` shows `Docker Root Dir: /mnt/nova_ssd/docker` and
+  `Default Runtime: nvidia`.
+- `test ! -L "$HOME/.nemoclaw"` exits `0`.
+- The NVMe cache/state directories are writable by the current user.
 
 ---
 
