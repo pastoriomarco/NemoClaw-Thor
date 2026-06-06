@@ -2270,6 +2270,168 @@ def _history_budget_error_body(
     ).encode("utf-8")
 
 
+# 2026-06-06: history-budget TRIM ladder (fail-open). Replaces the old hard-413
+# when a chat request exceeds MANYFORGE_PROXY_MAX_REQUEST_CHARS. The openclaw
+# agent loop accumulates large, RE-FETCHABLE tool results in history (a single
+# `catalog_read` dump was ~55% of a 199k request) and re-ships them every turn,
+# ballooning the prompt. Rejecting the turn kills completable cases (verified:
+# guard@200k dropped the PnP block from pass->fail). Instead the proxy SHEDS
+# content the model can simply request again, in escalating rungs, then forwards.
+#
+# Safety contract: only RE-FETCHABLE READ results are elided (the model can
+# re-call the tool); mutation/state results are NEVER touched. Message
+# envelopes are preserved (role + tool_call_id) — only `content` is replaced
+# with a short stub — so OpenAI tool_call<->tool_result pairing stays valid.
+#
+# Rung 1 (keep-latest read elision) always runs; rungs 2-3 escalate only while
+# still over budget. Rung 4 (oldest-turn truncation + composer warning) + the
+# manual reset button are Phase B.
+_REFETCHABLE_READ_TOOLS = frozenset({
+    "catalog_read", "program_read", "status_read", "skills_read",
+    "program_validate", "scene_inspect", "inspect_isaac_scene",
+    "deployment_capabilities_read",
+})
+# Don't parse/elide tool results smaller than this — the bloat is the big dumps;
+# small reads aren't worth the churn.
+_MIN_ELIDABLE_READ_CHARS = 2000
+_READ_ELIDED_STUB = (
+    '{"elided":true,"reason":"history_budget","note":"re-fetchable read result '
+    'removed to fit the history budget; call the tool again if you still need it"}'
+)
+_REASONING_ELIDED_STUB = "[reasoning elided to fit history budget]"
+
+
+def _content_len(message: dict) -> int:
+    c = message.get("content")
+    if isinstance(c, str):
+        return len(c)
+    if c is None:
+        return 0
+    try:
+        return len(json.dumps(c, default=str))
+    except Exception:
+        return len(str(c))
+
+
+def _refetchable_read_kind(message: object) -> str | None:
+    """If ``message`` is a tool result produced by a re-fetchable read tool and
+    is big enough to be worth eliding, return the bare tool name; else None.
+    The producing tool is read from the OpenClaw result envelope
+    (``{"tool":{"id"/"name":"...manyforge__<tool>"}}``)."""
+    if not isinstance(message, dict) or message.get("role") != "tool":
+        return None
+    if _content_len(message) < _MIN_ELIDABLE_READ_CHARS:
+        return None
+    content = message.get("content")
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except Exception:
+            return None
+    if not isinstance(content, dict):
+        return None
+    tool = content.get("tool")
+    name = (tool.get("name") or tool.get("id")) if isinstance(tool, dict) else None
+    if not isinstance(name, str):
+        return None
+    bare = name.rsplit(":", 1)[-1]
+    if bare.startswith("manyforge__"):
+        bare = bare[len("manyforge__"):]
+    return bare if bare in _REFETCHABLE_READ_TOOLS else None
+
+
+def _trim_history_to_budget(body_json: dict, max_chars: int) -> tuple[list[str], int]:
+    """Fail-open history trim ladder; mutates ``body_json['messages']`` in
+    place. Returns ``(rungs_applied, chars_shed)``. Rung 1 always runs;
+    rungs 2-3 escalate only while still over budget."""
+    messages = body_json.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return [], 0
+
+    def _size() -> int:
+        return len(json.dumps(body_json, separators=(",", ":")))
+
+    before = _size()
+    applied: list[str] = []
+
+    by_kind: dict[str, list[int]] = {}
+    for i, m in enumerate(messages):
+        k = _refetchable_read_kind(m)
+        if k:
+            by_kind.setdefault(k, []).append(i)
+
+    def _stub(idx: int, stub: str) -> bool:
+        m = messages[idx]
+        if not isinstance(m, dict) or m.get("content") == stub:
+            return False
+        m["content"] = stub
+        return True
+
+    # Rung 1 (always): stub OLD re-fetchable reads, keep the latest of each kind.
+    n1 = sum(_stub(idx, _READ_ELIDED_STUB)
+             for idxs in by_kind.values() for idx in idxs[:-1])
+    if n1:
+        applied.append(f"stub_old_reads={n1}")
+    if _size() <= max_chars:
+        return applied, before - _size()
+
+    # Rung 2: stub ALL re-fetchable reads (including the latest of each kind).
+    n2 = sum(_stub(idxs[-1], _READ_ELIDED_STUB) for idxs in by_kind.values())
+    if n2:
+        applied.append(f"stub_all_reads={n2}")
+    if _size() <= max_chars:
+        return applied, before - _size()
+
+    # Rung 3: stub OLD assistant reasoning (keep tool_calls + latest reasoning).
+    asst = [i for i, m in enumerate(messages)
+            if isinstance(m, dict) and m.get("role") == "assistant"]
+    n3 = 0
+    for idx in asst[:-1]:
+        m = messages[idx]
+        c = m.get("content")
+        if isinstance(c, str) and c and c != _REASONING_ELIDED_STUB:
+            m["content"] = _REASONING_ELIDED_STUB
+            n3 += 1
+    if n3:
+        applied.append(f"stub_old_reasoning={n3}")
+    if _size() <= max_chars:
+        return applied, before - _size()
+
+    # Rung 4 (last resort): drop the OLDEST messages (after a leading system
+    # prompt) until under budget, then drop any tool result whose assistant
+    # tool_call no longer survives so the remaining sequence stays a valid
+    # tool_call<->result sequence. This sheds real STATE the model can't
+    # re-fetch, so it is last and the caller raises a user-facing warning.
+    head = (1 if messages and isinstance(messages[0], dict)
+            and messages[0].get("role") == "system" else 0)
+    dropped = 0
+    while _size() > max_chars and (len(messages) - head) > 2:
+        del messages[head]
+        dropped += 1
+    orphans = 0
+    if dropped:
+        live_ids = {
+            tc.get("id")
+            for m in messages if isinstance(m, dict) and m.get("role") == "assistant"
+            for tc in (m.get("tool_calls") or []) if isinstance(tc, dict)
+        }
+        kept = []
+        for m in messages:
+            if (isinstance(m, dict) and m.get("role") == "tool"
+                    and m.get("tool_call_id")
+                    and m.get("tool_call_id") not in live_ids):
+                orphans += 1
+                continue
+            kept.append(m)
+        if orphans:
+            messages[:] = kept
+        applied.append(
+            f"truncate_oldest={dropped}" + (f"+orphans={orphans}" if orphans else "")
+        )
+
+    return applied, before - _size()
+
+
 def _append_log(record: dict) -> None:
     line = json.dumps(record, sort_keys=False, default=str)
     with _LOG_LOCK:
@@ -2369,36 +2531,41 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "trigger_info": loop_trigger_info,
             })
 
-        if (
-            _MAX_REQUEST_CHARS > 0
-            and path.endswith("/v1/chat/completions")
-            and len(body) > _MAX_REQUEST_CHARS
-        ):
+        if _MAX_REQUEST_CHARS > 0 and path.endswith("/v1/chat/completions"):
+            # FAIL-OPEN: shed re-fetchable content (rungs 1-3) then HARD-TRIM the
+            # oldest content (rung 4) to fit the budget. The proxy NEVER rejects:
+            # if a single recent message still exceeds budget after the hard
+            # trim, we forward it anyway and warn -- the model handles its own
+            # context window; we do not pre-fail the turn. (The budget is
+            # auto-sized to ~90% of the model context by the launcher, so a
+            # residual over-budget is rare and still within the actual window.)
             body_json, body_raw = _try_parse_json(body)
-            error_body = _history_budget_error_body(
-                body_chars=len(body),
-                max_chars=_MAX_REQUEST_CHARS,
-                body_json=body_json,
-            )
-            self.send_response(413)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(error_body)))
-            self.end_headers()
-            self.wfile.write(error_body)
-            self.wfile.flush()
-            _append_log({
-                "ts": int(time.time() * 1000),
-                "event": "proxy_history_budget_exceeded",
-                "path": path,
-                "status": 413,
-                "body_chars": len(body),
-                "max_request_chars": _MAX_REQUEST_CHARS,
-                "message_stats": _message_stats(body_json),
-                "body_raw_excerpt": None
-                if body_json is not None
-                else _truncate(body_raw, 2048),
-            })
-            return
+            if isinstance(body_json, dict):
+                rungs, shed = _trim_history_to_budget(body_json, _MAX_REQUEST_CHARS)
+                if rungs:
+                    body = json.dumps(body_json, separators=(",", ":")).encode("utf-8")
+                still_over = len(body) > _MAX_REQUEST_CHARS
+                # Rung 4 (or a residual over-budget) forgets real state -> a
+                # user-facing warning the composer surfaces in its AI section.
+                truncated = still_over or any(
+                    r.startswith("truncate_oldest") for r in rungs)
+                if rungs or still_over:
+                    _append_log({
+                        "ts": int(time.time() * 1000),
+                        "event": "proxy_history_truncated" if truncated
+                        else "proxy_history_trimmed",
+                        "path": path,
+                        "rungs": rungs,
+                        "chars_shed": shed,
+                        "body_chars_after": len(body),
+                        "max_request_chars": _MAX_REQUEST_CHARS,
+                        "stillOverAfterHardTrim": still_over,
+                        "userWarning": (
+                            "Conversation history was trimmed/truncated to fit "
+                            "the model context window; older steps may be "
+                            "forgotten. Reset the conversation if results degrade."
+                        ) if truncated else None,
+                    })
 
         forward_headers["Content-Length"] = str(len(body))
 
