@@ -95,7 +95,7 @@ sandbox_exec_retry() {
       printf '%s\n' "${out}"
       return 0
     fi
-    if ! sandbox_exec_is_retryable_error "${out}"; then
+    if [[ "${SANDBOX_EXEC_FORCE_RETRY:-0}" != "1" ]] && ! sandbox_exec_is_retryable_error "${out}"; then
       printf '  ✗ %s failed with a non-retryable error (rc=%d)\n' "${label}" "${rc}" >&2
       printf '%s\n' "${out}" | tail -10 | sed 's/^/    /' >&2
       return "${rc}"
@@ -379,6 +379,31 @@ sandbox_bash_retry() {
   sandbox_exec_retry "${label}" bash -c "${script}"
 }
 
+# Like sandbox_bash_retry, but retries on ANY non-zero exit — not only the
+# infra-transient signatures matched by sandbox_exec_is_retryable_error. Use
+# ONLY for IDEMPOTENT commands. Motivating case: the openclaw.json writers
+# below (`openclaw mcp set`, and the python read-modify-write edits for the
+# agent profile / model.reasoning / compaction route) race the OpenClaw
+# gateway's hot-reload of openclaw.json triggered by the Step 1b/1c patches.
+# That race surfaces as a transient rc=1 whose text matches no infra pattern,
+# so plain sandbox_bash_retry treats it as non-retryable and aborts the whole
+# launch; re-running the same idempotent write a moment later succeeds. A
+# genuinely broken command still fails after SANDBOX_EXEC_ATTEMPTS (surfacing
+# its rc) — just more slowly.
+sandbox_bash_retry_idempotent() {
+  local label="$1"
+  local script="$2"
+  local rc
+  local prev="${SANDBOX_EXEC_FORCE_RETRY:-0}"
+  SANDBOX_EXEC_FORCE_RETRY=1
+  set +e
+  sandbox_exec_retry "${label}" bash -c "${script}"
+  rc=$?
+  set -e
+  SANDBOX_EXEC_FORCE_RETRY="${prev}"
+  return "${rc}"
+}
+
 sandbox_bash_optional() {
   local label="$1"
   local script="$2"
@@ -501,7 +526,7 @@ MCP_CONFIG_JSON=$(cat <<JSON
 {"command":"python3","args":["${MCP_BRIDGE_PATH}"],"env":{"MANYFORGE_COMPOSER_BASE":"${COMPOSER_BASE}","MANYFORGE_ASSISTANT_MODE":"${ASSISTANT_MODE}","MANYFORGE_PRINCIPAL":"${MCP_PRINCIPAL}","HTTP_PROXY":"${HTTP_PROXY_VAL}","HTTPS_PROXY":"${HTTP_PROXY_VAL}","NO_PROXY":"${NO_PROXY_VAL}","http_proxy":"${HTTP_PROXY_VAL}","https_proxy":"${HTTP_PROXY_VAL}","no_proxy":"${NO_PROXY_VAL}"}}
 JSON
 )
-sandbox_bash_retry "register manyforge MCP server" "openclaw mcp set manyforge '${MCP_CONFIG_JSON}'" >/dev/null
+sandbox_bash_retry_idempotent "register manyforge MCP server" "openclaw mcp set manyforge '${MCP_CONFIG_JSON}'" >/dev/null
 ok "MCP server 'manyforge' registered (mode: ${ASSISTANT_MODE}; principal: ${MCP_PRINCIPAL})"
 sandbox_bash_optional "show manyforge MCP server" "openclaw mcp show manyforge" 2>&1 | sed 's/^/    /'
 
@@ -592,7 +617,7 @@ os.replace(tmp, path)
 print("manyforge-composer")
 PY
 )"
-sandbox_bash_retry "install manyforge-composer agent profile" "printf %s '${PROFILE_SCRIPT_B64}' | base64 -d | python3 -" >/dev/null
+sandbox_bash_retry_idempotent "install manyforge-composer agent profile" "printf %s '${PROFILE_SCRIPT_B64}' | base64 -d | python3 -" >/dev/null
 ok "agent profile 'manyforge-composer' installed"
 sandbox_settle "sandbox settle after agent profile install"
 sandbox_bash_optional "list OpenClaw agents" "openclaw agents list --json 2>/dev/null | head -c 1200 || openclaw agents list" 2>&1 | sed 's/^/    /'
@@ -714,7 +739,7 @@ with open(tmp, "w", encoding="utf-8") as handle:
 os.replace(tmp, path)
 PY
 )"
-sandbox_bash_retry "enable OpenClaw model.reasoning" "printf %s '${REASONING_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
+sandbox_bash_retry_idempotent "enable OpenClaw model.reasoning" "printf %s '${REASONING_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
 ok "OpenClaw model.reasoning=true ensured on active inference model"
 
 # 2026-05-10 (iter 32): route OpenClaw's compaction calls through the
@@ -766,7 +791,7 @@ with open(tmp, "w", encoding="utf-8") as handle:
 os.replace(tmp, path)
 PY
 )"
-sandbox_bash_retry "route OpenClaw compaction model" "printf %s '${COMPACTION_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
+sandbox_bash_retry_idempotent "route OpenClaw compaction model" "printf %s '${COMPACTION_SCRIPT_B64}' | base64 -d | python3 -" 2>&1 | sed 's/^/    /'
 ok "OpenClaw agents.defaults.compaction.model routed to the active inference model"
 
 step "Composer reachability check (mode-scoped manifest)"
