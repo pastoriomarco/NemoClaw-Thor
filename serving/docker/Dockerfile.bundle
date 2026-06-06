@@ -16,22 +16,32 @@
 # Running on a Thor:
 #   docker run --rm --runtime nvidia --gpus all --ipc=host --network host \
 #     -e NVIDIA_DISABLE_REQUIRE=true \
-#     -e VLLM_MODEL=Kbenkhaled/Qwen3.5-35B-A3B-NVFP4 \
+#     -e VLLM_MODEL=nvidia/Qwen3.6-35B-A3B-NVFP4 \
 #     -v ~/my-hf-cache:/data/models/huggingface \
 #     -p 8000:8000 \
-#     nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132-bundled
+#     nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132-bundled
 #
 # Or with docker compose — see bundle-compose.yml
 
-ARG BASE_IMAGE=nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132
+ARG BASE_IMAGE=nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132
 FROM ${BASE_IMAGE}
 
 # ── SM110 NVFP4 runtime environment (baked in, no need to pass -e flags) ───
 ENV NVIDIA_DISABLE_REQUIRE=true
+# Aligned to the qwen3.6-35b-a3b-nvfp4-nvidia profile (NVIDIA Spark recipe for
+# the W4A16 NVFP4 quant). FlashInfer NVFP4 MoE is OFF: W4A16 has 16-bit
+# activations that no FlashInfer NVFP4 MoE backend supports — vLLM uses MARLIN
+# (--moe-backend marlin in the entrypoint). REQUIRES a base image at vLLM
+# >= 3fd9d2d35 (PR #42124, ModelOpt LM-head support); an older base crashes on
+# load with lm_head.input_scale ValueError.
 ENV VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass
-ENV VLLM_USE_FLASHINFER_MOE_FP4=1
-ENV VLLM_FLASHINFER_MOE_BACKEND=throughput
-ENV VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel
+ENV VLLM_USE_FLASHINFER_MOE_FP4=0
+ENV VLLM_USE_FLASHINFER_MOE_FP16=0
+ENV VLLM_FP8_MOE_BACKEND=flashinfer_cutlass
+ENV FLASHINFER_DISABLE_VERSION_CHECK=1
+ENV CUTE_DSL_ARCH=sm_110a
+ENV VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel,CutlassInt8ScaledMMLinearKernel,CutlassFp8BlockScaledMMKernel
+ENV ENABLE_TRIATTENTION=0
 ENV HF_HOME=/data/models/huggingface
 ENV HF_HUB_CACHE=/data/models/huggingface/hub
 ENV TRANSFORMERS_CACHE=/data/models/huggingface/hub
@@ -47,16 +57,21 @@ COPY flashinfer-cache/ /root/.cache/flashinfer/
 # If /root/.cache/vllm is mounted as a volume, the volume takes precedence.
 COPY vllm-cache/ /root/.cache/vllm/
 
-# ── Default command: serve Qwen3.5-35B-A3B-NVFP4 ──────────────────────────
+# ── Default command: serve Qwen3.6-35B-A3B-NVFP4 ──────────────────────────
 # Override VLLM_MODEL to serve a different model.
 # Override individual args via CMD or entrypoint.
-ENV VLLM_MODEL=Kbenkhaled/Qwen3.5-35B-A3B-NVFP4
+# Defaults mirror the qwen3.6-35b-a3b-nvfp4-nvidia profile (256K ctx, 0.55
+# mem-util, 4 seqs). NOTE: that profile runs --enforce-eager, so the baked
+# Torch AOT compile cache is unused for qwen3.6 — regenerate the JIT caches
+# (run qwen3.6 once, then ./bundle.sh) before relying on fast startup; any
+# pre-existing baked caches are Qwen3.5-built and won't match.
+ENV VLLM_MODEL=nvidia/Qwen3.6-35B-A3B-NVFP4
 ENV VLLM_PORT=8000
 ENV VLLM_HOST=0.0.0.0
-ENV VLLM_MAX_MODEL_LEN=65536
+ENV VLLM_MAX_MODEL_LEN=262144
 ENV VLLM_KV_CACHE_DTYPE=fp8
-ENV VLLM_GPU_MEM_UTIL=0.8
-ENV VLLM_MAX_NUM_SEQS=20
+ENV VLLM_GPU_MEM_UTIL=0.55
+ENV VLLM_MAX_NUM_SEQS=4
 
 # Wrapper entrypoint that converts env vars to vllm serve flags.
 COPY bundle-entrypoint.sh /workspace/bundle-entrypoint.sh

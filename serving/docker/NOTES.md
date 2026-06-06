@@ -290,7 +290,7 @@ Total first launch: ~50-60 min. Subsequent launches: ~4-6 min.
 | Docker image | ~16 GiB | Docker daemon | Contains vLLM + FlashInfer compiled for SM110a |
 | FlashInfer JIT cache | ~889 MB | `~/thor-flashinfer-cache/` | GEMM/MoE kernel cubins; without this, first launch takes ~50 min |
 | Torch AOT compile cache | ~2 GiB | `~/thor-vllm-cache/` | Compiled model graph; without this, first launch takes ~50 min |
-| Model weights | ~22 GiB | `~/thor-hf-cache/hub/models--Kbenkhaled--Qwen3.5-35B-A3B-NVFP4/` | Can re-download from HuggingFace instead |
+| Model weights | ~22 GiB | `~/thor-hf-cache/hub/models--nvidia--Qwen3.6-35B-A3B-NVFP4/` | Can re-download from HuggingFace instead |
 
 ### Option A — Push image to a registry (recommended)
 
@@ -335,12 +335,12 @@ tar xzf nemoclaw-thor-jit-caches.tar.gz -C $HOME
 
 ```bash
 # On source Thor: bundle model (22 GiB)
-tar czf qwen3.5-35b-a3b-nvfp4-weights.tar.gz \
-    -C ~/thor-hf-cache/hub models--Kbenkhaled--Qwen3.5-35B-A3B-NVFP4
+tar czf qwen3.6-35b-a3b-nvfp4-weights.tar.gz \
+    -C ~/thor-hf-cache/hub models--nvidia--Qwen3.6-35B-A3B-NVFP4
 
 # On target Thor: restore
 mkdir -p ~/thor-hf-cache/hub
-tar xzf qwen3.5-35b-a3b-nvfp4-weights.tar.gz -C ~/thor-hf-cache/hub
+tar xzf qwen3.6-35b-a3b-nvfp4-weights.tar.gz -C ~/thor-hf-cache/hub
 ```
 
 ### Summary: minimal transfer for instant startup on target

@@ -11,7 +11,7 @@
 #   ./bundle.sh --tag my-org/my-image:v1     # custom output tag
 #
 # Prerequisites:
-#   - nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132 must exist locally
+#   - nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132 must exist locally
 #   - ~/thor-flashinfer-cache must be populated (run the model at least once)
 #   - ~/thor-vllm-cache must be populated (run the model at least once)
 set -euo pipefail
@@ -19,8 +19,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
-BASE_IMAGE="nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132"
-BUNDLE_TAG="nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132-bundled"
+BASE_IMAGE="nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132"
+BUNDLE_TAG="nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132-bundled"
 PUSH_REGISTRY=""
 FLASHINFER_CACHE="${HOME}/thor-flashinfer-cache"
 VLLM_CACHE="${HOME}/thor-vllm-cache"
@@ -51,7 +51,7 @@ fi
 if [ ! -d "$FLASHINFER_CACHE" ] || [ -z "$(ls -A "$FLASHINFER_CACHE" 2>/dev/null)" ]; then
     echo "ERROR: FlashInfer cache is empty or missing: $FLASHINFER_CACHE" >&2
     echo "  Start the model at least once to populate the JIT caches:" >&2
-    echo "  ./serving/start-model.sh qwen3.5-35b-a3b-nvfp4" >&2
+    echo "  ./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-nvidia" >&2
     exit 1
 fi
 
@@ -114,7 +114,7 @@ echo "Size:  $(docker image inspect "${BUNDLE_TAG}" --format '{{.Size}}' | numfm
 
 # ── Push ──────────────────────────────────────────────────────────────────────
 if [ -n "$PUSH_REGISTRY" ]; then
-    REMOTE_TAG="${PUSH_REGISTRY}:main-g58a249bc6-thor-sm110-cu132-bundled"
+    REMOTE_TAG="${PUSH_REGISTRY}:main-g3fd9d2d35-thor-sm110-cu132-bundled"
     echo ""
     echo "Tagging as: ${REMOTE_TAG}"
     docker tag "${BUNDLE_TAG}" "${REMOTE_TAG}"

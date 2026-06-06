@@ -12,18 +12,18 @@
 
 services:
   vllm:
-    image: nemoclaw-thor/vllm:main-g58a249bc6-thor-sm110-cu132-bundled
+    image: nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132-bundled
     runtime: nvidia
     ipc: host
     network_mode: host
     environment:
       # Model selection
-      VLLM_MODEL: ${VLLM_MODEL:-Kbenkhaled/Qwen3.5-35B-A3B-NVFP4}
-      VLLM_SERVED_MODEL_NAME: ${VLLM_SERVED_MODEL_NAME:-Qwen3.5-35B-A3B-NVFP4}
+      VLLM_MODEL: ${VLLM_MODEL:-nvidia/Qwen3.6-35B-A3B-NVFP4}
+      VLLM_SERVED_MODEL_NAME: ${VLLM_SERVED_MODEL_NAME:-Qwen3.6-35B-A3B-NVFP4}
       VLLM_PORT: ${VLLM_PORT:-8000}
-      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-65536}
-      VLLM_GPU_MEM_UTIL: ${VLLM_GPU_MEM_UTIL:-0.8}
-      VLLM_MAX_NUM_SEQS: ${VLLM_MAX_NUM_SEQS:-20}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-262144}
+      VLLM_GPU_MEM_UTIL: ${VLLM_GPU_MEM_UTIL:-0.55}
+      VLLM_MAX_NUM_SEQS: ${VLLM_MAX_NUM_SEQS:-4}
       VLLM_API_KEY: ${VLLM_API_KEY:-}
       # SM110 flags already baked into image ENV — no need to set here
       NVIDIA_VISIBLE_DEVICES: all
