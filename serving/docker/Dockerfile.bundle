@@ -23,7 +23,7 @@
 #
 # Or with docker compose — see bundle-compose.yml
 
-ARG BASE_IMAGE=nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132
+ARG BASE_IMAGE=nemoclaw-thor/vllm:latest
 FROM ${BASE_IMAGE}
 
 # ── SM110 NVFP4 runtime environment (baked in, no need to pass -e flags) ───

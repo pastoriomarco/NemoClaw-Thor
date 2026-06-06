@@ -11,7 +11,8 @@
 #   ./bundle.sh --tag my-org/my-image:v1     # custom output tag
 #
 # Prerequisites:
-#   - nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132 must exist locally
+#   - nemoclaw-thor/vllm:latest must exist locally (must be a vLLM >= 3fd9d2d35
+#     build — PR #42124, ModelOpt LM-head support — or qwen3.6 NVFP4 load crashes)
 #   - ~/thor-flashinfer-cache must be populated (run the model at least once)
 #   - ~/thor-vllm-cache must be populated (run the model at least once)
 set -euo pipefail
@@ -19,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
-BASE_IMAGE="nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132"
+BASE_IMAGE="nemoclaw-thor/vllm:latest"
 BUNDLE_TAG="nemoclaw-thor/vllm:main-g3fd9d2d35-thor-sm110-cu132-bundled"
 PUSH_REGISTRY=""
 FLASHINFER_CACHE="${HOME}/thor-flashinfer-cache"
