@@ -593,62 +593,13 @@ class CaseResult:
     skip_reason: str = ""
 
 
-# 2026-06-03: opt-in chain-state contamination detector.
-#
-# Symptom this detector addresses: a chained-case run where one case
-# triggers the bridge's `loop_reflect` stop ("I called X N times with
-# IDENTICAL arguments... Stopping to prevent a runaway loop") leaves
-# the SAME conversationId carrying that canned answer in
-# `chain_state`. Every subsequent chain step's `send_chat` returns
-# the same stuck answer in ~0.1s without ever invoking the model.
-# Observed 2026-06-03 Phase 0 OpenClaw run: 16 PnP_* cases from
-# PnP_04 onward all failed at exactly 0.10s with identical loop-break
-# content, contributing -16 cases to the apparent pass rate without
-# any model involvement.
-#
-# Behavior when enabled (`MANYFORGE_SMOKE_DETECT_CHAIN_CONTAMINATION=1`):
-#   1. After each case returns, check the model's `answer` against
-#      the bridge's loop-break sentinel. Detection is a literal
-#      substring match on "Stopping to prevent a runaway loop" —
-#      the bridge sentinel emitted at
-#      openclaw_assistant_bridge/service.py:778. False-positive risk
-#      is essentially zero (the model would have to coincidentally
-#      output that exact phrase verbatim).
-#   2. Pop the contaminated chain's entry from `chain_state` so the
-#      NEXT chain step gets a fresh `conversationId` and re-engages
-#      the model rather than echoing the stuck answer.
-#   3. Record the contaminated case with `status="contaminated"`
-#      (distinct from "fail" so the harness can report it as a
-#      runner-side issue, not a model miss).
-#
-# Behavior when disabled (default): identical to the legacy runner —
-# contaminated cases continue to be counted as `"fail"`. This makes
-# the feature strictly opt-in for the rerun, so any historical
-# baseline numbers measured under the old behavior remain
-# reproducible by simply not setting the env.
-_DETECT_CHAIN_CONTAMINATION = bool(int(
-    os.environ.get("MANYFORGE_SMOKE_DETECT_CHAIN_CONTAMINATION", "0") or "0"
-))
-# Two sentinels, both load-bearing fragments of the bridge's
-# same_args / same_tool loop-break templates
-# (openclaw_assistant_bridge/service.py:776-790). The runtime
-# detection runs on the FULL pre-truncation answer so either match
-# is sufficient. The shorter "IDENTICAL arguments" / "I have called"
-# fragments also survive the answer[:200] truncation that lands in
-# the persisted JSON, so the same predicate can be replayed offline
-# against archived reports without re-running the smoke. False
-# positives would require the model to output one of these literal
-# phrases verbatim, which the bridge prompt never asks for.
-_CHAIN_CONTAMINATION_SENTINELS = (
-    "with IDENTICAL arguments",   # same_args loop-break
-    "I have called `",            # same_tool loop-break opener
-)
-
-
-def _looks_like_chain_contamination(answer: str | None) -> bool:
-    if not answer:
-        return False
-    return any(s in answer for s in _CHAIN_CONTAMINATION_SENTINELS)
+# (Removed 2026-06-07) The opt-in chain-state contamination detector
+# (`MANYFORGE_SMOKE_DETECT_CHAIN_CONTAMINATION`) only handled the narrow
+# loop-break-sentinel poisoning case. It is superseded by the self-healing chain
+# mechanism (restore canonical state + splice a golden turn on ANY chained-step
+# failure) — see self_heal.py + docs/self-healing-chain-harness.md. The
+# `"contaminated"` status is retained in the marker/summary tables as an inert
+# vestige (nothing emits it now).
 
 
 def assert_tools(case: dict, observed: list[dict], failures: list[str],
@@ -1148,34 +1099,10 @@ def run_case(case: dict, composer: str, default_pre: dict,
                     recovered = True
                     failures = []  # cleared; case recovered
 
-    # 2026-06-03 opt-in: chain-contamination detection. See module-level
-    # `_DETECT_CHAIN_CONTAMINATION` for rationale. Runs AFTER fail/pass
-    # classification so the existing logic is untouched when disabled;
-    # when enabled, contaminated cases override the classification to
-    # `"contaminated"` and free the chain so the next step gets a fresh
-    # conversationId. The model was never actually invoked for a
-    # contaminated case, so reporting it as a model miss is dishonest.
-    if (_DETECT_CHAIN_CONTAMINATION
-            and chain_id
-            and _looks_like_chain_contamination(answer)):
-        # Pop the stuck conversationId so the next chain step is a clean
-        # re-engagement with the model rather than another echo of the
-        # canned loop-break answer.
-        chain_state.pop(chain_id, None)
-        return CaseResult(
-            case_id=cid,
-            status="contaminated",
-            elapsed_s=round(elapsed, 1),
-            tool_calls=observed,
-            answer=answer[:200],
-            failures=[],
-            soft_failures=[],
-            skip_reason=(
-                "chain conversation echoed bridge loop-break sentinel; "
-                "model not invoked. Chain reset for the next step."
-            ),
-        )
-
+    # (The opt-in chain-contamination detector was removed 2026-06-07 — superseded
+    # by the self-healing chain mechanism, which restores canonical state + splices a
+    # golden turn on ANY chained-step failure, not just the narrow loop-break case.
+    # See self_heal.py + docs/self-healing-chain-harness.md.)
     if failures:
         st = "fail"
     elif recovered:
@@ -1260,6 +1187,24 @@ def main() -> int:
             "agent-loop history helps or hurts on the PnP build chain."
         ),
     )
+    p.add_argument(
+        "--self-heal",
+        action="store_true",
+        help=(
+            "Self-healing chains (TEST-ONLY): on a chained-step FAIL, restore the "
+            "canonical state (replay-from-base via golden changes) and splice a "
+            "golden turn into the openclaw session transcript, so the NEXT step "
+            "runs from a correct state with the model unaware of the failure. Does "
+            "not change the failed step's own score. See self_heal.py + "
+            "docs/self-healing-chain-harness.md."
+        ),
+    )
+    p.add_argument("--self-heal-golden",
+                   default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "golden_trajectories.yaml"))
+    p.add_argument("--self-heal-container", default="openshell-my-assistant",
+                   help="name substring of the openshell sandbox container holding session files")
+    p.add_argument("--self-heal-agent", default="manyforge-composer")
     args = p.parse_args()
 
     args.runtime_flags = {f.strip(): True for f in args.runtime_flags.split(",") if f.strip()}
@@ -1277,6 +1222,19 @@ def main() -> int:
     chain_state: dict[str, str] = {}
     results: list[CaseResult] = []
     catalog_hash = fetch_catalog_hash(args.composer)
+
+    # Self-healing chains (TEST-ONLY, opt-in via --self-heal). Loaded lazily so the
+    # default run path is untouched and never imports the heal machinery.
+    self_heal_specs: dict = {}
+    self_heal_container = None
+    _sh = None
+    if args.self_heal:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import self_heal as _sh  # noqa: E402
+        with open(args.self_heal_golden) as gf:
+            self_heal_specs = yaml.safe_load(gf) or {}
+        self_heal_container = _sh.resolve_container(args.self_heal_container)
+        print(f"  self-heal: ENABLED  chains={list(self_heal_specs)}  container={self_heal_container}")
 
     print(f"Running {len(cases)} cases against {args.composer}")
     print(f"  catalogHash: {catalog_hash[:16]}...\n" if catalog_hash else "  (no catalogHash yet)\n")
@@ -1309,6 +1267,20 @@ def main() -> int:
         if r.soft_failures and args.verbose:
             line += f"\n      soft: {r.soft_failures}"
         print(line)
+
+        # Self-healing chains (TEST-ONLY): on a chained-step hard FAIL, restore the
+        # canonical state + splice a golden turn so the NEXT step runs from a correct
+        # state with the model unaware. The failed step keeps its own (fail) score —
+        # we only prevent the cascade to step N+1.
+        if _sh is not None and not args.no_chain_session and r.status == "fail":
+            pre = case.get("precondition") or {}
+            ch_id, ch_step = pre.get("chain_id"), pre.get("chain_step")
+            spec = self_heal_specs.get(ch_id) if ch_id else None
+            conv = chain_state.get(ch_id) if ch_id else None
+            if spec and conv and ch_step and self_heal_container:
+                ok, detail = _sh.self_heal(args.composer, self_heal_container,
+                                           args.self_heal_agent, conv, spec, int(ch_step))
+                print(f"      🩹 self-heal {'OK' if ok else 'FAILED'} (step {ch_step}): {detail}")
 
     # Summary
     print()

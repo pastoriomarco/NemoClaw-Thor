@@ -1,0 +1,98 @@
+# Golden trajectories for chained corpus families (TEST-ONLY).
+#
+# Per chained step: the canonical golden change(s) — complete tool-calls (RAW arg
+# form, as accepted by the bridge tool endpoints) that build the canonical cumulative
+# state. The generator (golden_trajectory.py) replays these from the base via the real
+# composer bridge tools, verifies each insert actually LANDS (tree node count), and
+# assertion-gates against expected.state_after. Authored from real successful
+# tool-calls + the canonical program schema; regenerate/validate when the corpus changes.
+#
+# move_manipulator_action pose_goal schema:
+#   params: { move_id, motion_type: pose_goal, pose_goal: { position_m:[x,y,z],
+#             orientation_rpy_deg:[180,0,-180] }, velocity_scale }
+
+pnp_build:
+  base:
+    deployment_path: /workspace/examples/assistant_modes_scene_authoring.deployment.yaml
+    empty_program_path: /workspace/examples/empty_pick_and_place_ur10e_robotiq.program.yaml
+  steps:
+    # ---- scene (PnP_01-04) ----
+    - id: PnP_01_scene_ground
+      changes:
+        - tool: scene_draft_add_object
+          args: { objectId: ground_plane, shape: { type: box, box_dimensions_m: [2.0, 2.0, 0.01] }, pose: { frame_id: universe, position_m: [0.0, 0.0, 0.0], orientation_xyzw: [0, 0, 0, 1] } }
+    - id: PnP_02_scene_graspable
+      changes:
+        - tool: scene_draft_add_object
+          args: { objectId: graspable, shape: { type: box, box_dimensions_m: [0.05, 0.05, 0.05] }, pose: { frame_id: universe, position_m: [0.4, 0.0, 0.05], orientation_xyzw: [0, 0, 0, 1] } }
+    - id: PnP_03_scene_pick_pad
+      changes:
+        - tool: scene_draft_add_object
+          args: { objectId: pick_pad, shape: { type: box, box_dimensions_m: [0.2, 0.2, 0.025] }, pose: { frame_id: universe, position_m: [0.4, 0.0, 0.012], orientation_xyzw: [0, 0, 0, 1] } }
+    - id: PnP_04_scene_place_pad
+      changes:
+        - tool: scene_draft_add_object
+          args: { objectId: place_pad, shape: { type: box, box_dimensions_m: [0.2, 0.2, 0.025] }, pose: { frame_id: universe, position_m: [0.0, 0.4, 0.012], orientation_xyzw: [0, 0, 0, 1] } }
+    # ---- PnP_05: program_read (no mutation); gated on base root ----
+    - id: PnP_05_tree_root
+      changes: []
+    # ---- tree build (PnP_06-17): 12 manipulation nodes, in order ----
+    - id: PnP_06_approach
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: approach_above, parentName: pick_and_place, node: { id: move_manipulator_action, params: { move_id: approach, motion_type: pose_goal, pose_goal: { position_m: [0.4, 0.0, 0.20], orientation_rpy_deg: [180, 0, -180] }, velocity_scale: 0.5 }, index: 0 } }
+    - id: PnP_07_descend
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: descend_to_grasp, parentName: pick_and_place, node: { id: move_manipulator_action, params: { move_id: descend, motion_type: pose_goal, pose_goal: { position_m: [0.4, 0.0, 0.07], orientation_rpy_deg: [180, 0, -180] }, velocity_scale: 0.5 }, index: 1 } }
+    - id: PnP_08_close_gripper
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: close_gripper, parentName: pick_and_place, node: { id: command_gripper, params: { gripper_id: primary, position: 0.66, max_effort: 40.0, duration_s: 1.0, timeout_s: 0.0 }, index: 2 } }
+    - id: PnP_09_attach
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: attach_graspable, parentName: pick_and_place, node: { id: attach_object_to_link, params: { object_id: graspable, link_frame: grasp_frame }, index: 3 } }
+    - id: PnP_10_lift
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: lift, parentName: pick_and_place, node: { id: move_manipulator_action, params: { move_id: lift, motion_type: pose_goal, pose_goal: { position_m: [0.4, 0.0, 0.20], orientation_rpy_deg: [180, 0, -180] }, velocity_scale: 0.5 }, index: 4 } }
+    - id: PnP_11_transport
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: transport, parentName: pick_and_place, node: { id: move_manipulator_action, params: { move_id: transport, motion_type: pose_goal, pose_goal: { position_m: [0.0, 0.4, 0.20], orientation_rpy_deg: [180, 0, -180] }, velocity_scale: 0.5 }, index: 5 } }
+    - id: PnP_12_place_descend
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: place_descend, parentName: pick_and_place, node: { id: move_manipulator_action, params: { move_id: place_descend, motion_type: pose_goal, pose_goal: { position_m: [0.0, 0.4, 0.07], orientation_rpy_deg: [180, 0, -180] }, velocity_scale: 0.5 }, index: 6 } }
+    - id: PnP_13_detach
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: detach_graspable, parentName: pick_and_place, node: { id: detach_object_from_link, params: { object_id: graspable, link_frame: grasp_frame }, index: 7 } }
+    - id: PnP_14_upsert
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: upsert_graspable, parentName: pick_and_place, node: { id: upsert_collision_object, params: { object_id: graspable, shape_type: box, box_dimensions_m: [0.05, 0.05, 0.05], pose: { frame_id: universe, position_m: [0.0, 0.4, 0.05], orientation_xyzw: [0, 0, 0, 1] } }, index: 8 } }
+    - id: PnP_15_open_gripper
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: open_gripper, parentName: pick_and_place, node: { id: command_gripper, params: { gripper_id: primary, position: 0.0, max_effort: 40.0, duration_s: 1.0, timeout_s: 0.0 }, index: 9 } }
+    - id: PnP_16_retract
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: retract, parentName: pick_and_place, node: { id: move_manipulator_action, params: { move_id: retract, motion_type: pose_goal, pose_goal: { position_m: [0.0, 0.4, 0.20], orientation_rpy_deg: [180, 0, -180] }, velocity_scale: 0.5 }, index: 10 } }
+    - id: PnP_17_home
+      changes:
+        - tool: tree_draft_insert_node
+          args: { nodeName: return_home, parentName: pick_and_place, node: { id: move_manipulator_action, params: { move_id: home, motion_type: pose_goal, pose_goal: { position_m: [0.3, 0.0, 0.40], orientation_rpy_deg: [180, 0, -180] }, velocity_scale: 0.5 }, index: 11 } }
+    # ---- PnP_18: wrap root in repeat (gated on state_after) ----
+    - id: PnP_18_repeat_root
+      changes:
+        - tool: tree_draft_wrap_node
+          args: { targetName: pick_and_place, wrapper: { id: repeat, params: { num_cycles: -1 } } }
+    # PnP_19 is future-tier (status:future) — omitted from the active build.
+    # ---- PnP_20: set grip force on the close_gripper node ----
+    - id: PnP_20_grip_force
+      changes:
+        - tool: tree_draft_update_node_params
+          args: { nodeName: close_gripper, params: { grip_force: 40 }, merge: true }
