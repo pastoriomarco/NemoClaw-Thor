@@ -806,7 +806,14 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_MODEL_SOURCE="unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL (llama.cpp)"
             THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-thor}"
             THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL}"
-            THOR_LLAMACPP_SPEC_DRAFT_HF="${THOR_LLAMACPP_SPEC_DRAFT_HF:-unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL}"
+            # Speculative draft: the QAT (quantization-aware-trained) E2B. Same
+            # 4-bit size/speed as the plain UD-Q4_K_XL E2B, but QAT is more
+            # accurate at 4-bit → the 12B accepts more drafted tokens (higher
+            # spec-decode acceptance) at no extra draft cost. Vocab-compatible
+            # (same gemma-4 family). First launch fetches it once; the offline
+            # auto-detect (check_thor_launch_prereqs) also gates on the draft
+            # being cached so --offline never blocks this download.
+            THOR_LLAMACPP_SPEC_DRAFT_HF="${THOR_LLAMACPP_SPEC_DRAFT_HF:-unsloth/gemma-4-E2B-it-qat-GGUF:UD-Q4_K_XL}"
             THOR_LLAMACPP_SPEC_DRAFT_NGL="${THOR_LLAMACPP_SPEC_DRAFT_NGL:-999}"
             THOR_LLAMACPP_SPEC_DRAFT_CTX="${THOR_LLAMACPP_SPEC_DRAFT_CTX:-131072}"
             THOR_LLAMACPP_SPEC_DRAFT_N_MAX="${THOR_LLAMACPP_SPEC_DRAFT_N_MAX:-6}"
@@ -849,7 +856,14 @@ prepare_thor_launch_profile() {
             THOR_LAUNCH_MODEL_SOURCE="unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL (llama.cpp, Orin AGX)"
             THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-orin}"
             THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL}"
-            THOR_LLAMACPP_SPEC_DRAFT_HF="${THOR_LLAMACPP_SPEC_DRAFT_HF:-unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL}"
+            # Speculative draft: the QAT (quantization-aware-trained) E2B. Same
+            # 4-bit size/speed as the plain UD-Q4_K_XL E2B, but QAT is more
+            # accurate at 4-bit → the 12B accepts more drafted tokens (higher
+            # spec-decode acceptance) at no extra draft cost. Vocab-compatible
+            # (same gemma-4 family). First launch fetches it once; the offline
+            # auto-detect (check_thor_launch_prereqs) also gates on the draft
+            # being cached so --offline never blocks this download.
+            THOR_LLAMACPP_SPEC_DRAFT_HF="${THOR_LLAMACPP_SPEC_DRAFT_HF:-unsloth/gemma-4-E2B-it-qat-GGUF:UD-Q4_K_XL}"
             THOR_LLAMACPP_SPEC_DRAFT_NGL="${THOR_LLAMACPP_SPEC_DRAFT_NGL:-999}"
             THOR_LLAMACPP_SPEC_DRAFT_CTX="${THOR_LLAMACPP_SPEC_DRAFT_CTX:-131072}"
             THOR_LLAMACPP_SPEC_DRAFT_N_MAX="${THOR_LLAMACPP_SPEC_DRAFT_N_MAX:-6}"
@@ -1106,13 +1120,19 @@ check_thor_launch_prereqs() {
             # `-hf` re-resolve 'latest' and re-download when upstream moves.
             case "${THOR_LLAMACPP_OFFLINE:-auto}" in
                 auto)
-                    if _thor_hf_repo_is_cached "${THOR_LLAMACPP_HF}"; then
+                    # Offline iff BOTH the model AND the speculative draft (if
+                    # any) are staged. Gating on the draft too matters when the
+                    # draft repo changes (e.g. plain E2B → QAT E2B): the model
+                    # stays cached but the new draft isn't, and forcing --offline
+                    # would block the draft download and fail the launch.
+                    if _thor_hf_repo_is_cached "${THOR_LLAMACPP_HF}" \
+                        && { [[ -z "${THOR_LLAMACPP_SPEC_DRAFT_HF:-}" ]] || _thor_hf_repo_is_cached "${THOR_LLAMACPP_SPEC_DRAFT_HF}"; }; then
                         THOR_LLAMACPP_OFFLINE=1
-                        info "Model staged in cache → serving offline (cached weights, no re-download)."
+                        info "Model (+ draft, if any) staged in cache → serving offline (cached weights, no re-download)."
                         _thor_hf_warn_if_update "${THOR_LLAMACPP_HF}"
                     else
                         THOR_LLAMACPP_OFFLINE=0
-                        info "Model not staged → first-time online fetch from Hugging Face."
+                        info "Model or draft not fully staged → online fetch from Hugging Face (downloads only the missing repo)."
                     fi
                     ;;
                 1|true)

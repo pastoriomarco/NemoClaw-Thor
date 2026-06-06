@@ -108,7 +108,7 @@ out of the eMMC. Override the host dirs with `THOR_HF_CACHE_DIR` /
 ### Stage the weights once
 Pre-download into `/mnt/nova_ssd/hf-cache-orin` (the operator's tested standalone
 `docker run … llama-server -hf unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL
---spec-draft-hf unsloth/gemma-4-E2B-it-GGUF:UD-Q4_K_XL …` does this on first run).
+--spec-draft-hf unsloth/gemma-4-E2B-it-qat-GGUF:UD-Q4_K_XL …` does this on first run).
 
 ### Cache-first serving (do **not** re-download)
 llama.cpp `-hf` re-resolves the repo's `main` revision every launch and
