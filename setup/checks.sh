@@ -70,7 +70,7 @@ check_openshell_gateway() {
 
 ensure_openshell_gateway_running() {
     local gateway_name="${THOR_OPENSHELL_GATEWAY_NAME:-nemoclaw}"
-    local container_name="openshell-cluster-${gateway_name}"
+    local sandbox_name="${THOR_OPENSHELL_SANDBOX:-${OPENCLAW_ASSISTANT_SANDBOX:-my-assistant}}"
     local attempts="${1:-60}"
 
     if ! command -v openshell &>/dev/null; then
@@ -84,19 +84,25 @@ ensure_openshell_gateway_running() {
         return 0
     fi
 
-    if ! command -v docker &>/dev/null; then
-        fail "docker command not found"
-        fix "Install Docker before trying to revive the OpenShell gateway."
+    # OpenShell 0.0.44: the gateway runs as a host "docker-driver" process
+    # (openshell-gateway on :8080), NOT the old `openshell-cluster-*` container,
+    # and `openshell gateway start` was removed (the gateway CLI is
+    # registration-only now: add/remove/select/info/list). The 0.0.44 way to
+    # (re)start the local gateway is the NemoClaw sandbox recovery, which
+    # re-spawns the docker-driver gateway + the dashboard port-forward. This is
+    # what keeps launch.sh self-healing across reboots, where the gateway host
+    # process has no auto-restart (verified 2026-06-06: a reboot dropped the
+    # gateway and the old `gateway start` path errored "unrecognized
+    # subcommand 'start'").
+    if ! command -v nemoclaw &>/dev/null; then
+        fail "nemoclaw command not found; cannot (re)start the OpenShell gateway"
+        fix "Install NemoClaw, or start the gateway manually: nemoclaw <sandbox> recover"
         return 1
     fi
-
-    if docker ps -a --format '{{.Names}}' | grep -Fx "${container_name}" >/dev/null 2>&1; then
-        info "Starting existing OpenShell gateway container: ${container_name}"
-        docker start "${container_name}" >/dev/null
-    else
-        info "Creating OpenShell gateway '${gateway_name}'..."
-        openshell gateway start --name "${gateway_name}" --recreate >/dev/null
-    fi
+    info "Recovering OpenShell gateway via 'nemoclaw ${sandbox_name} recover'..."
+    # Exit code is not authoritative (recover runs a multi-step flow that can
+    # emit non-fatal warnings); the status poll below is the real success signal.
+    nemoclaw "${sandbox_name}" recover >/dev/null 2>&1 || true
 
     local i
     for i in $(seq 1 "${attempts}"); do
@@ -108,8 +114,8 @@ ensure_openshell_gateway_running() {
     done
 
     fail "OpenShell gateway '${gateway_name}' did not become reachable"
-    fix "Check: docker ps --format '{{.Names}} {{.Status}}'"
-    fix "Check: docker logs ${container_name} | tail -n 80"
+    fix "Diagnose: nemoclaw ${sandbox_name} doctor"
+    fix "Gateway log: ~/.local/state/nemoclaw/openshell-docker-gateway/openshell-gateway.log"
     return 1
 }
 
