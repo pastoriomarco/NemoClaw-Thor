@@ -962,6 +962,62 @@ prepare_thor_launch_profile() {
             )
             THOR_LLAMACPP_HF_ENV_ARGS=()
             ;;
+        nemotron3-nano-4b-gguf)
+            # llama.cpp GGUF lane — NVIDIA Nemotron 3 Nano 4B (hybrid Mamba-2 +
+            # MLP + 4 attention layers, compressed from a 9B parent) on Jetson
+            # Thor. From nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M (~2.84 GB),
+            # native 256K (262144) ctx per the HF card. The hybrid arch has only
+            # 4 attention layers, so KV stays small even at 256K -> no KV-quant /
+            # flash-attn needed (matches NVIDIA's recommended llama-server cmd).
+            # No speculative draft. Text-only (--no-mmproj) + --jinja for the
+            # tool-call chat template; --reasoning auto (it's a reasoning model,
+            # left at the template default). Only deltas from the -orin variant:
+            # Thor image + default Thor single-mount HF cache ($HOME/thor-hf-cache;
+            # no NVMe override) -- same platform handling as gemma4-12b-it-gguf.
+            THOR_LAUNCH_BACKEND="llamacpp"
+            THOR_LAUNCH_MODEL_SOURCE="nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M (llama.cpp)"
+            THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-thor}"
+            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M}"
+            # No speculative draft and no KV-quant (hybrid arch -> small KV):
+            # leave THOR_LLAMACPP_SPEC_DRAFT_HF / *CACHE_TYPE_* / FLASH_ATTN at
+            # their empty reset defaults so the run helper omits those flags
+            # (matches NVIDIA's recommended llama-server command).
+            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-262144}"
+            THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
+            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --jinja --reasoning auto)
+            # HF cache: default Thor single-mount layout ($HOME/thor-hf-cache, set
+            # by the reset block) -- no NVMe override, matching gemma4-12b-it-gguf.
+            ;;
+        nemotron3-nano-4b-gguf-orin)
+            # Jetson Orin AGX variant of nemotron3-nano-4b-gguf. Same model +
+            # recipe (Q4_K_M, 256K ctx, hybrid arch -> small KV, so no KV-quant /
+            # flash-attn / draft, text-only --no-mmproj --jinja --reasoning auto)
+            # -- matches NVIDIA's recommended Orin llama-server command. Only
+            # deltas: Orin llama.cpp image + NVMe-backed cache mounts
+            # (/mnt/nova_ssd/...), per isaac_ros_custom_bringup/jetson_orin_storage.
+            # Keep ctx/recipe in lockstep with the Thor profile above.
+            THOR_LAUNCH_BACKEND="llamacpp"
+            THOR_LAUNCH_MODEL_SOURCE="nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M (llama.cpp, Orin AGX)"
+            THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-orin}"
+            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M}"
+            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-262144}"
+            THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
+            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --jinja --reasoning auto)
+
+            # NVMe-backed cache roots (host side), identical to the other -orin
+            # GGUF profiles. Honour an explicit operator THOR_HF_CACHE_DIR; else
+            # default to the documented Orin NVMe path.
+            if [[ -z "${_user_hf_cache_dir}" ]]; then
+                THOR_HF_CACHE_DIR="/mnt/nova_ssd/hf-cache-orin"
+            fi
+            THOR_LLAMACPP_CACHE_DIR_HOST="${THOR_LLAMACPP_CACHE_DIR_HOST:-/mnt/nova_ssd/llama-cpp-cache}"
+            THOR_LLAMACPP_HF_MOUNT_ARGS=(
+                -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface"
+                -v "${THOR_HF_CACHE_DIR}:/root/.cache/huggingface"
+                -v "${THOR_LLAMACPP_CACHE_DIR_HOST}:/root/.cache/llama.cpp"
+            )
+            THOR_LLAMACPP_HF_ENV_ARGS=()
+            ;;
         *)
             fail "Unsupported model profile: ${profile}"
             print_supported_model_profiles

@@ -165,6 +165,10 @@ Supported model profiles:
     cosmos-reason2-8b-gguf         GGUF Q4_K_M via llama.cpp (text-only, 256K ctx, q8_0 KV), Jetson Thor image
     cosmos-reason2-8b-gguf-orin    GGUF Q4_K_M via llama.cpp (text-only, 256K ctx, q8_0 KV), Jetson Orin AGX image + NVMe caches
 
+  Nemotron 3 Nano (NVIDIA hybrid Mamba-2 + 4 attn, reasoning + tools):
+    nemotron3-nano-4b-gguf         GGUF Q4_K_M via llama.cpp (text-only, 256K ctx), Jetson Thor image
+    nemotron3-nano-4b-gguf-orin    GGUF Q4_K_M via llama.cpp (text-only, 256K ctx), Jetson Orin AGX image + NVMe caches
+
   Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text):
     nemotron3-nano-omni-30b-a3b-nvfp4            tool-calling regime (think OFF, no reasoning parser)
     nemotron3-nano-omni-30b-a3b-nvfp4-reasoning  reasoning regime (think ON + nemotron_v3 parser)
@@ -621,6 +625,47 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="hermes"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        nemotron3-nano-4b-gguf)
+            # Jetson Thor llama.cpp/GGUF variant of nemotron3-nano-4b-bf16:
+            # NVIDIA-Nemotron-3-Nano-4B (hybrid Mamba-2 + MLP + 4 attention
+            # layers, compressed from a 9B parent via Nemotron Elastic). Served
+            # by llama.cpp from nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M at
+            # native 256K (262144) ctx per the HF card; the hybrid arch's 4
+            # attention layers keep the KV small even at 256K (no KV-quant
+            # needed). Runtime knobs live in prepare_thor_launch_profile
+            # (launch.sh). The THOR_TARGET_* below are not consumed by llama.cpp
+            # but are kept set so the shared post-case finalizer stays defined
+            # under `set -u`. REASONING/TOOL mirror the vLLM nemotron3-nano-4b-bf16
+            # profile (reasoning model, qwen3_coder tool parser).
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="nemotron3-nano-4b-gguf"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="auto"
+            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="8192"
+            THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        nemotron3-nano-4b-gguf-orin)
+            # Jetson Orin AGX variant of nemotron3-nano-4b-gguf. Same model +
+            # recipe (Q4_K_M, 256K ctx); the only deltas (set in
+            # prepare_thor_launch_profile) are the Orin llama.cpp image and the
+            # NVMe-backed cache mounts. The THOR_TARGET_* below are not consumed
+            # by llama.cpp but are kept set so the shared post-case finalizer
+            # stays defined under `set -u` (mirrors the nemotron3-nano-4b-gguf case).
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="nemotron3-nano-4b-gguf-orin"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="auto"
+            THOR_TARGET_MAX_NUM_SEQS="8"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="8192"
+            THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
             THOR_TARGET_QUANTIZATION=""
             ;;
         *)
