@@ -368,16 +368,9 @@ resolve_model_profile() {
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="8"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="false"
+            THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="8192"
             THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
-            # Thinking OFF. Nemotron-3-Nano's chat template reads the
-            # `enable_thinking` kwarg (default True); the proxy injects
-            # chat_template_kwargs.enable_thinking=false on every chat completion
-            # (load-bearing per the resolve_model_profile header). Mirrors the
-            # --chat-template-kwargs '{"enable_thinking":false}' server default
-            # set for this profile in launch.sh.
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="off"  # launch.sh: enable_thinking=false
             THOR_TARGET_QUANTIZATION=""
             # Per-profile proxy tuning (consumed by start-model.sh)
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
@@ -400,16 +393,9 @@ resolve_model_profile() {
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="8"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="false"
+            THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="8192"
             THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
-            # Thinking OFF. Nemotron-3-Nano's chat template reads the
-            # `enable_thinking` kwarg (default True); the proxy injects
-            # chat_template_kwargs.enable_thinking=false on every chat completion
-            # (load-bearing per the resolve_model_profile header). Mirrors the
-            # --chat-template-kwargs '{"enable_thinking":false}' server default
-            # set for this profile in launch.sh.
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="off"  # launch.sh: enable_thinking=false
             THOR_TARGET_QUANTIZATION=""
             # Per-profile proxy tuning (consumed by start-model.sh)
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
@@ -617,6 +603,9 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="hermes"
+            # Thinking forced ON: the proxy injects chat_template_kwargs.enable_thinking=true
+            # on every chat completion (mirrors --chat-template-kwargs in launch.sh).
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"  # launch.sh: enable_thinking=true
             THOR_TARGET_QUANTIZATION=""
             ;;
         cosmos-reason2-8b-gguf-orin)
@@ -639,6 +628,9 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="hermes"
+            # Thinking forced ON: the proxy injects chat_template_kwargs.enable_thinking=true
+            # on every chat completion (mirrors --chat-template-kwargs in launch.sh).
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"  # launch.sh: enable_thinking=true
             THOR_TARGET_QUANTIZATION=""
             ;;
         nemotron3-nano-4b-gguf)
@@ -651,26 +643,17 @@ resolve_model_profile() {
             # needed). Runtime knobs live in prepare_thor_launch_profile
             # (launch.sh). The THOR_TARGET_* below are not consumed by llama.cpp
             # but are kept set so the shared post-case finalizer stays defined
-            # under `set -u`. TOOL parser mirrors the vLLM nemotron3-nano-4b-bf16
-            # profile (qwen3_coder). Thinking is DISABLED here (reasoning=false +
-            # PROXY_FORCE_ENABLE_THINKING=off below) — the Nemotron parent is a
-            # reasoning model, but this profile runs it non-reasoning.
+            # under `set -u`. REASONING/TOOL mirror the vLLM nemotron3-nano-4b-bf16
+            # profile (reasoning model, qwen3_coder tool parser).
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="nemotron3-nano-4b-gguf"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="auto"
             THOR_TARGET_MAX_NUM_SEQS="8"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="false"
+            THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="8192"
             THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
-            # Thinking OFF. Nemotron-3-Nano's chat template reads the
-            # `enable_thinking` kwarg (default True); the proxy injects
-            # chat_template_kwargs.enable_thinking=false on every chat completion
-            # (load-bearing per the resolve_model_profile header). Mirrors the
-            # --chat-template-kwargs '{"enable_thinking":false}' server default
-            # set for this profile in launch.sh.
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="off"  # launch.sh: enable_thinking=false
             THOR_TARGET_QUANTIZATION=""
             ;;
         nemotron3-nano-4b-gguf-orin)
@@ -686,16 +669,9 @@ resolve_model_profile() {
             THOR_TARGET_KV_CACHE_DTYPE="auto"
             THOR_TARGET_MAX_NUM_SEQS="8"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
-            THOR_TARGET_MODEL_REASONING="false"
+            THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="8192"
             THOR_TARGET_TOOL_CALL_PARSER="qwen3_coder"
-            # Thinking OFF. Nemotron-3-Nano's chat template reads the
-            # `enable_thinking` kwarg (default True); the proxy injects
-            # chat_template_kwargs.enable_thinking=false on every chat completion
-            # (load-bearing per the resolve_model_profile header). Mirrors the
-            # --chat-template-kwargs '{"enable_thinking":false}' server default
-            # set for this profile in launch.sh.
-            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="off"  # launch.sh: enable_thinking=false
             THOR_TARGET_QUANTIZATION=""
             ;;
         *)
