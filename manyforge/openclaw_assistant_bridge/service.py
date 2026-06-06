@@ -807,7 +807,6 @@ async def cancel_request(request_id: str) -> dict[str, Any]:
     return {"requestId": request_id, "cancelled": True}
 
 
-@app.post("/v1/manyforge/assistant")
 def _collect_history_truncation_warnings(conversation_id: str, since_ms: int) -> list[str]:
     """Best-effort: read the vllm-proxy log for ``proxy_history_truncated``
     events matching this conversation since ``since_ms`` (this turn) and return
@@ -856,6 +855,7 @@ def _collect_history_truncation_warnings(conversation_id: str, since_ms: int) ->
         return out
 
 
+@app.post("/v1/manyforge/assistant")
 async def assistant(request: Request) -> JSONResponse:
     # Single timer for end-to-end metrics. Set before any early-return path
     # so the duration histogram covers parse errors too. ACTIVE_REQUESTS is
