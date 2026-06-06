@@ -127,6 +127,32 @@ _, rw3 = _mod._normalize_nested_mcp_ids_in_text(plain)
 check("non-SSE: text-regex handles escaped flat dashed", len(rw3) == 1, f"rw={rw3}")
 
 
+# --- 5. History budget guard: explicit failure-shaped envelope -------------
+budget_body = {
+    "messages": [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "x" * 50},
+        {"role": "assistant", "content": "ok"},
+    ]
+}
+stats = _mod._message_stats(budget_body)
+check("budget stats: message count", stats["message_count"] == 3, f"stats={stats}")
+check("budget stats: role counts", stats["role_counts"]["user"] == 1, f"stats={stats}")
+check("budget stats: largest message", stats["largest_message_chars"] == 50, f"stats={stats}")
+err = json.loads(
+    _mod._history_budget_error_body(
+        body_chars=1234,
+        max_chars=1000,
+        body_json=budget_body,
+    )
+)
+check("budget error: code", err["error"]["code"] == "history_budget_exceeded", f"err={err}")
+check("budget error: type",
+      err["error"]["type"] == "manyforge_proxy_history_budget_exceeded", f"err={err}")
+check("budget error: includes stats",
+      err["error"]["historyBudget"]["largest_message_chars"] == 50, f"err={err}")
+
+
 print()
 if _failures:
     print(f"FAILED ({len(_failures)}):")

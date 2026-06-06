@@ -201,6 +201,70 @@ _UPSTREAM_PORT = 18789
 _UPSTREAM_SCHEME = "http"
 _LISTEN_PORT = 18790
 
+# 2026-06-05: upstream model-call socket timeout — configurable + coordinated.
+# Previously hardcoded to 200.0s, which sat well BELOW the per-case assistant
+# budget (ASSISTANT_TIMEOUT_S, default 300s). On the gemma/llama.cpp path a
+# single prefill-heavy turn deep in a chained build (35k–43k-token prompts with
+# cache invalidation; observed model-side generation up to ~446s) routinely
+# exceeded 200s, so the proxy aborted the call (status=-1) ~200000ms in and
+# surfaced `chat HTTP -1`/`502` to the runner before the case budget was spent.
+#
+# Canonical env: MANYFORGE_PROXY_UPSTREAM_TIMEOUT_S (legacy OPENCLAW_PROXY_
+# accepted as a fallback; see _apply_manyforge_proxy_aliases). Standalone
+# default 300s. The launcher COORDINATES this with the case budget (sets it
+# slightly BELOW ASSISTANT_TIMEOUT_S) so the proxy — guardian of the single
+# llama.cpp slot — fails first and closes the socket to release the slot before
+# the case-level timeout, rather than racing it. Parsed defensively: a
+# non-numeric value (e.g. "300s") warns and falls back instead of crashing the
+# proxy at startup.
+def _resolve_upstream_timeout_s(default: float = 300.0) -> float:
+    raw = (
+        os.environ.get("MANYFORGE_PROXY_UPSTREAM_TIMEOUT_S")
+        or os.environ.get("OPENCLAW_PROXY_UPSTREAM_TIMEOUT_S")
+    )
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        val = float(str(raw).strip())
+        if val <= 0:
+            raise ValueError("must be positive")
+        return val
+    except (ValueError, TypeError):
+        sys.stderr.write(
+            f"[vllm-proxy] WARNING: invalid upstream timeout {raw!r}; "
+            f"falling back to {default}s\n"
+        )
+        return default
+
+
+_UPSTREAM_TIMEOUT_S = _resolve_upstream_timeout_s()
+
+
+def _resolve_max_request_chars(default: int = 0) -> int:
+    raw = (
+        os.environ.get("MANYFORGE_PROXY_MAX_REQUEST_CHARS")
+        or os.environ.get("OPENCLAW_PROXY_MAX_REQUEST_CHARS")
+    )
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        val = int(str(raw).strip())
+        if val < 0:
+            raise ValueError("must be non-negative")
+        return val
+    except (ValueError, TypeError):
+        sys.stderr.write(
+            f"[vllm-proxy] WARNING: invalid max request chars {raw!r}; "
+            f"falling back to {default}\n"
+        )
+        return default
+
+
+# 0 means disabled. This is an operator-set guardrail, not a default mutator:
+# it protects constrained backends from pathological retained-history prompts
+# once a deployment has chosen its real context/latency budget.
+_MAX_REQUEST_CHARS = _resolve_max_request_chars()
+
 # =========================================================================
 # Tool-surface drift check (Commit C, 2026-06-03).
 # =========================================================================
@@ -2149,6 +2213,63 @@ def _truncate(text: str, limit: int = 8192) -> str:
     return text[:limit] + f"…<truncated {len(text) - limit} chars>"
 
 
+def _message_stats(body_json: object) -> dict:
+    if not isinstance(body_json, dict):
+        return {"message_count": None, "role_counts": {}}
+    messages = body_json.get("messages")
+    if not isinstance(messages, list):
+        return {"message_count": None, "role_counts": {}}
+    role_counts: dict[str, int] = {}
+    largest_chars = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "unknown")
+        role_counts[role] = role_counts.get(role, 0) + 1
+        content = message.get("content")
+        if isinstance(content, str):
+            largest_chars = max(largest_chars, len(content))
+        elif content is not None:
+            try:
+                largest_chars = max(largest_chars, len(json.dumps(content, default=str)))
+            except Exception:
+                largest_chars = max(largest_chars, len(str(content)))
+    return {
+        "message_count": len(messages),
+        "role_counts": role_counts,
+        "largest_message_chars": largest_chars,
+    }
+
+
+def _history_budget_error_body(
+    *,
+    body_chars: int,
+    max_chars: int,
+    body_json: object,
+) -> bytes:
+    stats = _message_stats(body_json)
+    return json.dumps(
+        {
+            "error": {
+                "message": (
+                    f"history budget exceeded: request body is {body_chars} chars, "
+                    f"limit is {max_chars}. Compact, summarize, or start a fresh "
+                    "session before retrying."
+                ),
+                "type": "manyforge_proxy_history_budget_exceeded",
+                "param": "messages",
+                "code": "history_budget_exceeded",
+                "historyBudget": {
+                    "bodyChars": body_chars,
+                    "maxRequestChars": max_chars,
+                    **stats,
+                },
+            }
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _append_log(record: dict) -> None:
     line = json.dumps(record, sort_keys=False, default=str)
     with _LOG_LOCK:
@@ -2248,6 +2369,37 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "trigger_info": loop_trigger_info,
             })
 
+        if (
+            _MAX_REQUEST_CHARS > 0
+            and path.endswith("/v1/chat/completions")
+            and len(body) > _MAX_REQUEST_CHARS
+        ):
+            body_json, body_raw = _try_parse_json(body)
+            error_body = _history_budget_error_body(
+                body_chars=len(body),
+                max_chars=_MAX_REQUEST_CHARS,
+                body_json=body_json,
+            )
+            self.send_response(413)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(error_body)))
+            self.end_headers()
+            self.wfile.write(error_body)
+            self.wfile.flush()
+            _append_log({
+                "ts": int(time.time() * 1000),
+                "event": "proxy_history_budget_exceeded",
+                "path": path,
+                "status": 413,
+                "body_chars": len(body),
+                "max_request_chars": _MAX_REQUEST_CHARS,
+                "message_stats": _message_stats(body_json),
+                "body_raw_excerpt": None
+                if body_json is not None
+                else _truncate(body_raw, 2048),
+            })
+            return
+
         forward_headers["Content-Length"] = str(len(body))
 
         ts_in = time.time()
@@ -2272,15 +2424,16 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # and a partial write without Content-Length leaves the client
         # waiting on connection close. Buffering preserves correctness;
         # the latency cost is acceptable for the smoke harness's purposes.
+        conn = None
         try:
-            # Per-request safety net: 200s socket timeout prevents a
-            # single runaway generation (e.g. thinking-on with no
-            # max_tokens cap) from holding a thread + KV slot for 10+
-            # minutes. The smoke runner's own case timeout is 244s, so
-            # 200s here ensures the proxy fails first and releases the
-            # upstream slot before the runner gives up.
+            # Per-request socket timeout (MANYFORGE_PROXY_UPSTREAM_TIMEOUT_S,
+            # default 300s — coordinated just below the assistant/corpus budget
+            # by the launcher). Bounds a single runaway generation so it cannot
+            # hold the single llama.cpp slot indefinitely; see the
+            # _UPSTREAM_TIMEOUT_S note for why the old hardcoded 200s sat below
+            # the budget and cut off legitimate prefill-heavy turns on gemma.
             conn = http.client.HTTPConnection(
-                _UPSTREAM_HOST, _UPSTREAM_PORT, timeout=200.0,
+                _UPSTREAM_HOST, _UPSTREAM_PORT, timeout=_UPSTREAM_TIMEOUT_S,
             )
             conn.request(method, path, body=body, headers=forward_headers)
             up_resp = conn.getresponse()
@@ -2289,11 +2442,29 @@ class ProxyHandler(BaseHTTPRequestHandler):
             resp_headers = dict(up_resp.getheaders())
             conn.close()
         except Exception as exc:
-            # Surface the proxy failure as a 502 to the bridge so it's
-            # not confused with a gateway error; log the failure too.
-            err_text = f"proxy upstream error: {type(exc).__name__}: {exc}"
+            # Deterministic cleanup: close the upstream socket so llama.cpp
+            # sees the client disconnect and can abandon the now-orphaned
+            # generation instead of holding its single slot to completion.
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+            timed_out = type(exc).__name__ in ("timeout", "TimeoutError")
+            elapsed_s = round(time.time() - ts_in, 1)
+            # Surface the proxy failure as a 502 to the bridge so it's not
+            # confused with a gateway error; log the failure too. A timeout is
+            # its own explicit event (with the budget) so operators can tell
+            # "model too slow / budget too low" from a genuine upstream crash.
+            err_text = (
+                f"proxy upstream {'timeout' if timed_out else 'error'} after "
+                f"{elapsed_s}s (budget {_UPSTREAM_TIMEOUT_S}s): "
+                f"{type(exc).__name__}: {exc}"
+            )
             _append_log({
                 "ts": int(ts_in * 1000),
+                "event": "proxy_upstream_timeout" if timed_out else "proxy_upstream_error",
+                "timeout_s": _UPSTREAM_TIMEOUT_S,
                 "request": request_record,
                 "response": {
                     "status": -1,
