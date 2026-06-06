@@ -884,6 +884,37 @@ prepare_thor_launch_profile() {
             )
             THOR_LLAMACPP_HF_ENV_ARGS=()
             ;;
+        cosmos-reason2-8b-gguf)
+            # llama.cpp GGUF lane — NVIDIA Cosmos Reason 2 8B (Qwen3-VL-8B base)
+            # on Jetson Thor. Same model + recipe as cosmos-reason2-8b-gguf-orin
+            # (apolo13x/Cosmos-Reason2-8B-GGUF Q4_K_M, 256K ctx, q8_0 K+V +
+            # --flash-attn, NO speculative draft — Cosmos ships no vocab-compatible
+            # small draft in this repo; text-only via --no-mmproj). The only
+            # deltas from the Orin variant are the Thor llama.cpp image and the
+            # default Thor single-mount HF cache ($HOME/thor-hf-cache; no NVMe
+            # override) — i.e. identical cache handling to gemma4-12b-it-gguf.
+            # Reasoning is left at the llama.cpp default (auto) — Cosmos IS a
+            # reasoning model. The repo also ships mmproj-Cosmos-Reason2-8B-F16.gguf;
+            # to enable vision, drop --no-mmproj and add --mmproj <that file>.
+            # When updating the Orin variant's ctx/KV/flash-attn, mirror them here.
+            THOR_LAUNCH_BACKEND="llamacpp"
+            THOR_LAUNCH_MODEL_SOURCE="apolo13x/Cosmos-Reason2-8B-GGUF:Q4_K_M (llama.cpp)"
+            THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-thor}"
+            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-apolo13x/Cosmos-Reason2-8B-GGUF:Q4_K_M}"
+            # No speculative draft: leave THOR_LLAMACPP_SPEC_DRAFT_HF at its empty
+            # reset default so run_thor_llamacpp_container skips the draft args.
+            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-262144}"
+            THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
+            # q8_0 KV (K+V) + flash-attn (q8_0 V-cache requires flash-attention).
+            # No draft KV types (no draft model) — leave THOR_LLAMACPP_DRAFT_CACHE_TYPE_*
+            # unset so the run helper's `-n` guards omit the --cache-type-*-draft flags.
+            THOR_LLAMACPP_CACHE_TYPE_K="${THOR_LLAMACPP_CACHE_TYPE_K:-q8_0}"
+            THOR_LLAMACPP_CACHE_TYPE_V="${THOR_LLAMACPP_CACHE_TYPE_V:-q8_0}"
+            THOR_LLAMACPP_FLASH_ATTN="${THOR_LLAMACPP_FLASH_ATTN:-on}"
+            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --jinja --reasoning auto)
+            # HF cache: default Thor single-mount layout ($HOME/thor-hf-cache, set
+            # by the reset block) — no NVMe override, matching gemma4-12b-it-gguf.
+            ;;
         cosmos-reason2-8b-gguf-orin)
             # Jetson Orin AGX 64GB llama.cpp/GGUF serving of Cosmos Reason 2 8B
             # (Qwen3-VL-8B base), adapted from the gemma4-12b-it-gguf-orin recipe
