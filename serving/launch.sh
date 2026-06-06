@@ -984,8 +984,9 @@ prepare_thor_launch_profile() {
             # 4 attention layers, so KV stays small even at 256K -> no KV-quant /
             # flash-attn needed (matches NVIDIA's recommended llama-server cmd).
             # No speculative draft. Text-only (--no-mmproj) + --jinja for the
-            # tool-call chat template; --reasoning auto (it's a reasoning model,
-            # left at the template default). Only deltas from the -orin variant:
+            # tool-call chat template. Thinking is DISABLED for this profile
+            # (--reasoning off + --chat-template-kwargs enable_thinking=false in
+            # EXTRA_ARGS below). Only deltas from the -orin variant:
             # Thor image + default Thor single-mount HF cache ($HOME/thor-hf-cache;
             # no NVMe override) -- same platform handling as gemma4-12b-it-gguf.
             THOR_LAUNCH_BACKEND="llamacpp"
@@ -998,14 +999,20 @@ prepare_thor_launch_profile() {
             # (matches NVIDIA's recommended llama-server command).
             THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-262144}"
             THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
-            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --jinja --reasoning auto)
+            # Thinking OFF: Nemotron's chat template reads `enable_thinking`
+            # (default True). Set it false as the server-side default via
+            # --chat-template-kwargs so even direct (non-proxy) requests get no
+            # <think>; --reasoning off disables thinking + its parser. The proxy
+            # also injects enable_thinking=false per request (config.sh:
+            # THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=off).
+            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --jinja --reasoning off --chat-template-kwargs '{"enable_thinking":false}')
             # HF cache: default Thor single-mount layout ($HOME/thor-hf-cache, set
             # by the reset block) -- no NVMe override, matching gemma4-12b-it-gguf.
             ;;
         nemotron3-nano-4b-gguf-orin)
             # Jetson Orin AGX variant of nemotron3-nano-4b-gguf. Same model +
             # recipe (Q4_K_M, 256K ctx, hybrid arch -> small KV, so no KV-quant /
-            # flash-attn / draft, text-only --no-mmproj --jinja --reasoning auto)
+            # flash-attn / draft, text-only --no-mmproj --jinja, thinking off)
             # -- matches NVIDIA's recommended Orin llama-server command. Only
             # deltas: Orin llama.cpp image + NVMe-backed cache mounts
             # (/mnt/nova_ssd/...), per isaac_ros_custom_bringup/jetson_orin_storage.
@@ -1016,7 +1023,13 @@ prepare_thor_launch_profile() {
             THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M}"
             THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-262144}"
             THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
-            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --jinja --reasoning auto)
+            # Thinking OFF: Nemotron's chat template reads `enable_thinking`
+            # (default True). Set it false as the server-side default via
+            # --chat-template-kwargs so even direct (non-proxy) requests get no
+            # <think>; --reasoning off disables thinking + its parser. The proxy
+            # also injects enable_thinking=false per request (config.sh:
+            # THOR_TARGET_PROXY_FORCE_ENABLE_THINKING=off).
+            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --jinja --reasoning off --chat-template-kwargs '{"enable_thinking":false}')
 
             # NVMe-backed cache roots (host side), identical to the other -orin
             # GGUF profiles. Honour an explicit operator THOR_HF_CACHE_DIR; else
