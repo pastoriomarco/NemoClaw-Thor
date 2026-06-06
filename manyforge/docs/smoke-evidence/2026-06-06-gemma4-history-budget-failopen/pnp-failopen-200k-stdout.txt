@@ -1,0 +1,43 @@
+Running 20 cases against http://127.0.0.1:9000
+  catalogHash: 9436f6951adeef0b...
+
+  ✅ PnP_01_scene_ground                                  39.7s  status=pass
+  ✅ PnP_02_scene_graspable                               25.5s  status=pass
+  ✅ PnP_03_scene_pick_pad                                31.8s  status=pass
+  ✅ PnP_04_scene_place_pad                               44.5s  status=pass
+  ✅ PnP_05_tree_root                                     30.7s  status=pass
+  ✅ PnP_06_approach                                      75.7s  status=pass
+  ✅ PnP_07_descend                                      117.3s  status=pass
+  ✅ PnP_08_close_gripper                                  4.6s  status=pass
+  ❌ PnP_09_attach                                         9.1s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_10_lift                                           4.6s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_11_transport                                      8.8s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_12_place_descend                                  4.6s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_13_detach                                         9.0s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_14_upsert                                         4.6s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_15_open_gripper                                   9.2s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_16_retract                                        4.5s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_17_home                                           8.8s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_18_repeat_root                                    4.5s  status=fail
+      fail: ["expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)", "state_after[program.tree.id] expected 'repeat', got 'sequence'", "state_after[program.tree.params.num_cycles] expected -1, got '<MISSING>'"]
+  [SKIP] PnP_19_safety_parallel                              status=future (use --include-future to run)
+  ❌ PnP_20_grip_force                                     9.0s  status=fail
+      fail: ["expected tool 'tree_draft_update_node_params' not observed (or never reached 2xx)"]
+
+==============================================================================
+  total cases:      20
+  attempted:        19  (8 pass, 0 recovered, 0 soft-pass, 11 fail)
+  skipped:          1
+  first-try rate:   8/19  (42.1%)
+  effective rate:   8/19  (42.1%)
+
+  full report: /tmp/gemma-smoke/pnp-failopen-200k.json

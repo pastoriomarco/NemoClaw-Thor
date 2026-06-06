@@ -1,0 +1,109 @@
+Running 75 cases against http://127.0.0.1:9000
+  catalogHash: 9436f6951adeef0b...
+
+  ✅ P1_wrap_root_specific                                38.1s  status=pass
+  ❌ P2_scene_add_specific                                31.6s  status=fail
+      fail: ["state_after[scene.objects[*].shape.box_dims] expected 'contains [1.0, 0.02, 0.25]', got ['<MISSING>', '<MISSING>', '<MISSING>']"]
+  [SKIP] P2b_scene_add_cylinder_diameter                     status=future (use --include-future to run)
+  ❌ P3_tree_insert_runtime_obj_specific                 300.1s  status=fail
+      fail: ['chat HTTP -1']
+  ❌ WRAP_root_generic                                    62.1s  status=fail
+      fail: ["expected NO tool calls; observed ['tree_draft_wrap_node', 'tree_draft_wrap_node']"]
+  ✅ WRAP_root_medium                                     61.4s  status=pass
+  ✅ SCENE_add_generic                                    75.5s  status=pass
+  ✅ SCENE_add_medium                                     51.2s  status=pass
+  ✅ TREE_insert_runtime_generic                          19.6s  status=pass
+  ✅ TREE_insert_runtime_medium                           80.3s  status=pass
+  ❌ INSERT_position_first_specific                       62.2s  status=fail
+      fail: ["state_after[program.tree.children[0].id] expected 'wait_for_signal_bool', got 'command_gripper'"]
+  ✅ INSERT_position_after_named_medium                   35.5s  status=pass
+  ❌ INSERT_position_before_named_generic                142.8s  status=fail
+      fail: ["expected NO tool calls; observed ['catalog_read', 'tree_draft_insert_node', 'tree_draft_insert_node']"]
+  [SKIP] PARALLEL_safety_specific                            status=future (use --include-future to run)
+  ❌ PARALLEL_concurrent_medium                           63.6s  status=fail
+      fail: ["expected NO tool calls; observed ['tree_draft_insert_node', 'tree_draft_insert_node']"]
+  🟡 PARALLEL_generic                                     25.3s  status=soft-pass
+  ✅ FALLBACK_retry_specific                             223.5s  status=pass
+  ❌ FALLBACK_alternate_medium                            59.7s  status=fail
+      fail: ["expected NO tool calls; observed ['tree_draft_insert_node', 'tree_draft_insert_node']"]
+  🟡 FALLBACK_generic                                     63.1s  status=soft-pass
+  ✅ UPDATE_params_specific                               34.1s  status=pass
+  ✅ UPDATE_params_medium                                 22.7s  status=pass
+  ❌ UPDATE_params_generic                                43.5s  status=fail
+      fail: ["expected NO tool calls; observed ['tree_draft_update_node_params', 'tree_draft_update_node_params']"]
+  ✅ DELETE_named_specific                                19.8s  status=pass
+  ✅ DELETE_kind_medium                                   31.3s  status=pass
+  ✅ DELETE_generic                                       19.6s  status=pass
+  ❌ MOVE_swap_specific                                   33.2s  status=fail
+      fail: ["state_after[program.tree.children[1].name] expected 'pick_retreat', got 'move_to_pick_approach'"]
+  ✅ MOVE_reorder_medium                                  32.5s  status=pass
+  ✅ MOVE_generic                                         25.8s  status=pass
+  ✅ REPLACE_subtree_specific                             47.9s  status=pass
+  ✅ REPLACE_simple_medium                                33.6s  status=pass
+  ✅ SCENE_update_pose_specific                           48.9s  status=pass
+  ✅ SCENE_update_size_medium                             40.7s  status=pass
+  ✅ SCENE_remove_specific                                19.6s  status=pass
+  ✅ SCENE_remove_generic                                 65.4s  status=pass
+  ✅ PARAM_add_specific                                   27.1s  status=pass
+  ✅ PARAM_modify_medium                                  32.7s  status=pass
+  ✅ PARAM_delete_specific                                34.5s  status=pass
+  ✅ BB_add_specific                                      33.1s  status=pass
+  ✅ BB_modify_medium                                     35.9s  status=pass
+  ✅ BB_delete_specific                                   28.4s  status=pass
+  ✅ PnP_01_scene_ground                                  26.7s  status=pass
+  ✅ PnP_02_scene_graspable                               25.7s  status=pass
+  ✅ PnP_03_scene_pick_pad                                32.6s  status=pass
+  ✅ PnP_04_scene_place_pad                               45.2s  status=pass
+  ✅ PnP_05_tree_root                                     29.0s  status=pass
+  ✅ PnP_06_approach                                      74.0s  status=pass
+  ✅ PnP_07_descend                                       47.1s  status=pass
+  ✅ PnP_08_close_gripper                                  4.6s  status=pass
+  ❌ PnP_09_attach                                         8.9s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_10_lift                                           4.6s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_11_transport                                      9.0s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_12_place_descend                                  4.6s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_13_detach                                         9.1s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_14_upsert                                         4.6s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_15_open_gripper                                   9.1s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_16_retract                                        4.7s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_17_home                                           9.2s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ❌ PnP_18_repeat_root                                    4.6s  status=fail
+      fail: ["expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)", "state_after[program.tree.id] expected 'repeat', got 'sequence'", "state_after[program.tree.params.num_cycles] expected -1, got '<MISSING>'"]
+  [SKIP] PnP_19_safety_parallel                              status=future (use --include-future to run)
+  ❌ PnP_20_grip_force                                     9.0s  status=fail
+      fail: ["expected tool 'tree_draft_update_node_params' not observed (or never reached 2xx)"]
+  ✅ CUR_wrap_existing_motion_with_retry                  38.8s  status=pass
+  ✅ CUR_update_existing_motion_speed                     26.8s  status=pass
+  ✅ CUR_scene_add_static_fixture_not_runtime             29.1s  status=pass
+  ✅ CUR_scene_update_graspable_pose                      50.0s  status=pass
+  ❌ CUR_runtime_remove_then_restore_graspable           144.6s  status=fail
+      fail: ["expected tool 'scene_inspect' not observed (or never reached 2xx)"]
+  ❌ CUR_runtime_update_graspable_pose_each_cycle         61.4s  status=fail
+      fail: ["expected tool 'tree_draft_insert_node' not observed (or never reached 2xx)"]
+  ✅ CLARIFY_scene_remove_pronoun                         19.0s  status=pass
+  🟡 CLARIFY_tree_wrap_pronoun                            37.3s  status=soft-pass
+  🟡 CLARIFY_motion_generic                               13.5s  status=soft-pass
+  [SKIP] ISAAC_import_floor_and_graspable                    status=future (use --include-future to run)
+  [SKIP] ISAAC_reject_all_scene_import                       status=future (use --include-future to run)
+  [SKIP] ISAAC_runtime_colliders_from_selection              status=future (use --include-future to run)
+  [SKIP] FUTURE_deployment_set_robot_and_gripper_from_isaac  status=future (use --include-future to run)
+  [SKIP] FUTURE_apply_pick_place_skill_from_scene            status=future (use --include-future to run)
+  [SKIP] FUTURE_preview_plan_before_mutating                 status=future (use --include-future to run)
+
+==============================================================================
+  total cases:      75
+  attempted:        66  (40 pass, 0 recovered, 4 soft-pass, 22 fail)
+  skipped:          9
+  first-try rate:   40/66  (60.6%)
+  effective rate:   44/66  (66.7%)
+
+  full report: /tmp/gemma-smoke/launcher-gemma-tools-full-3.json
