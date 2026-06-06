@@ -884,6 +884,53 @@ prepare_thor_launch_profile() {
             )
             THOR_LLAMACPP_HF_ENV_ARGS=()
             ;;
+        cosmos-reason2-8b-gguf-orin)
+            # Jetson Orin AGX 64GB llama.cpp/GGUF serving of Cosmos Reason 2 8B
+            # (Qwen3-VL-8B base), adapted from the gemma4-12b-it-gguf-orin recipe
+            # and the jetson-ai-lab Orin llama-server command. Differences from
+            # gemma: the model repo (apolo13x/Cosmos-Reason2-8B-GGUF — the old
+            # Kbenkhaled/... name 307-redirects here), Q4_K_M weights, 256K
+            # context, and NO speculative draft (Cosmos ships no vocab-compatible
+            # small draft in this repo; spec-decode is gemma-specific). KV is q8_0
+            # (K+V) with --flash-attn on (q8_0 V-cache requires flash-attention);
+            # at 256K an 8B q8_0 KV is ~19 GB, well within Orin's 64 GB. Text-only
+            # (--no-mmproj) to match the reference + recipe; the repo also ships
+            # mmproj-Cosmos-Reason2-8B-F16.gguf — to enable vision, drop
+            # --no-mmproj and add --mmproj <that file> (or let -hf auto-fetch it).
+            # Reasoning is left at the llama.cpp default (auto) — Cosmos IS a
+            # reasoning model, so unlike gemma we do NOT force it off. Image +
+            # NVMe mounts are identical to gemma4-12b-it-gguf-orin.
+            THOR_LAUNCH_BACKEND="llamacpp"
+            THOR_LAUNCH_MODEL_SOURCE="apolo13x/Cosmos-Reason2-8B-GGUF:Q4_K_M (llama.cpp, Orin AGX)"
+            THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-orin}"
+            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-apolo13x/Cosmos-Reason2-8B-GGUF:Q4_K_M}"
+            # No speculative draft: leave THOR_LLAMACPP_SPEC_DRAFT_HF at its empty
+            # reset default so run_thor_llamacpp_container skips the draft args.
+            THOR_LLAMACPP_CTX="${THOR_LLAMACPP_CTX:-262144}"
+            THOR_LLAMACPP_NGL="${THOR_LLAMACPP_NGL:-999}"
+            # q8_0 KV (K+V) + flash-attn. No draft KV types (no draft model), so
+            # leave THOR_LLAMACPP_DRAFT_CACHE_TYPE_* unset — the run helper's
+            # `-n` guards then omit the --cache-type-*-draft flags.
+            THOR_LLAMACPP_CACHE_TYPE_K="${THOR_LLAMACPP_CACHE_TYPE_K:-q8_0}"
+            THOR_LLAMACPP_CACHE_TYPE_V="${THOR_LLAMACPP_CACHE_TYPE_V:-q8_0}"
+            THOR_LLAMACPP_FLASH_ATTN="${THOR_LLAMACPP_FLASH_ATTN:-on}"
+            THOR_LLAMACPP_EXTRA_ARGS=(--no-mmproj --jinja --reasoning auto)
+
+            # NVMe-backed cache roots (host side), identical to gemma4-12b-it-gguf-orin.
+            # The HF cache is shared (repos coexist, keyed by name), keeping the
+            # GGUF off the eMMC and persisting it across `--rm`. See that profile's
+            # comment + isaac_ros_custom_bringup/jetson_orin_storage/README.md.
+            if [[ -z "${_user_hf_cache_dir}" ]]; then
+                THOR_HF_CACHE_DIR="/mnt/nova_ssd/hf-cache-orin"
+            fi
+            THOR_LLAMACPP_CACHE_DIR_HOST="${THOR_LLAMACPP_CACHE_DIR_HOST:-/mnt/nova_ssd/llama-cpp-cache}"
+            THOR_LLAMACPP_HF_MOUNT_ARGS=(
+                -v "${THOR_HF_CACHE_DIR}:/data/models/huggingface"
+                -v "${THOR_HF_CACHE_DIR}:/root/.cache/huggingface"
+                -v "${THOR_LLAMACPP_CACHE_DIR_HOST}:/root/.cache/llama.cpp"
+            )
+            THOR_LLAMACPP_HF_ENV_ARGS=()
+            ;;
         *)
             fail "Unsupported model profile: ${profile}"
             print_supported_model_profiles

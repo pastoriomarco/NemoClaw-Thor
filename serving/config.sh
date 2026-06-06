@@ -160,8 +160,9 @@ Supported model profiles:
     qwen3.5-9b-claude-distilled-nvfp4  DeltaNet hybrid, 9B Opus-distilled, fast control loop (TEB 42)
 
   Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning):
-    cosmos-reason2-2b         Qwen3-VL-2B base, 32K ctx, 2-conc
-    cosmos-reason2-8b         Qwen3-VL-8B base, 64K ctx, 3-conc (TEB 81)
+    cosmos-reason2-2b              Qwen3-VL-2B base, 32K ctx, 2-conc
+    cosmos-reason2-8b              Qwen3-VL-8B base, 64K ctx, 3-conc (TEB 81)
+    cosmos-reason2-8b-gguf-orin    GGUF Q4_K_M via llama.cpp (text-only, 256K ctx, q8_0 KV), Jetson Orin AGX image + NVMe caches
 
   Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text):
     nemotron3-nano-omni-30b-a3b-nvfp4            tool-calling regime (think OFF, no reasoning parser)
@@ -574,6 +575,28 @@ resolve_model_profile() {
             THOR_TARGET_MODEL_REASONING="false"
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="gemma4"
+            THOR_TARGET_QUANTIZATION=""
+            ;;
+        cosmos-reason2-8b-gguf-orin)
+            # Jetson Orin AGX 64GB llama.cpp/GGUF variant of cosmos-reason2-8b
+            # (NVIDIA Cosmos Reason 2 8B — Qwen3-VL-8B base). Served by llama.cpp
+            # from the community GGUF repo (apolo13x/Cosmos-Reason2-8B-GGUF, the
+            # repo behind the jetson-ai-lab Orin recipe; the old Kbenkhaled/...
+            # name 307-redirects there). Q4_K_M weights + q8_0 KV at 256K ctx —
+            # the runtime knobs live in prepare_thor_launch_profile (launch.sh).
+            # The THOR_TARGET_* below are not consumed by llama.cpp but are kept
+            # set so the shared post-case finalizer stays defined under `set -u`
+            # (mirrors the gemma4-12b-it-gguf-orin case). REASONING/TOOL parser
+            # mirror the vLLM cosmos-reason2-8b profile (reasoning model, hermes).
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="cosmos-reason2-8b-gguf-orin"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="auto"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_TOOL_CALL_PARSER="hermes"
             THOR_TARGET_QUANTIZATION=""
             ;;
         *)
