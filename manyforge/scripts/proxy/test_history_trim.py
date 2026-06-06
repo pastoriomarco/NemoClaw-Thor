@@ -132,6 +132,23 @@ rungs, _ = _mod._trim_history_to_budget(b, 20000)
 check("reads-first: no truncate_oldest when reads suffice",
       not any(r.startswith("truncate_oldest") for r in rungs), f"rungs={rungs}")
 
+# --- 10. conversationId extraction (for correlating the truncation warning) ---
+# real shape: composer injects a manifest into a list-style user message.
+manifest = '{\n  "mode": "composer-assistant",\n  "conversationId": "chain-pnp_build-step01-1780734164733",\n  "nodeCatalog": {}\n}'
+b = body([{"role": "system", "content": "s"},
+          {"role": "user", "content": [{"type": "text", "text": manifest}]}])
+check("convId: extracted from list-content manifest",
+      _mod._extract_conversation_id(b) == "chain-pnp_build-step01-1780734164733",
+      f"got {_mod._extract_conversation_id(b)!r}")
+# plain string content
+b2 = body([{"role": "user", "content": 'ctx {"conversationId": "abc-123"} end'}])
+check("convId: extracted from string content",
+      _mod._extract_conversation_id(b2) == "abc-123")
+# absent -> None (graceful)
+check("convId: absent -> None",
+      _mod._extract_conversation_id(body([{"role": "user", "content": "no id here"}])) is None)
+check("convId: non-dict -> None", _mod._extract_conversation_id("nope") is None)
+
 print()
 if _fail:
     print(f"FAILED ({len(_fail)}): " + ", ".join(_fail)); sys.exit(1)

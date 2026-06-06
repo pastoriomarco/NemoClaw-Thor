@@ -2432,6 +2432,41 @@ def _trim_history_to_budget(body_json: dict, max_chars: int) -> tuple[list[str],
     return applied, before - _size()
 
 
+# The composer injects a per-request manifest (carried in a user message) that
+# includes the manyforge conversationId. We read it so history trim/truncate
+# events can be correlated to a conversation and surfaced to the user as a
+# warning by the composer. Bounded id length keeps the regex cheap/safe.
+_CONVERSATION_ID_RE = _re.compile(r'"conversationId"\s*:\s*"([^"]{1,128})"')
+
+
+def _extract_conversation_id(body_json: object) -> str | None:
+    """Best-effort conversationId from the request. Returns None if absent so a
+    manifest-format change degrades gracefully (the event is still logged,
+    just without the id) rather than breaking the request path."""
+    if not isinstance(body_json, dict):
+        return None
+    messages = body_json.get("messages")
+    if not isinstance(messages, list):
+        return None
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        parts: list[str] = []
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for p in content:
+                if isinstance(p, dict) and isinstance(p.get("text"), str):
+                    parts.append(p["text"])
+        for text in parts:
+            if "conversationId" in text:
+                mm = _CONVERSATION_ID_RE.search(text)
+                if mm:
+                    return mm.group(1)
+    return None
+
+
 def _append_log(record: dict) -> None:
     line = json.dumps(record, sort_keys=False, default=str)
     with _LOG_LOCK:
@@ -2541,6 +2576,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # residual over-budget is rare and still within the actual window.)
             body_json, body_raw = _try_parse_json(body)
             if isinstance(body_json, dict):
+                # Read the conversationId BEFORE trimming (rung 4 may drop the
+                # manifest message), so the composer can correlate the warning.
+                conv_id = _extract_conversation_id(body_json)
                 rungs, shed = _trim_history_to_budget(body_json, _MAX_REQUEST_CHARS)
                 if rungs:
                     body = json.dumps(body_json, separators=(",", ":")).encode("utf-8")
@@ -2555,6 +2593,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         "event": "proxy_history_truncated" if truncated
                         else "proxy_history_trimmed",
                         "path": path,
+                        "conversationId": conv_id,
                         "rungs": rungs,
                         "chars_shed": shed,
                         "body_chars_after": len(body),
