@@ -808,12 +808,61 @@ async def cancel_request(request_id: str) -> dict[str, Any]:
 
 
 @app.post("/v1/manyforge/assistant")
+def _collect_history_truncation_warnings(conversation_id: str, since_ms: int) -> list[str]:
+    """Best-effort: read the vllm-proxy log for ``proxy_history_truncated``
+    events matching this conversation since ``since_ms`` (this turn) and return
+    their userWarnings (deduped, capped). The proxy tags each event with the
+    conversationId it extracted from the request manifest, so the bridge -- a
+    host process sharing the proxy's log dir -- can correlate a history
+    trim/truncation back to this turn and surface it to the composer as a
+    user-facing warning. Never raises (the warning is best-effort, not
+    load-bearing): a missing log / parse error / format change yields []."""
+    path = (
+        os.environ.get("MANYFORGE_PROXY_LOG_PATH")
+        or os.environ.get("OPENCLAW_PROXY_LOG_PATH")
+        or "/tmp/manyforge-assistant-e2e/vllm-proxy.jsonl"
+    )
+    out: list[str] = []
+    try:
+        if not conversation_id or not os.path.exists(path):
+            return out
+        with open(path, "rb") as fh:
+            try:
+                fh.seek(-262144, os.SEEK_END)  # tail only; don't scan a huge log
+            except OSError:
+                fh.seek(0)
+            tail = fh.read().decode("utf-8", "replace")
+        seen: set[str] = set()
+        for line in tail.splitlines():
+            if "proxy_history_truncated" not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if (rec.get("event") != "proxy_history_truncated"
+                    or rec.get("conversationId") != conversation_id):
+                continue
+            if since_ms and int(rec.get("ts") or 0) < since_ms:
+                continue
+            warning = rec.get("userWarning")
+            if isinstance(warning, str) and warning and warning not in seen:
+                seen.add(warning)
+                out.append(warning)
+                if len(out) >= 5:
+                    break
+        return out
+    except Exception:
+        return out
+
+
 async def assistant(request: Request) -> JSONResponse:
     # Single timer for end-to-end metrics. Set before any early-return path
     # so the duration histogram covers parse errors too. ACTIVE_REQUESTS is
     # decremented at every return statement via explicit calls (the function
     # is too large to wrap cleanly in a single try/finally).
     handler_started = time.perf_counter()
+    request_ts_ms = int(time.time() * 1000)  # wall-clock start, to scope proxy events to this turn
     transport = "unknown"  # tightened to gateway_http / cli_shell_out once cfg loads
     ACTIVE_REQUESTS.inc()
     try:
@@ -1580,6 +1629,25 @@ async def assistant(request: Request) -> JSONResponse:
             "bridge_loop_history_cleared_on_success",
             requestId=request_id,
             conversationKey=list(loop_conv_key),
+        )
+    # Surface any proxy-side history trim/truncation for THIS turn as a
+    # user-facing warning (the composer already flows body["warnings"] to its
+    # AI section). Correlated by the conversationId the proxy tagged on its
+    # event; scoped to this turn via request_ts_ms.
+    trunc_warnings = _collect_history_truncation_warnings(
+        str(payload.get("conversationId") or request_id), request_ts_ms
+    )
+    if trunc_warnings:
+        existing = body.get("warnings")
+        if not isinstance(existing, list):
+            existing = []
+            body["warnings"] = existing
+        existing.extend(trunc_warnings)
+        body["historyTruncated"] = True
+        _log_event(
+            "bridge_history_truncation_surfaced",
+            requestId=request_id,
+            count=len(trunc_warnings),
         )
     _record_outcome("success", transport, time.perf_counter() - handler_started)
     ACTIVE_REQUESTS.dec()
