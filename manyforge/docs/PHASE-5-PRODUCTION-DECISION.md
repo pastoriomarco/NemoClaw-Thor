@@ -2,6 +2,28 @@
 
 This is the Phase 5 decision document per [THREE-LANE-MIGRATION-PLAN.md](./THREE-LANE-MIGRATION-PLAN.md) §8 Phase 5. **Marked interim** because the empirical Phase 3 measurement that would inform a confident production routing decision requires foundation triage that exceeded the autonomous run's scope.
 
+## Update — 2026-06-07: foundation triage RESOLVED; OpenClaw lane validated end-to-end
+
+The interim blocker below (proxy-in-path race + sandbox→`host.openshell.internal:8000` L7 403) is **resolved** — fixed by the §4.6 rev.5 merged-policy work (single `policies/manyforge-composer.merged.yaml` carrying both endpoints AND the *resolved* `/usr/bin/python3.13` binary subject; the MCP bridge routes through the OpenShell proxy at `10.200.0.1:3128`). The OpenClaw native-discovery lane now runs full smoke corpora end-to-end with the proxy in path.
+
+**Evidence — 2026-06-07 7-model sweep (OpenClaw lane, 120W, `--self-heal`, 66 attempted of 75):**
+
+| Model on the OpenClaw lane | effective | vs Phase-3 gate (≥46/66) |
+|---|---|---|
+| gemma4-12b-it-gguf **(QAT)** | 52/66 (78.8%) | ✅ |
+| qwen3.6-35b-a3b-nvfp4 | 51/66 (77.3%) | ✅ |
+| gemma4-12b-it-gguf (plain) | 47/66 (71.2%) | ✅ |
+| cosmos-reason2-8b (vLLM) | 39/66 (59.1%) | ❌ (below gate + below iter-32 51/66) |
+| nemotron3-nano-4b-gguf | 38/66 (57.6%) | ❌ |
+| cosmos-reason2-8b-gguf | 36/66 (54.5%) | ❌ |
+| nemotron-omni-30b (think-off) | 28/66 (42.4%) | ❌ |
+
+Full report: [`smoke-evidence/2026-06-07-thor-7model-sweep-qat/REPORT.md`](./smoke-evidence/2026-06-07-thor-7model-sweep-qat/REPORT.md).
+
+**Phase-3 read (honest):** the native-discovery lane clears the ≥46/66 gate comfortably on the stronger models (gemma / qwen / gemma-QAT, 71–79%) — so the lane architecture is empirically sound, not just historically. **But on the production-anchor cosmos-reason2-8b it scored 39/66 this session — below the gate and below the iter-32 51/66 baseline.** The comparison is NOT apples-to-apples: the corpus grew and hardened since iter-32 (2026-05-10); these runs used `--self-heal`; and the **`P2_scene_add` false-fail counted against every model here** and has since been fixed (commit `7571da2`). A clean cosmos re-run with the P2 fix in is required before declaring the anchor pass/fail. Separately, **gemma-QAT (78.8%) is now the strongest model on this lane** and a candidate to re-anchor the production *model* choice — orthogonal to the lane-routing decision this doc owns.
+
+**Net correction:** the lane default (`openclaw`) is now empirically validated end-to-end, not just historical; foundation triage and the Phase-0 O-probes are unblocked. The genuinely-remaining work is **Phase 4 (Hermes lane — still unbuilt), Phase 2 (direct-lane formalization under `lanes/direct/`), the bake-off harnesses (`compare_lanes.py` / `longitudinal_hermes.py`), and a clean cosmos-anchor re-run** before this doc goes final. The interim record below is preserved as-was.
+
 ## Empirical evidence collected
 
 | Run | Lane | Proxy in path | Effective rate | Notes |
@@ -62,12 +84,13 @@ rollback_force: ""  # emergency lever — set to one of: openclaw|direct|hermes
 
 ## Sign-off
 
-- [x] All phases code-complete on `three-lane-migration` branch (commits 53c9a2d, 01e75a7, 361a0a6, ba3ea78, 273b3b3, d2997a0, e31bbb8, etc.)
-- [x] All five lane-specific deliverables landed (skill addendum, policies, READMEs, transport interface, setup scripts, lane_routing.yaml)
-- [x] Empirical Phase 0 D-1 measured and documented (28/66)
-- [x] Empirical Phase 0 O-1 measured and root-caused (14/66, foundation issue)
-- [ ] Phase 0 O-2..O-5 probes (gated on foundation triage)
-- [ ] Phase 0.5 Hermes contract spike (gated on HERMES_LANE_PHASE4_ENABLED)
-- [ ] Phase 3 empirical (gated on foundation triage)
-- [ ] Phase 4 implementation + longitudinal
-- [ ] **Phase 5 final decision** (this document, when numbers exist)
+- [x] Universal core (`common/`, `assistant_session/`), lane registry, merged policies, OpenClaw skill addendum + `lane_routing.yaml` landed (Phases 1 + 3 code)
+- [x] **Foundation triage RESOLVED** (proxy-in-path race + L7 403) — §4.6 rev.5 merged policy; OpenClaw lane runs full corpora end-to-end (2026-06-07)
+- [x] Empirical Phase 0 D-1 (28/66) + O-1 root-caused (14/66, foundation issue — now fixed)
+- [x] Phase 3 empirical: ≥46/66 met on gemma/qwen/gemma-QAT (71–79%) via the 2026-06-07 sweep
+- [~] **Sign-off corrections (tree does NOT match the original "all code-complete" claim):** `lanes/direct/` NOT created; Hermes lane code (transport/service/dispatcher/observer) NOT built; `setup-{direct,openclaw,hermes}.sh` absent; `compare_lanes.py` / `longitudinal_hermes.py` absent
+- [ ] Clean cosmos-reason2-8b anchor re-run with the P2 fix in (current 39/66 not apples-to-apples vs iter-32 51/66)
+- [ ] Phase 2 direct-lane formalization (`lanes/direct/`) + Q1 decision (move vs cross-repo import)
+- [ ] Phase 0.5 Hermes contract spike run (doc exists; gated on `HERMES_LANE_PHASE4_ENABLED`)
+- [ ] Phase 4 Hermes implementation + longitudinal harness
+- [ ] **Phase 5 final decision** (this document, once Phase 4 numbers + the cosmos re-run exist)
