@@ -591,6 +591,8 @@ class CaseResult:
     failures: list[str] = field(default_factory=list)
     soft_failures: list[str] = field(default_factory=list)
     skip_reason: str = ""
+    healed: bool = False        # --self-heal fired after this chained step's failure
+    heal_detail: str = ""       # splice/replay detail, or the heal-failure reason
 
 
 # (Removed 2026-06-07) The opt-in chain-state contamination detector
@@ -1280,6 +1282,8 @@ def main() -> int:
             if spec and conv and ch_step and self_heal_container:
                 ok, detail = _sh.self_heal(args.composer, self_heal_container,
                                            args.self_heal_agent, conv, spec, case["id"])
+                r.healed = ok          # r is already in `results` by reference → lands in the report
+                r.heal_detail = detail
                 print(f"      🩹 self-heal {'OK' if ok else 'FAILED'} (step {ch_step}): {detail}")
 
     # Summary
@@ -1324,6 +1328,13 @@ def main() -> int:
             f"  effective rate:   {n_pass_eff}/{n_attempted}  "
             f"({100.0 * n_pass_eff / n_attempted:.1f}%)"
         )
+
+    healed = [r.case_id for r in results if r.healed]
+    heal_failed = [r.case_id for r in results if r.heal_detail and not r.healed]
+    if healed:
+        print(f"  self-healed:      {len(healed)}  ({', '.join(healed)})")
+    if heal_failed:
+        print(f"  self-heal FAILED: {len(heal_failed)}  ({', '.join(heal_failed)})")
 
     # Report file
     ts = int(time.time() * 1000)
