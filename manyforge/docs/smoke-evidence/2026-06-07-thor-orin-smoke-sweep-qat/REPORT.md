@@ -1,4 +1,8 @@
-# Thor smoke-corpus sweep — 7 model runs incl. gemma-QAT (2026-06-07)
+# Thor + Orin smoke-corpus sweep — 11 model-runs incl. gemma-QAT (2026-06-07)
+
+> Two companion sweeps with one shared method: **7 runs on Jetson AGX Thor** (below) and
+> **4 GGUF runs on Jetson AGX Orin 64 GB** (see *Orin sweep* section). The gemma-QAT
+> intervention was run on both boxes and lands on the **same PnP chain count (14/19)**.
 
 **Hardware:** Jetson AGX Thor @ **120W** (same power as all prior + Orin benchmarks → directly comparable).
 **Method (identical across runs):** full 75-case `smoke_corpus.yaml` (9 future-tier skipped), `--self-heal` ON
@@ -34,6 +38,48 @@ gemma-QAT replaces plain gemma as the main model (commit `7dcb689`). Verified ag
 - **End-to-end gain is larger on Thor** (+7.6 effective vs Orin's +3.0). **QAT gemma is now the highest effective of the whole sweep (78.8%)** — edging qwen-35b — as a lightweight GGUF (no vLLM, ~⅓ the params). **Verdict: keep QAT.**
 - Speed: median +21% is context-dragged by long chain decodes; the clean short-context ceiling (~38 t/s) is where the ~2× shows, matching Orin's probe regime.
 - **Refines the Orin sink-law:** plain gemma & qwen both decode ~16–17 t/s yet plain sank ~step 11–15 and qwen rode to 20 → sink ≈ (session-size × per-turn-length) ÷ (decode × compaction-budget), not decode alone. Bounded thinking + spec-decode keep turns compact.
+
+## Orin sweep — 4 GGUF runs (2026-06-07, AGX Orin 64 GB @ MAXN)
+
+Companion sweep on the **Jetson AGX Orin 64 GB** (sm87 Ampere) — **llama.cpp / GGUF lane only**
+(these runs predate JetPack 7.2; no vLLM-on-Orin yet — see Orin follow-up). Identical 75-case
+corpus, `--self-heal` ON, temp=1.0, **MAXN** (nvpmodel 0, GPU 1.3 GHz). Decode = single 200-tok
+`/completion` probe. Artifacts: `/tmp/smoke-bench/<profile>.{summary.md,harness.txt,cases.txt,report.json}`.
+
+### Scoreboard (ranked by effective rate)
+
+| # | Profile | Lane | first-try | effective | soft | fail | heals | PnP chain | decode | avg case |
+|---|---------|------|-----------|-----------|------|------|-------|-----------|--------|----------|
+| 🥇 | **gemma4-12b-it-gguf-orin (QAT)** | GGUF | 65.2% | **74.2%** | 6 | 17 | 4 (+1 fail) | **14/19** | 29.1 probe | 69s |
+| 🥈 | **gemma4-12b-it-gguf-orin (plain)** | GGUF | 59.1% | 71.2% | 8 | 19 | 9 | 10/19 | 15.0 | 95s |
+| 🥉 | **nemotron3-nano-4b-gguf-orin (auto)** | GGUF | 51.5% | 62.1% | 7 | 25 | 7 | 12/19 | **39.2** | 74s |
+| 4 | **cosmos-reason2-8b-gguf-orin (think-ON)** | GGUF | 43.9% | 50.0% | 4 | 33 | 8 | 11/19 | 23.3 | 130s |
+
+### Orin harness-firing tally (addresses Follow-up #4 — bridge/proxy log depth)
+
+| signal | QAT | plain | nemotron | cosmos |
+|--------|-----|-------|----------|--------|
+| requests completed / 66 | 61 | 55 | 63 | 51 |
+| compaction fired / ok / timeout | 9 / 5 / 4 | 9 / 5 / 4 | 9 / 6 / 3 | 9 / 5 / 4 |
+| session poisons (all recovered) | 5 | 11 | 3 | 15 |
+| request_timeout | 1 | 6 | 0 | 11 |
+| chat-fail HTTP codes | 502×4, -1×1 | -1×5, 502×5, 504×1 | 502×3 | -1×12, 502×4 |
+| proxy loop_reflection_injected | 69 | 67 | 33 | **439** |
+| proxy loop_hard_stop | 9 | 3 | 3 | **33** |
+
+gemma-plain exercised **all four** poison reasons (`timeout`, `compact_timeout`, `compact_session_lock_timeout`, `session_lock_timeout`) — every one recovered cleanly. Self-heal fired on every chained fail and healed every time invoked (QAT's 1 "fail" was a `reset-to-base` request that itself timed out under congestion, not a logic error).
+
+### Orin-specific findings
+
+1. **QAT verified cross-platform, exactly.** Orin QAT = first-try 65.2 / eff 74.2 / **PnP 14/19** — the chain count matches Thor QAT bit-for-bit (see *QAT verification*). Sink moved plain→QAT from ~step 11 to ~step 12, then **oscillated-and-recovered** (14/16/18 ✅) where plain stayed sunk. Same intervention, same outcome, two platforms.
+2. **The sink-law is monotonic in decode speed on one box, four speeds:** nemotron 39 t/s → never sinks (oscillates to PnP_20); QAT 29 → sinks ~12 then recovers; cosmos 23 → holds to ~14 then sinks; plain 15 → sinks ~11. Among GGUF-on-Orin, tokens/sec orders the sink-point — consistent with finding #2 and the refined sink-law.
+3. **thinking-ON cratered cosmos here too** (mirrors cross-cutting #1): 439 proxy loop-reflections + 33 hard-stops (≈10× the others) + 12× `chat HTTP -1` request-timeouts → 50.0% eff, last place. Over-reasoning on ambiguous prompts blew the 300 s budget even on **fresh** sessions, not just the chain.
+4. **Platform-invariance check:** plain gemma = **71.2% eff on both boxes** (Orin & Thor) — confirms the corpus + harness are platform-stable; what moves is decode (arch × bandwidth, finding #3) and therefore the chain.
+5. **P2 false-failed on all 4 Orin runs** — they predate the 2026-06-07 `capture_state` fix, so the counts above include it. The "Orin 11 universal failures" referenced in *Cases NO model solved* are the pre-fix set (1 harness bug + chain-infra + the 2-case capability core).
+
+### Orin verdict & follow-up
+- **Best Orin all-rounder = QAT gemma (74.2%)**; **fastest survivable = nemotron-4b** (39 t/s, best PnP of the small models). cosmos-gguf not shippable (matches Thor verdict).
+- **Next (JetPack 7.2, June 2026):** Orin now shares Thor's CUDA-13 stack and gains **first-class vLLM (sm87 Marlin INT4)** → unlocks **Nemotron-3-Nano-30B-A3B (AWQ-INT4) at ~40 t/s on Orin**, bypassing the llama.cpp sm87 MoE-decode-hang. Candidate to top this Orin board; smoke pending.
 
 ## Cross-cutting findings
 
