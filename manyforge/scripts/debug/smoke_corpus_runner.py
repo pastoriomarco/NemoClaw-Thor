@@ -1279,7 +1279,7 @@ def main() -> int:
             conv = chain_state.get(ch_id) if ch_id else None
             if spec and conv and ch_step and self_heal_container:
                 ok, detail = _sh.self_heal(args.composer, self_heal_container,
-                                           args.self_heal_agent, conv, spec, int(ch_step))
+                                           args.self_heal_agent, conv, spec, case["id"])
                 print(f"      🩹 self-heal {'OK' if ok else 'FAILED'} (step {ch_step}): {detail}")
 
     # Summary

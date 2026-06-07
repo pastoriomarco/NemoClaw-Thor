@@ -144,16 +144,19 @@ def splice_golden_turn(container: str, agent: str, conversation_id: str, golden_
 
 
 def self_heal(composer: str, container: str, agent: str, conversation_id: str,
-              chain_spec: dict, failed_step: int) -> tuple[bool, str]:
+              chain_spec: dict, failed_id: str) -> tuple[bool, str]:
     """Full self-heal after a chained step failure: canonical state replay + golden
-    transcript splice. `failed_step` is 1-based (the corpus chain_step)."""
-    ok, detail = replay_to_canonical(composer, chain_spec, failed_step)
+    transcript splice. `failed_id` is the corpus case id of the failed step. The golden
+    step is matched by id (NOT by chain_step number) so the mapping stays correct even
+    when the golden list omits steps the corpus skips (e.g. future-tier PnP_19)."""
+    steps = chain_spec.get("steps") or []
+    gpos = next((i for i, s in enumerate(steps) if s.get("id") == failed_id), None)
+    if gpos is None:
+        return False, f"no golden step for id {failed_id}"
+    ok, detail = replay_to_canonical(composer, chain_spec, gpos + 1)  # apply golden steps[0..gpos]
     if not ok:
         return False, f"state replay failed: {detail}"
-    steps = chain_spec.get("steps") or []
-    if failed_step - 1 >= len(steps):
-        return False, f"no golden step for index {failed_step}"
-    ok, detail = splice_golden_turn(container, agent, conversation_id, steps[failed_step - 1])
+    ok, detail = splice_golden_turn(container, agent, conversation_id, steps[gpos])
     if not ok:
         return False, f"transcript splice failed: {detail}"
     return True, detail
