@@ -803,9 +803,15 @@ prepare_thor_launch_profile() {
             # reaches it on the usual contract (model on THOR_VLLM_PORT, the
             # launcher's vllm-proxy fronts :8000).
             THOR_LAUNCH_BACKEND="llamacpp"
-            THOR_LAUNCH_MODEL_SOURCE="unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL (llama.cpp)"
+            THOR_LAUNCH_MODEL_SOURCE="unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL (llama.cpp)"
             THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-thor}"
-            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL}"
+            # Main model: QAT (quantization-aware-trained) 12B at UD-Q4_K_XL —
+            # same 4-bit size + decode speed as the plain UD-Q4_K_XL build, but
+            # QAT recovers most of the BF16 quality lost to 4-bit quantization
+            # (the draft is QAT for the same reason; now the main matches). NOTE:
+            # the QAT repo capitalizes the size (…-12B-…) and the GGUF is
+            # gemma-4-12B-it-qat-UD-Q4_K_XL.gguf; the lowercase form 307-redirects.
+            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL}"
             # Speculative draft: the QAT (quantization-aware-trained) E2B. Same
             # 4-bit size/speed as the plain UD-Q4_K_XL E2B, but QAT is more
             # accurate at 4-bit → the 12B accepts more drafted tokens (higher
@@ -853,9 +859,15 @@ prepare_thor_launch_profile() {
             # When updating the Thor gemma4-12b-it-gguf knobs above, mirror the
             # context / KV / flash-attn values here so the two stay aligned.
             THOR_LAUNCH_BACKEND="llamacpp"
-            THOR_LAUNCH_MODEL_SOURCE="unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL (llama.cpp, Orin AGX)"
+            THOR_LAUNCH_MODEL_SOURCE="unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL (llama.cpp, Orin AGX)"
             THOR_LLAMACPP_IMAGE="${THOR_LLAMACPP_IMAGE:-ghcr.io/nvidia-ai-iot/llama_cpp:latest-jetson-orin}"
-            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12b-it-GGUF:UD-Q4_K_XL}"
+            # Main model: QAT (quantization-aware-trained) 12B at UD-Q4_K_XL —
+            # same 4-bit size + decode speed as the plain UD-Q4_K_XL build, but
+            # QAT recovers most of the BF16 quality lost to 4-bit quantization
+            # (the draft is QAT for the same reason; now the main matches). NOTE:
+            # the QAT repo capitalizes the size (…-12B-…) and the GGUF is
+            # gemma-4-12B-it-qat-UD-Q4_K_XL.gguf; the lowercase form 307-redirects.
+            THOR_LLAMACPP_HF="${THOR_LLAMACPP_HF:-unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL}"
             # Speculative draft: the QAT (quantization-aware-trained) E2B. Same
             # 4-bit size/speed as the plain UD-Q4_K_XL E2B, but QAT is more
             # accurate at 4-bit → the 12B accepts more drafted tokens (higher
