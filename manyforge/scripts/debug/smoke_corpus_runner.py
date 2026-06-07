@@ -160,6 +160,54 @@ def capture_state(composer: str) -> dict[str, Any]:
     if code == 200 and isinstance(scene, dict):
         state["scene"].update(scene)
 
+    # Draft scene resources (created by scene_draft_* tools) live in
+    # program.sceneResources and are NOT mirrored into the runtime
+    # /api/scene/state until the draft is materialized/cycled. Standalone
+    # scene-edit cases (e.g. P2_scene_add_specific) assert `scene.objects[...]`
+    # immediately after a draft op, so the runtime layer is empty and the
+    # assertion fails regardless of what the model did — a false negative.
+    # Fall back to the draft resources when the runtime scene carries no
+    # objects, so state_after measures the draft the tool actually mutated.
+    # (sceneResources uses shape.box_dimensions_m / pose.position_m, which the
+    # assertion alias map already maps from shape.box_dims / pose.position.)
+    # Draft scene resources (created by scene_draft_* tools) live in
+    # program.sceneResources and are NOT mirrored into the runtime
+    # /api/scene/state until the draft is materialized/cycled — the runtime
+    # layer holds only base geometry. state_after asserts `scene.objects[...]`
+    # right after a draft op, so without this the model's draft-added/updated
+    # object is invisible and the assertion is a FALSE negative (it never
+    # matches regardless of what the model did). Merge the draft resources into
+    # scene.objects (draft overrides runtime by id; new draft objects appended),
+    # normalizing to the legacy assertion keys (shape.box_dims / pose.position /
+    # id) because assert_state's path resolver is NOT alias-aware (only the
+    # args_contain matcher is).
+    draft_objs = state["program"].get("sceneResources")
+    if isinstance(draft_objs, list) and draft_objs:
+        def _norm(o: dict) -> dict:
+            o = dict(o)
+            sh = dict(o.get("shape") or {})
+            if "box_dimensions_m" in sh:
+                sh.setdefault("box_dims", sh["box_dimensions_m"])
+            o["shape"] = sh
+            po = dict(o.get("pose") or {})
+            if "position_m" in po:
+                po.setdefault("position", po["position_m"])
+            o["pose"] = po
+            if "objectId" in o:
+                o.setdefault("id", o["objectId"])
+            return o
+
+        merged = list(state["scene"].get("objects") or [])
+        idx = {(o.get("id") or o.get("objectId")): i for i, o in enumerate(merged)}
+        for o in draft_objs:
+            o = _norm(o)
+            oid = o.get("id") or o.get("objectId")
+            if oid in idx:
+                merged[idx[oid]] = o
+            else:
+                merged.append(o)
+        state["scene"]["objects"] = merged
+
     return state
 
 
