@@ -53,6 +53,9 @@ container (in-sandbox), not in the bridge. The bridge's job is:
   will become an `AssistantTransport` Protocol implementation in a
   future cycle.
 - The retired plugin attempt: archived at
-  [`manyforge/archive/openclaw-plugin-attempt-2026-06-02/`](../../archive/openclaw-plugin-attempt-2026-06-02/)
-  with a `BLOCKER-openclaw-plugin-2026-06-02.md` explaining why we
-  pivoted from the plugin to the discovery primer.
+  [`manyforge/archive/openclaw-plugin-attempt-2026-06-02/`](../../archive/openclaw-plugin-attempt-2026-06-02/).
+  Why we pivoted from the plugin to the discovery primer (the bundled
+  `nemoclaw` plugin owns `registerProvider({id:"inference"})` and OpenClaw
+  exposes no `extendProvider`): see
+  [THREE-LANE-MIGRATION-PLAN.md](../../docs/THREE-LANE-MIGRATION-PLAN.md)
+  §3 (line 46) and §10 (line 500).

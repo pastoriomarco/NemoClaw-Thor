@@ -292,7 +292,9 @@ NemoClaw-Thor/manyforge/
     ├── MANYFORGE-MCP-INTEGRATION.md     # durable; add Hermes mcp_servers section + lane-neutral bridge envs
     ├── SMOKE-CORPUS.md                  # durable
     ├── SMOKE-ITER-RUNBOOK.md            # durable
-    └── BLOCKER-openclaw-plugin-2026-06-02.md  # NEW — archives the abandoned plugin attempt
+    # (BLOCKER-openclaw-plugin-2026-06-02.md deleted 2026-06-08 — plugin path
+    #  superseded by the validated native-discovery lane; rationale retained
+    #  in §3/§10 of this doc, artifacts in archive/openclaw-plugin-attempt-2026-06-02/)
 ```
 
 **Files archived (NOT yet deleted from the live tree — see Phase 0 / Phase 3 gates):**
@@ -304,7 +306,7 @@ These move to `archive/openclaw-plugin-attempt-2026-06-02/` AND remain symlinked
 - `scripts/apply-openclaw-overrides.sh`
 - `scripts/build-manyforge-sandbox-image.sh`
 - `Dockerfile.manyforge-sandbox{,-prebuilt}`
-- `REBUILD-*.md` (already memory-flagged as transient; moved into the archive folder for forensics, link maintained from `docs/BLOCKER-openclaw-plugin-2026-06-02.md`)
+- `REBUILD-*.md` (already memory-flagged as transient; kept in `docs/` for forensics)
 
 ## 8. Migration phases with go/no-go gates
 
