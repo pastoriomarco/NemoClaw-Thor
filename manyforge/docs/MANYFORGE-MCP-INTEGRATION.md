@@ -674,7 +674,7 @@ out to be empirically wrong for the chat-completion POST path. With
 `local-inference` removed and only `manyforge-composer` active, the
 OpenShell network proxy (10.200.0.1:3128) denies sandbox→host:8000
 POSTs with `policy_denied`. Verified during the Phase 0 O-1 baseline
-investigation: see [PHASE-0-LANE-BASELINE.md](./PHASE-0-LANE-BASELINE.md)
+investigation: see [PHASE-0-LANE-BASELINE.md](./archive/PHASE-0-LANE-BASELINE.md)
 and [PIPELINE-TRACE-2026-06-03.md](./PIPELINE-TRACE-2026-06-03.md).
 
 The correct configuration is to apply BOTH presets:

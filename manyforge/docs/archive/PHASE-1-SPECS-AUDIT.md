@@ -1,6 +1,6 @@
 # Phase 1 — Specs Audit
 
-Per [THREE-LANE-MIGRATION-PLAN.md §8 Phase 1 Specs Check](./THREE-LANE-MIGRATION-PLAN.md), every modification to manyforge code must consult `manyforge_specs/` before landing. This document records every spec section consulted during the Phase 1 refactor and whether it was respected, amended, or extended.
+Per [THREE-LANE-MIGRATION-PLAN.md §8 Phase 1 Specs Check](../THREE-LANE-MIGRATION-PLAN.md), every modification to manyforge code must consult `manyforge_specs/` before landing. This document records every spec section consulted during the Phase 1 refactor and whether it was respected, amended, or extended.
 
 ## Files modified in Phase 1
 

@@ -60,7 +60,7 @@ Diagnostic helper: `./scripts/setup-direct.sh` walks the six gates
 and reports the first that fails.
 
 Baseline on cosmos-reason2-8b: **28/66 effective** (Phase 0 D-1; see
-[PHASE-0-LANE-BASELINE.md](./PHASE-0-LANE-BASELINE.md)). Failure
+[PHASE-0-LANE-BASELINE.md](./archive/PHASE-0-LANE-BASELINE.md)). Failure
 pattern: `args_contain[...] got '<MISSING>'` — cosmos calls the right
 tool but doesn't fill arguments.
 
@@ -171,7 +171,7 @@ curl -sS http://127.0.0.1:8200/healthz
 Expected: `{"status":"ok","provider":"openclaw","sandbox":"my-assistant",...}`.
 
 **OPENCLAW_ASSISTANT_USE_GATEWAY is now `false` by default** as of the
-2026-06-03 route fix (see [PHASE-0-LANE-BASELINE.md](./PHASE-0-LANE-BASELINE.md)).
+2026-06-03 route fix (see [PHASE-0-LANE-BASELINE.md](./archive/PHASE-0-LANE-BASELINE.md)).
 OpenClaw 2026.5.22's HTTP server does not expose `/v1/chat/completions`,
 so the legacy `gateway_http` transport returns 404 in 50ms. The bridge
 now uses `cli_shell_out` (invokes `openclaw agent` via `nemoclaw exec`)

@@ -1,6 +1,6 @@
 # Phase 0 — Lane Baseline Probes
 
-Phase 0 gate of the [THREE-LANE-MIGRATION-PLAN](./THREE-LANE-MIGRATION-PLAN.md). Per-lane validation that the two already-functional lanes (Direct + OpenClaw) work as expected on the current stack BEFORE the Phase 1 refactor lands.
+Phase 0 gate of the [THREE-LANE-MIGRATION-PLAN](../THREE-LANE-MIGRATION-PLAN.md). Per-lane validation that the two already-functional lanes (Direct + OpenClaw) work as expected on the current stack BEFORE the Phase 1 refactor lands.
 
 ## Version tuple
 

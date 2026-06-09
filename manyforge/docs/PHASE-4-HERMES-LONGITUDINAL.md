@@ -3,7 +3,7 @@
 **Status:** implementation landed; pipeline fixes validated; clean full-corpus
 empirical gate pending an operator-driven run.
 **Anchor model:** cosmos-reason2-8b (parity); production candidate gemma4-12b-it-gguf (QAT).
-**Companion docs:** [THREE-LANE-MIGRATION-PLAN.md §Phase 4](./THREE-LANE-MIGRATION-PLAN.md#phase-4--hermes-lane-bring-up-5-7-days), [PHASE-0.5-HERMES-SPIKE.md](./PHASE-0.5-HERMES-SPIKE.md).
+**Companion docs:** [THREE-LANE-MIGRATION-PLAN.md §Phase 4](./THREE-LANE-MIGRATION-PLAN.md#phase-4--hermes-lane-bring-up-5-7-days), [PHASE-0.5-HERMES-SPIKE.md](./archive/PHASE-0.5-HERMES-SPIKE.md).
 
 ## What landed (code-complete, unit-verified)
 
