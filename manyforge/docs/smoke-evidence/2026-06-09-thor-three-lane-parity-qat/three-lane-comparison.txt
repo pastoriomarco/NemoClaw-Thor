@@ -1,0 +1,57 @@
+==========================================================================
+PER-LANE RATES (scored = 66; same model gemma4-12b-it-gguf QAT, temp=1.0)
+==========================================================================
+  lane       scored  pass  soft  rec  fail   first-try  effective
+  direct         66    33     5    0    28  33/66=50.0% 38/66=57.6%
+  hermes         66    52     2    0    12  52/66=78.8% 54/66=81.8%
+  openclaw       66    44     7    0    15  44/66=66.7% 51/66=77.3%
+
+==========================================================================
+DIVERGENCES (cases where pass-status differs across available lanes)
+==========================================================================
+  30 divergent cases of 66
+  case                                           direct   hermes   openclaw
+  -------------------------------------------------------------------------
+  BB_add_specific                                FAIL     PASS     PASS    
+  BB_modify_medium                               FAIL     PASS     PASS    
+  CUR_runtime_remove_then_restore_graspable      FAIL     PASS     FAIL    
+  CUR_runtime_update_graspable_pose_each_cycle   FAIL     PASS     FAIL    
+  CUR_scene_add_static_fixture_not_runtime       FAIL     PASS     PASS    
+  CUR_scene_update_graspable_pose                PASS     FAIL     PASS    
+  CUR_wrap_existing_motion_with_retry            FAIL     PASS     PASS    
+  FALLBACK_alternate_medium                      FAIL     PASS     FAIL    
+  FALLBACK_generic                               FAIL     PASS     PASS    
+  INSERT_position_after_named_medium             FAIL     PASS     PASS    
+  INSERT_position_before_named_generic           FAIL     FAIL     PASS    
+  MOVE_swap_specific                             PASS     PASS     FAIL    
+  P2_scene_add_specific                          FAIL     PASS     PASS    
+  P3_tree_insert_runtime_obj_specific            PASS     PASS     FAIL    
+  PARALLEL_generic                               FAIL     PASS     PASS    
+  PARAM_delete_specific                          PASS     FAIL     PASS    
+  PnP_01_scene_ground                            FAIL     PASS     PASS    
+  PnP_02_scene_graspable                         FAIL     PASS     PASS    
+  PnP_08_close_gripper                           FAIL     PASS     PASS    
+  PnP_10_lift                                    PASS     PASS     FAIL    
+  PnP_12_place_descend                           PASS     PASS     FAIL    
+  PnP_16_retract                                 PASS     PASS     FAIL    
+  PnP_20_grip_force                              FAIL     PASS     FAIL    
+  REPLACE_simple_medium                          FAIL     FAIL     PASS    
+  REPLACE_subtree_specific                       FAIL     PASS     PASS    
+  SCENE_add_generic                              FAIL     FAIL     PASS    
+  SCENE_add_medium                               FAIL     PASS     PASS    
+  SCENE_remove_specific                          PASS     FAIL     PASS    
+  TREE_insert_runtime_generic                    FAIL     PASS     PASS    
+  TREE_insert_runtime_medium                     FAIL     PASS     PASS    
+
+==========================================================================
+DIRECT fails — category breakdown (schema-bug vs model)
+==========================================================================
+   6  scene_param_shape
+   6  clarify_overact
+   6  param_value_or_id
+   4  nested_pose_missing
+   3  loop_stop_502
+   2  timeout_504_-1
+   1  other
+  -> 19/28 direct-fails PASS on hermes: P2_scene_add_specific, SCENE_add_medium, TREE_insert_runtime_generic, TREE_insert_runtime_medium, INSERT_position_after_named_medium, PARALLEL_generic, FALLBACK_alternate_medium, FALLBACK_generic, REPLACE_subtree_specific, BB_add_specific, BB_modify_medium, PnP_01_scene_ground, PnP_02_scene_graspable, PnP_08_close_gripper
+  -> 18/28 direct-fails PASS on openclaw: P2_scene_add_specific, SCENE_add_generic, SCENE_add_medium, TREE_insert_runtime_generic, TREE_insert_runtime_medium, INSERT_position_after_named_medium, INSERT_position_before_named_generic, PARALLEL_generic, FALLBACK_generic, REPLACE_subtree_specific, REPLACE_simple_medium, BB_add_specific, BB_modify_medium, PnP_01_scene_ground
