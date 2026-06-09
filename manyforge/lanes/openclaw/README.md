@@ -59,3 +59,12 @@ container (in-sandbox), not in the bridge. The bridge's job is:
   exposes no `extendProvider`): see
   [THREE-LANE-MIGRATION-PLAN.md](../../docs/THREE-LANE-MIGRATION-PLAN.md)
   §3 (line 46) and §10 (line 500).
+
+## Operational & related docs
+
+- **Bring-up + live-monitoring (operational):**
+  [`manyforge/docs/operations/LANE_BRINGUP.md`](/home/tndlux/workspaces/dev_ws/src/manyforge/docs/operations/LANE_BRINGUP.md)
+  — the `openclaw` section (bridge on `:8200`; revives the gateway in the
+  `my-assistant` sandbox; health `curl http://127.0.0.1:8200/healthz`).
+- **Phase 3 result:** [`../../docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md`](../../docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md).
+- **Benchmarks + scorer analysis:** [`../../docs/LANE-COMPARISON.md`](../../docs/LANE-COMPARISON.md).

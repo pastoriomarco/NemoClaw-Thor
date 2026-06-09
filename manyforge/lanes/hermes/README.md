@@ -12,7 +12,7 @@ smoke/longitudinal numbers are operator-driven and still TBD).
 
 - The Composer-side `LANE_REGISTRY` carries the `hermes` entry with `inert=False`; `build_assistant_provider` routes it to `HermesAssistantProvider`.
 - The launcher (`assistant.sh::start_bridge_hermes`) starts the `:8300` bridge when `ASSISTANT_PROVIDER=hermes` **and** `HERMES_LANE_PHASE4_ENABLED=true`.
-- `setup-hermes.sh` (in `dev_ws/manyforge/scripts/`) implements the seven bring-up steps in the spike's strict order-of-ops.
+- `setup-hermes.sh` (in `dev_ws/src/manyforge/scripts/`) implements the seven bring-up steps in the spike's strict order-of-ops.
 
 ## Contents
 
@@ -68,4 +68,14 @@ Per principle #1 ("each lane works as upstream intends"), the Hermes lane uses H
 ## What's NOT here
 
 - Hermes daemon installation: lives in NemoClaw's blueprint at `agents/hermes/`.
-- The lane-neutral MCP bridge: it's at `dev_ws/manyforge/scripts/manyforge-mcp-bridge.py` and is already lane-neutralized in Phase 1 (verified for `MANYFORGE_LANE=hermes` resolution).
+- The lane-neutral MCP bridge: it's at `dev_ws/src/manyforge/scripts/manyforge-mcp-bridge.py` and is already lane-neutralized in Phase 1 (verified for `MANYFORGE_LANE=hermes` resolution).
+
+## Operational & related docs
+
+- **Bring-up + live-monitoring (operational):**
+  [`manyforge/docs/operations/LANE_BRINGUP.md`](/home/tndlux/workspaces/dev_ws/src/manyforge/docs/operations/LANE_BRINGUP.md)
+  — the `hermes` section (bridge on `:8300`; forwards to the Hermes gateway
+  sandbox; health `curl http://127.0.0.1:8300/healthz`). Requires
+  `HERMES_LANE_PHASE4_ENABLED=true`.
+- **Longitudinal design + gate:** [`../../docs/PHASE-4-HERMES-LONGITUDINAL.md`](../../docs/PHASE-4-HERMES-LONGITUDINAL.md).
+- **Benchmarks + scorer analysis:** [`../../docs/LANE-COMPARISON.md`](../../docs/LANE-COMPARISON.md).
