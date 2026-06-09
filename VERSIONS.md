@@ -39,7 +39,7 @@ Verified by booting a clean profile end-to-end with these versions.
 | NemoClaw CLI (host) | `lkg` (= `v0.0.55`) | 2026-06-02 | NVIDIA's last-known-good alias; what the public installer defaults to. `v0.0.56` is byte-equivalent for our stack (only [PR #4613](https://github.com/NVIDIA/NemoClaw/pull/4613) — default public installs to lkg). |
 | OpenShell CLI | `0.0.44` | 2026-06-02 | Host binary auto-installed by NemoClaw `install-openshell.sh`. |
 | OpenShell driver | `docker` (no k3s) | 2026-06-02 | v0.0.37+ replaced the in-cluster k3s with a host-side docker driver. New gateway endpoint is plaintext HTTP on `127.0.0.1:8080`. |
-| OpenClaw (in-sandbox) | `v2026.5.22` | 2026-06-02 | Baked into NemoClaw `lkg` sandbox image (digest `sha256:b3d832b596…`). 2026.4.24 was the prior pin; the version bump triggered the [Jun-02 stack rebuild](manyforge/docs/archive/REBUILD-2026-06-02-openshell-0.0.44.md). |
+| OpenClaw (in-sandbox) | `v2026.5.22` | 2026-06-02 | Baked into NemoClaw `lkg` sandbox image (digest `sha256:b3d832b596…`). 2026.4.24 was the prior pin; the version bump triggered the [Jun-02 stack rebuild](manyforge/docs/archive/REBUILD-2026-06-02.md). |
 
 Prior audit (kept for diff context):
 

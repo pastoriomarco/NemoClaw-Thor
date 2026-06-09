@@ -96,9 +96,7 @@ archive path.
 | [`archive/PHASE-0-LANE-BASELINE.md`](manyforge/docs/archive/PHASE-0-LANE-BASELINE.md) | Completed phase 0 (pre-refactor lane baselines). |
 | [`archive/PHASE-0.5-HERMES-SPIKE.md`](manyforge/docs/archive/PHASE-0.5-HERMES-SPIKE.md) | Completed phase 0.5 (Hermes contract spike). |
 | [`archive/PHASE-1-SPECS-AUDIT.md`](manyforge/docs/archive/PHASE-1-SPECS-AUDIT.md) | Completed phase 1 (specs audit). |
-| [`archive/REBUILD-2026-06-02-openshell-0.0.44.md`](manyforge/docs/archive/REBUILD-2026-06-02-openshell-0.0.44.md) | Completed 2026-06-02 OpenShell 0.0.44 rebuild record. |
-| [`archive/REBUILD-FINDINGS-2026-06-02.md`](manyforge/docs/archive/REBUILD-FINDINGS-2026-06-02.md) | Completed rebuild findings. |
-| [`archive/REBUILD-RESULTS-2026-06-02.md`](manyforge/docs/archive/REBUILD-RESULTS-2026-06-02.md) | Completed rebuild results. |
+| [`archive/REBUILD-2026-06-02.md`](manyforge/docs/archive/REBUILD-2026-06-02.md) | Completed 2026-06-02 rebuild — consolidates the rebuild record (OpenShell 0.0.44 + OpenClaw 2026.5.22), the findings, and the final bake-off report. |
 | [`archive/SMOKE-BAKEOFF-2026-06-01-3model.md`](manyforge/docs/archive/SMOKE-BAKEOFF-2026-06-01-3model.md) | Completed 3-model pre-rebuild bake-off. |
 | [`archive/WORKSPACE-PROMPT-OPTIMIZATION.md`](manyforge/docs/archive/WORKSPACE-PROMPT-OPTIMIZATION.md) | Completed 2026-05-06 prompt-tuning session. |
 | [`archive/PIPELINE-TRACE-2026-06-03.md`](manyforge/docs/archive/PIPELINE-TRACE-2026-06-03.md) | Closed OpenClaw-lane failure diagnosis. |
