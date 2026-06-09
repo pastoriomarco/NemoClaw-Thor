@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -432,6 +433,55 @@ def _value_matches(actual: Any, expected: Any) -> bool:
     return actual == expected
 
 
+def _orientation_to_quat(value: Any) -> list[float] | None:
+    """Normalize an orientation to a unit quaternion [x, y, z, w].
+
+    Accepts either representation the model may emit: a 3-element
+    ``orientation_rpy_deg`` (roll/pitch/yaw degrees) or a 4-element
+    ``orientation_xyzw`` quaternion. Returns None if not a usable orientation.
+    """
+    if not isinstance(value, (list, tuple)) or not all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in value
+    ):
+        return None
+    vals = [float(v) for v in value]
+    if len(vals) == 4:
+        q = vals
+    elif len(vals) == 3:
+        r, p, y = (math.radians(a) for a in vals)
+        cr, sr = math.cos(r / 2), math.sin(r / 2)
+        cp, sp = math.cos(p / 2), math.sin(p / 2)
+        cy, sy = math.cos(y / 2), math.sin(y / 2)
+        q = [
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy,
+        ]
+    else:
+        return None
+    norm = math.sqrt(sum(c * c for c in q))
+    if norm == 0.0:
+        return None
+    return [c / norm for c in q]
+
+
+def _orientation_matches(actual: Any, expected: Any, tol: float = 1e-3) -> bool:
+    """Rotation equality across representations and precision.
+
+    Converts both orientations to unit quaternions and compares via |dot|
+    (a quaternion q and -q describe the same rotation). This makes orientation
+    asserts robust to (a) the model copying orientation_xyzw vs orientation_rpy_deg,
+    and (b) float rounding — what matters is the resulting rotation, not the form.
+    """
+    qa = _orientation_to_quat(actual)
+    qe = _orientation_to_quat(expected)
+    if qa is None or qe is None:
+        return False
+    dot = abs(sum(a * b for a, b in zip(qa, qe)))
+    return dot >= 1.0 - tol
+
+
 # ----------------------------------------------------------------------
 # Tool-call assertion
 # ----------------------------------------------------------------------
@@ -591,6 +641,31 @@ def _match_args_contain(
     flat = _flatten(actual_args)
     failures: list[str] = []
     for legacy_path, expected_value in expected_flat.items():
+        # Orientation assert (representation- and precision-agnostic). The model
+        # may emit orientation_xyzw (quaternion) or orientation_rpy_deg (degrees)
+        # at any nesting/precision; compare as a rotation against whatever
+        # orientation the model actually emitted, anywhere in the args.
+        if legacy_path.rsplit(".", 1)[-1] in (
+            "orientation", "orientation_xyzw", "orientation_rpy_deg"
+        ):
+            if _orientation_to_quat(expected_value) is not None:
+                if any(
+                    k.rsplit(".", 1)[-1]
+                    in ("orientation", "orientation_xyzw", "orientation_rpy_deg")
+                    and _orientation_matches(v, expected_value)
+                    for k, v in flat.items()
+                ):
+                    continue
+                present = {
+                    k: v
+                    for k, v in flat.items()
+                    if k.rsplit(".", 1)[-1].startswith("orientation")
+                }
+                failures.append(
+                    f"{legacy_path}: no emitted orientation matches the expected "
+                    f"rotation {expected_value}; present={present or '<none>'}"
+                )
+                continue
         # Direct hit
         av = flat.get(legacy_path, "<MISSING>")
         if _value_matches(av, expected_value):

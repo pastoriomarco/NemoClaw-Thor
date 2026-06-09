@@ -222,6 +222,12 @@ cases:
           position: -1   # i.e. last child
           node.id: upsert_collision_object
           node.params.object_id: graspable
+          # "same position AND orientation as the scene start": the graspable
+          # starts at position [0.3,-0.3,0.15], orientation -45deg about Z.
+          # orientation is matched as a rotation, so the model may copy either
+          # orientation_xyzw or orientation_rpy_deg from scene state.
+          node.params.pose.position_m: [0.3, -0.3, 0.15]
+          node.params.pose.orientation_xyzw: [0, 0, -0.382683432365, 0.923879532511]
         allow_retries: true   # P3 typically retries via catalog_read
     forbidden_tools: [scene_draft_add_object, scene_draft_update_object]
     answer_must_contain: ["upsert", "graspable", "pick_and_place"]
@@ -1195,6 +1201,10 @@ cases:
           node.params.shape_type: box
           node.params.box_dimensions_m: [0.1, 0.01, 0.01]
           node.params.pose.frame_id: universe
+          # "at its initial scene pose": position [0.3,-0.3,0.15] + orientation
+          # -45deg about Z. orientation is matched as a rotation (either rep).
+          node.params.pose.position_m: [0.3, -0.3, 0.15]
+          node.params.pose.orientation_xyzw: [0, 0, -0.382683432365, 0.923879532511]
         allow_retries: true
     forbidden_tools: [scene_draft_remove_objects, scene_draft_update_object]
     answer_must_contain: ["runtime", "graspable"]
