@@ -29,7 +29,7 @@ Full report: [`smoke-evidence/2026-06-07-thor-7model-sweep-qat/REPORT.md`](./smo
 | Run | Lane | Proxy in path | Effective rate | Notes |
 |---|---|---|---|---|
 | Iter-32 baseline (memory, 2026-05-10) | OpenClaw (plugin attempt) | YES | 51/66 (77.3%) | Recorded in `project_smoke_corpus_iter32_winner` memory |
-| Pre-rebuild bake-off (2026-06-01) | OpenClaw on Qwen3.6-35B | YES | 56/66 (84.8%) | `SMOKE-BAKEOFF-2026-06-01-3model.md` |
+| Pre-rebuild bake-off (2026-06-01) | OpenClaw on Qwen3.6-35B | YES | 56/66 (84.8%) | `archive/SMOKE-BAKEOFF-2026-06-01-3model.md` |
 | **Phase 0 D-1 (this branch)** | Direct (cosmos-reason2-8b) | YES (vLLM:8050) | 28/66 (42.4%) | Sanity floor 40/66 NOT met — model-quality issue (`<MISSING>` args) |
 | **Phase 0 O-1 (this branch)** | OpenClaw (cosmos-reason2-8b) | NO (vLLM:8000, no proxy) | 14/66 (21.2%) | NOT a measure of the lane; without-proxy config |
 | **Phase 0 O-1 retry (this branch)** | OpenClaw (cosmos-reason2-8b) | YES (banner shows `compat`) but L7 policy 403 | 14/66 (21.2%) | OpenClaw → inference.local → not actually reaching the proxy (zero `/chat/completions` entries in proxy log) |

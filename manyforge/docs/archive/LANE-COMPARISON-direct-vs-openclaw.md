@@ -124,7 +124,7 @@ egress proxy hops) is real but small — ~50–200 ms per tool call.
 The dominant cost is generation token volume, which is a
 prompt-engineering problem.
 
-See [WORKSPACE-PROMPT-OPTIMIZATION.md](../WORKSPACE-PROMPT-OPTIMIZATION.md)
+See [WORKSPACE-PROMPT-OPTIMIZATION.md](./WORKSPACE-PROMPT-OPTIMIZATION.md)
 for the full investigation of which workspace content earns its
 tokens and which does not.
 
@@ -336,7 +336,7 @@ python3 /tmp/run_matrix.py 2>&1 | tee /tmp/comparison.log
 
 For prompt-iteration work specifically, see the smaller 5-task
 profiler in
-[WORKSPACE-PROMPT-OPTIMIZATION.md](../WORKSPACE-PROMPT-OPTIMIZATION.md)
+[WORKSPACE-PROMPT-OPTIMIZATION.md](./WORKSPACE-PROMPT-OPTIMIZATION.md)
 §6 — that one snapshots vLLM metrics so you also get gen-token
 counts per task.
 
@@ -350,7 +350,7 @@ counts per task.
 | Default lane → direct (`nemoclaw`) | **Applied** in launcher + STACK_SETUP + cookbook + runbook |
 | Catalog.read OpenClaw 240s timeout → toolResultMaxChars truncation | **Fixed** in provisioner: 20 000 → 100 000 |
 | Live tool-call streaming so operator can watch tool calls | **Shipped**: backend (state.py, routes_assistant.py, models.py) + UI (AssistantOverlay.tsx) + OpenClaw lane principal-binding correlation |
-| Workspace prompt iteration to reduce gen-token volume on OpenClaw | **In progress** — see [WORKSPACE-PROMPT-OPTIMIZATION.md](../WORKSPACE-PROMPT-OPTIMIZATION.md) |
+| Workspace prompt iteration to reduce gen-token volume on OpenClaw | **In progress** — see [WORKSPACE-PROMPT-OPTIMIZATION.md](./WORKSPACE-PROMPT-OPTIMIZATION.md) |
 
 Tighten deployment-side enforcement of out-of-catalog node ids and
 "keep the MCP bridge process warm across runs" — both **retired**

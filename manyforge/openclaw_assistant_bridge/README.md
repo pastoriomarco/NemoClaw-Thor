@@ -145,5 +145,5 @@ per-model empirical sampling notes.
 
 Use `manyforge/smoke-openclaw-assistant-reliability.py` for ongoing
 reliability snapshots and the live profiler in
-`manyforge/docs/WORKSPACE-PROMPT-OPTIMIZATION.md §6` for per-task
+`manyforge/docs/archive/WORKSPACE-PROMPT-OPTIMIZATION.md §6` for per-task
 latency / token / cache-hit measurements.

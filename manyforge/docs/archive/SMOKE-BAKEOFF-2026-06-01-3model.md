@@ -2,7 +2,7 @@
 
 3-model comparison on the 66-case smoke corpus with the full pipeline (detectors #1-7, bridge `tail_checklist`, namespace_stop=16, tool-name normalization, structural_tag/qwen3_coder grammar, tool_error_rewrite).
 
-Evidence preserved under [smoke-evidence/2026-06-01-3model-bakeoff/](smoke-evidence/2026-06-01-3model-bakeoff/). Diagnostic tooling: [../scripts/debug/diagnose_smoke_case.py](../scripts/debug/diagnose_smoke_case.py).
+Evidence preserved under [smoke-evidence/2026-06-01-3model-bakeoff/](../smoke-evidence/2026-06-01-3model-bakeoff/). Diagnostic tooling: [../scripts/debug/diagnose_smoke_case.py](../../scripts/debug/diagnose_smoke_case.py).
 
 ## Headline
 
@@ -12,9 +12,9 @@ Nemotron family (4B + omni) underperforms structurally (39.4% / 31.8%) — consi
 
 | Model | Family | Effective | First-try | PnP pass | Avg/case | Wall-clock | Evidence |
 |---|---|---|---|---|---|---|---|
-| `Nemotron-3-Nano-4B-BF16` | Nemotron | 39.4% | 30.3% | 0/19 | ~17s | ~18 min | [4b-SUMMARY.md](smoke-evidence/2026-06-01-3model-bakeoff/4b-SUMMARY.md) |
-| `Nemotron-3-Nano-Omni-30B-A3B-NVFP4` | Nemotron | 31.8% | 22.7% | 4/19 | ~25s | ~30 min | [omni-SUMMARY.md](smoke-evidence/2026-06-01-3model-bakeoff/omni-SUMMARY.md) |
-| **`Qwen3.6-35B-A3B-NVFP4-NVIDIA`** | **Qwen3.6** | **84.8%** | **75.8%** | **18/19** | ~50s | ~45 min | [35b-SUMMARY.md](smoke-evidence/2026-06-01-3model-bakeoff/35b-SUMMARY.md) |
+| `Nemotron-3-Nano-4B-BF16` | Nemotron | 39.4% | 30.3% | 0/19 | ~17s | ~18 min | [4b-SUMMARY.md](../smoke-evidence/2026-06-01-3model-bakeoff/4b-SUMMARY.md) |
+| `Nemotron-3-Nano-Omni-30B-A3B-NVFP4` | Nemotron | 31.8% | 22.7% | 4/19 | ~25s | ~30 min | [omni-SUMMARY.md](../smoke-evidence/2026-06-01-3model-bakeoff/omni-SUMMARY.md) |
+| **`Qwen3.6-35B-A3B-NVFP4-NVIDIA`** | **Qwen3.6** | **84.8%** | **75.8%** | **18/19** | ~50s | ~45 min | [35b-SUMMARY.md](../smoke-evidence/2026-06-01-3model-bakeoff/35b-SUMMARY.md) |
 
 Raw `report.json` + `stdout.txt` per model alongside the SUMMARY files (`.txt` not `.log` because `*.log` is gitignored).
 
@@ -32,7 +32,7 @@ All 7 detectors + bridge `tail_checklist` + `namespace_stop=16` validated live:
 | #6 malformed_tool_call detection | **partial** | Missed 4B's bare-inline `tool_name {json}` format — marker list needs expansion. |
 | #7 normalize_tool_names | **load-bearing** | Fired hundreds of times; without it every model fails every action case (prefix drop). |
 
-`enable_thinking` propagation trace cleanup also verified live: `chat_template_kwargs.enable_thinking` injected per-profile by proxy, no dead top-level mirror. Single source of truth in [`serving/config.sh`](../../serving/config.sh).
+`enable_thinking` propagation trace cleanup also verified live: `chat_template_kwargs.enable_thinking` injected per-profile by proxy, no dead top-level mirror. Single source of truth in [`serving/config.sh`](../../../serving/config.sh).
 
 ## What the pipeline did not catch
 
@@ -52,7 +52,7 @@ All 7 detectors + bridge `tail_checklist` + `namespace_stop=16` validated live:
 
 ## Why Nemotron looks like a regression but isn't
 
-Per [project memory `[Production default = OpenClaw + Cosmos-8B (2026-05-07)]`](../../../../../.claude/projects/-home-tndlux-workspaces-nemoclaw/memory/project_lane_parity_cosmos8b.md): historical LANE-COMPARISON was **9/9 cosmos, 1/9 Qwen3.6, 0/9 Nemotron** on the production matrix.
+Per [project memory `[Production default = OpenClaw + Cosmos-8B (2026-05-07)]`](../../../../../../.claude/projects/-home-tndlux-workspaces-nemoclaw/memory/project_lane_parity_cosmos8b.md): historical LANE-COMPARISON was **9/9 cosmos, 1/9 Qwen3.6, 0/9 Nemotron** on the production matrix.
 
 So:
 

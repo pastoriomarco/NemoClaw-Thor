@@ -70,7 +70,7 @@ ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
 | Why OpenClaw + Cosmos-8B is the default + benchmark + end-to-end reproduction recipe | [docs/LANE-COMPARISON.md §8](docs/LANE-COMPARISON.md) |
 | Lane-parity debug tooling (proxies + harness + JSONL format) | [docs/LANE-COMPARISON.md §7](docs/LANE-COMPARISON.md), [scripts/debug/README.md](scripts/debug/README.md) |
 | MCP integration deep-dive (the `manyforge` server, tool-name mangling, principal binding) | [docs/MANYFORGE-MCP-INTEGRATION.md](docs/MANYFORGE-MCP-INTEGRATION.md) |
-| Per-model sampling / profile calibration history | [docs/MANYFORGE-PROFILE-CALIBRATION.md](docs/MANYFORGE-PROFILE-CALIBRATION.md), [docs/WORKSPACE-PROMPT-OPTIMIZATION.md](docs/WORKSPACE-PROMPT-OPTIMIZATION.md) |
+| Per-model sampling / profile calibration history | [docs/MANYFORGE-PROFILE-CALIBRATION.md](docs/MANYFORGE-PROFILE-CALIBRATION.md), [docs/archive/WORKSPACE-PROMPT-OPTIMIZATION.md](docs/archive/WORKSPACE-PROMPT-OPTIMIZATION.md) |
 | Deployment plan (delivered phases + open follow-ups) | [docs/MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](docs/MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md) |
 
 ## Files that must stay in sync
