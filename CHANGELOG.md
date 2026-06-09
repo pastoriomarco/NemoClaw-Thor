@@ -24,13 +24,13 @@ for direction.
 - **Rebuild documentation suite** for the OpenShell 0.0.36 → 0.0.44 +
   OpenClaw 2026.4.24 → 2026.5.22 + NemoClaw v0.0.31 → `lkg` (=v0.0.55)
   upgrade. Three docs:
-  - [`manyforge/docs/REBUILD-2026-06-02-openshell-0.0.44.md`](manyforge/docs/REBUILD-2026-06-02-openshell-0.0.44.md)
+  - [`manyforge/docs/archive/REBUILD-2026-06-02-openshell-0.0.44.md`](manyforge/docs/archive/REBUILD-2026-06-02-openshell-0.0.44.md)
     — exact rebuild procedure, 12 fixes catalogued.
-  - [`manyforge/docs/REBUILD-FINDINGS-2026-06-02.md`](manyforge/docs/REBUILD-FINDINGS-2026-06-02.md)
+  - [`manyforge/docs/archive/REBUILD-FINDINGS-2026-06-02.md`](manyforge/docs/archive/REBUILD-FINDINGS-2026-06-02.md)
     — architectural findings + upstream issues to file
     (OpenClaw [#80909](https://github.com/openclaw/openclaw/issues/80909),
     NemoClaw https↔http gateway-registration mismatch).
-  - [`manyforge/docs/REBUILD-RESULTS-2026-06-02.md`](manyforge/docs/REBUILD-RESULTS-2026-06-02.md)
+  - [`manyforge/docs/archive/REBUILD-RESULTS-2026-06-02.md`](manyforge/docs/archive/REBUILD-RESULTS-2026-06-02.md)
     — smoke results + decision rationale.
 - [`manyforge/scripts/rebuild-headless-onboarding.sh`](manyforge/scripts/rebuild-headless-onboarding.sh)
   — headless reproduction of the rebuild (detects + auto-fixes the
