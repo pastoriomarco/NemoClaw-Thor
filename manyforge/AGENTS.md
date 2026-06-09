@@ -23,11 +23,14 @@ If your change spans repos (most do): start at
 back to here for the runtime artifacts. Don't write spec-level
 content in this directory; it belongs in `manyforge_specs`.
 
+Repo doc map and plan/report status board: [`../INDEX.md`](../INDEX.md)
+and [`../PLANS_INDEX.md`](../PLANS_INDEX.md).
+
 ## What this subtree owns
 
 - `setup-manyforge-assistant.sh` — sandbox provisioner (idempotent).
 - `start-openclaw-assistant-bridge.sh` — runs the OpenClaw assistant
-  bridge on `:8200` (the production lane).
+  bridge on `:8200` (the current default lane).
 - `policies/manyforge-composer.preset.yaml` — OpenShell egress / SSRF
   policy.
 - `agent-workspace/` — workspace fragment that the provisioner
@@ -40,12 +43,17 @@ content in this directory; it belongs in `manyforge_specs`.
 - `docs/` — operational docs (runbook, lane comparison, MCP integration).
 - `scripts/debug/` — proxy + harness for lane parity debugging.
 
-## Production default
+## Default lane
 
-`openclaw` lane + `cosmos-reason2-8b` served model. Bring-up commands
-and runbook are in [`docs/COMPOSER-ASSISTANT-RUNBOOK.md`](docs/COMPOSER-ASSISTANT-RUNBOOK.md).
-The benchmark behind this default is in
-[`docs/LANE-COMPARISON-direct-vs-openclaw.md` §8](docs/LANE-COMPARISON-direct-vs-openclaw.md).
+`openclaw` lane + `cosmos-reason2-8b` served model is the current default
+(since 2026-05-07). The production decision across the three lanes
+(direct / openclaw / hermes) is **interim** — see
+[`docs/PHASE-5-PRODUCTION-DECISION.md`](docs/PHASE-5-PRODUCTION-DECISION.md)
+and the architecture hub [`docs/THREE-LANE-MIGRATION-PLAN.md`](docs/THREE-LANE-MIGRATION-PLAN.md).
+Bring-up commands and runbook are in
+[`docs/COMPOSER-ASSISTANT-RUNBOOK.md`](docs/COMPOSER-ASSISTANT-RUNBOOK.md).
+The consolidated cross-lane benchmark is in
+[`docs/LANE-COMPARISON.md`](docs/LANE-COMPARISON.md).
 
 ## Files that must stay in sync
 

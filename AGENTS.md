@@ -38,10 +38,16 @@ If your change spans repos (most do): start at
 back here for the runtime artifacts. Don't write spec-level content
 in this repo; it belongs upstream in `manyforge_specs`.
 
-The Composer-assistant production default (lane + model) and the
-runbook for bringing it up live in this repo at
-[`manyforge/README.md`](manyforge/README.md) and
+The Composer-assistant runs over three lanes (direct / openclaw / hermes);
+`openclaw` is the current default lane, with the production-default decision
+across the three tracked as **interim** in
+[`manyforge/docs/PHASE-5-PRODUCTION-DECISION.md`](manyforge/docs/PHASE-5-PRODUCTION-DECISION.md)
+(architecture + per-phase plan:
+[`manyforge/docs/THREE-LANE-MIGRATION-PLAN.md`](manyforge/docs/THREE-LANE-MIGRATION-PLAN.md)).
+The bring-up runbook lives at [`manyforge/README.md`](manyforge/README.md) and
 [`manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md`](manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md).
+For the repo doc map and plan/report status board, see
+[`INDEX.md`](INDEX.md) and [`PLANS_INDEX.md`](PLANS_INDEX.md).
 
 > **Read the architecture doc first when answering anything about how the
 > assistant pipeline works end-to-end:**
@@ -78,8 +84,10 @@ integration runbook** that wires the OpenClaw runtime in a NemoClaw
 sandbox to ManyForge's MCP surfaces (egress preset, skill bundle, MCP
 server registration); see "ManyForge integration" below.
 
-There are two assistant-provider bridges, both implementing ManyForge's
-provider HTTP contract:
+There are three assistant lanes, each a provider bridge implementing
+ManyForge's provider HTTP contract (selected via Composer's
+`ASSISTANT_PROVIDER`; routed per request shape by
+[`manyforge/lanes/lane_routing.yaml`](manyforge/lanes/lane_routing.yaml)):
 
 - **Direct vLLM lane** — `manyforge_assistant_bridge` on `:8100`, lives
   in the ManyForge repo. Talks straight to vLLM, runs the agent loop
@@ -88,8 +96,14 @@ provider HTTP contract:
   this repo at [`manyforge/openclaw_assistant_bridge/`](manyforge/openclaw_assistant_bridge/).
   Adapter that dispatches into the NemoClaw `my-assistant` sandbox
   running OpenClaw, which runs the agent loop and calls vLLM through
-  the OpenClaw gateway. **Production default since 2026-05-07.** This
-  repo does own it.
+  the OpenClaw gateway. **Current default lane** (`default_lane` since
+  2026-05-07; interim pending the three-lane bake-off —
+  [`manyforge/docs/PHASE-5-PRODUCTION-DECISION.md`](manyforge/docs/PHASE-5-PRODUCTION-DECISION.md)).
+  This repo does own it.
+- **Hermes lane** — Hermes-Agents bridge on `:8300`, lives in this repo
+  at [`manyforge/lanes/hermes/`](manyforge/lanes/hermes/). Uses Hermes'
+  native MCP + session/runs APIs (memory + skills); opt-in behind
+  `HERMES_LANE_PHASE4_ENABLED`. This repo owns it.
 
 ---
 
@@ -114,7 +128,7 @@ provider HTTP contract:
   provisioner (`setup-manyforge-assistant.sh`), the egress preset
   (`policies/manyforge-composer.preset.yaml`), the OpenClaw-lane
   assistant-provider adapter (`openclaw_assistant_bridge/`, port
-  `:8200`, production default), the bridge audit-log mount point
+  `:8200`, current default lane), the bridge audit-log mount point
   (`bridge/`), and integration docs under `manyforge/docs/`.
 - Top-level docs: `README.md`, this file (`AGENTS.md`), `VERSIONS.md`
   (single source of truth for verified versions across all three
@@ -131,10 +145,11 @@ design lives alongside the contract in
 This repo **does** own the **OpenClaw-lane** adapter
 (`openclaw_assistant_bridge` at `:8200`) that implements the same
 provider contract by forwarding into a NemoClaw sandbox running
-OpenClaw — see the `manyforge/` ownership entry above. Both bridges
+OpenClaw — see the `manyforge/` ownership entry above. All lanes
 speak the same wire envelope; selection is via Composer's
-`ASSISTANT_PROVIDER` env var, and `openclaw` is the production
-default since 2026-05-07.
+`ASSISTANT_PROVIDER` env var, and `openclaw` has been the default
+lane since 2026-05-07 (interim pending the three-lane bake-off —
+[`manyforge/docs/PHASE-5-PRODUCTION-DECISION.md`](manyforge/docs/PHASE-5-PRODUCTION-DECISION.md)).
 
 **Consumes** (don't reimplement; don't fork; configure and wrap):
 
@@ -329,29 +344,35 @@ shortlist, and bench-menu rationale.
 ManyForge is the downstream consumer of this repo's serving stack.
 The integration has three pieces:
 
-1. **Model serving** — owned by this repo (`serving/`). Production
-   default profile: `cosmos-reason2-8b`.
+1. **Model serving** — owned by this repo (`serving/`). Default served
+   profile: `cosmos-reason2-8b`.
 2. **Sandbox + agent runtime** — onboard and configure via the
    workflows above; provision the Composer-assistant skill +
    policy + MCP server via `manyforge/setup-manyforge-assistant.sh`.
 3. **Bridge service** that translates ManyForge's
    `manyforge.assistant.provider_request.v0` envelope into a model
-   dispatch (and back). **Two implementations exist:**
-   - `openclaw_assistant_bridge` (port 8200) — production default
-     lane. Ships in `dev_ws/src/manyforge/`. Routes through the
-     in-sandbox OpenClaw gateway and the manyforge MCP bridge.
-   - `manyforge_assistant_bridge` (port 8100) — fast-path / sandbox
-     bypass. Ships in `dev_ws/src/manyforge/`. Runs its own agent
+   dispatch (and back). **Three lanes exist:**
+   - `openclaw_assistant_bridge` (port 8200) — current default lane.
+     Ships in this repo (`manyforge/openclaw_assistant_bridge/`). Routes
+     through the in-sandbox OpenClaw gateway and the manyforge MCP bridge.
+   - `manyforge_assistant_bridge` (port 8100) — Direct vLLM fast-path /
+     sandbox bypass. Ships in `dev_ws/src/manyforge/`. Runs its own agent
      loop with a `tool_choice` pin and an inline-snapshot context
      for compound prompts.
+   - Hermes lane (port 8300) — Hermes-Agents native MCP + session/runs
+     APIs. Ships in this repo (`manyforge/lanes/hermes/`); opt-in behind
+     `HERMES_LANE_PHASE4_ENABLED`.
 
-To bring up the production default after a reboot, run the four
+To bring up the default lane after a reboot, run the four
 commands in `README.md § ManyForge Composer-assistant`. The
 runbook for debugging each gate of the request chain is
 `manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md`. The benchmark
-that drove the production-default choice (Cosmos-Reason2-8B over
-Qwen3.6 and Nemotron) and end-to-end reproduction steps are in
-`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §8.
+behind the OpenClaw + Cosmos-Reason2-8B choice (over Qwen3.6 and
+Nemotron) and the consolidated cross-lane numbers are in
+`manyforge/docs/LANE-COMPARISON.md`; the lane architecture and
+production-decision status are in
+`manyforge/docs/THREE-LANE-MIGRATION-PLAN.md` and
+`manyforge/docs/PHASE-5-PRODUCTION-DECISION.md`.
 
 ### Where to read ManyForge's expectations
 
@@ -478,9 +499,11 @@ Keep these high-level — file names shift, scope endures.
   Point-in-time numbers; consult for regression context.
 - **`manyforge/docs/SMOKE-ITER-RUNBOOK.md`** — cold-start order of
   operations for running a smoke iteration.
-- **`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md`** — the
-  benchmark behind the OpenClaw-lane + Cosmos-Reason2-8B production
-  default. Read when proposing to swap either choice.
+- **`manyforge/docs/LANE-COMPARISON.md`** — consolidated cross-lane
+  benchmark (direct / openclaw / hermes), speed, and scorer analysis;
+  the data behind the OpenClaw-lane + Cosmos-Reason2-8B choice. Read
+  when proposing to swap a lane or model. Lane architecture:
+  `manyforge/docs/THREE-LANE-MIGRATION-PLAN.md`.
 - **`manyforge/docs/MANYFORGE-MCP-INTEGRATION.md`** — MCP wire details,
   tool-name mangling, principal binding. Read when answering "how does
   the agent talk to ManyForge?"
@@ -554,7 +577,7 @@ NemoClaw-Thor uses the same two-branch model as manyforge (mirroring
 
 - **Do not modify `serving/config.sh` model profiles** without
   operator approval. The default profile (`cosmos-reason2-8b` as of
-  2026-05-07) is the production lane; changing it requires the
+  2026-05-07) is the default served model; changing it requires the
   full smoke-corpus retest documented in
   `manyforge/docs/MANYFORGE-PROFILE-CALIBRATION.md`.
 - **`VERSIONS.md` is the per-component pin table; `VERSION` is the
