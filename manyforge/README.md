@@ -67,8 +67,8 @@ ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
 |---|---|
 | One-screen production-default summary + bring-up | [docs/COMPOSER-ASSISTANT-RUNBOOK.md](docs/COMPOSER-ASSISTANT-RUNBOOK.md) (top block) |
 | Per-gate debugging (10 gates of the request chain) | [docs/COMPOSER-ASSISTANT-RUNBOOK.md](docs/COMPOSER-ASSISTANT-RUNBOOK.md) §1–§4 |
-| Why OpenClaw + Cosmos-8B is the default + benchmark + end-to-end reproduction recipe | [docs/LANE-COMPARISON-direct-vs-openclaw.md §8](docs/LANE-COMPARISON-direct-vs-openclaw.md) |
-| Lane-parity debug tooling (proxies + harness + JSONL format) | [docs/LANE-COMPARISON-direct-vs-openclaw.md §7](docs/LANE-COMPARISON-direct-vs-openclaw.md), [scripts/debug/README.md](scripts/debug/README.md) |
+| Why OpenClaw + Cosmos-8B is the default + benchmark + end-to-end reproduction recipe | [docs/LANE-COMPARISON.md §8](docs/LANE-COMPARISON.md) |
+| Lane-parity debug tooling (proxies + harness + JSONL format) | [docs/LANE-COMPARISON.md §7](docs/LANE-COMPARISON.md), [scripts/debug/README.md](scripts/debug/README.md) |
 | MCP integration deep-dive (the `manyforge` server, tool-name mangling, principal binding) | [docs/MANYFORGE-MCP-INTEGRATION.md](docs/MANYFORGE-MCP-INTEGRATION.md) |
 | Per-model sampling / profile calibration history | [docs/MANYFORGE-PROFILE-CALIBRATION.md](docs/MANYFORGE-PROFILE-CALIBRATION.md), [docs/WORKSPACE-PROMPT-OPTIMIZATION.md](docs/WORKSPACE-PROMPT-OPTIMIZATION.md) |
 | Deployment plan (delivered phases + open follow-ups) | [docs/MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](docs/MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md) |

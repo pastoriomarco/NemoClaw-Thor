@@ -10,7 +10,7 @@ Cross-references:
 - Operational gates + per-symptom debugging: [COMPOSER-ASSISTANT-RUNBOOK.md](./COMPOSER-ASSISTANT-RUNBOOK.md)
 - Smoke corpus mechanics + per-iter history: [SMOKE-CORPUS.md](./SMOKE-CORPUS.md)
 - Cold-start order of operations: [SMOKE-ITER-RUNBOOK.md](./SMOKE-ITER-RUNBOOK.md)
-- Lane-parity benchmark (why OpenClaw + Cosmos-8B is the default): [LANE-COMPARISON-direct-vs-openclaw.md](./LANE-COMPARISON-direct-vs-openclaw.md)
+- Lane-parity benchmark (why OpenClaw + Cosmos-8B is the default): [LANE-COMPARISON.md](./LANE-COMPARISON.md)
 - MCP integration deep-dive: [MANYFORGE-MCP-INTEGRATION.md](./MANYFORGE-MCP-INTEGRATION.md)
 - Profile calibration methodology: [MANYFORGE-PROFILE-CALIBRATION.md](./MANYFORGE-PROFILE-CALIBRATION.md)
 - Deployment plan: [MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](./MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md)
@@ -91,7 +91,7 @@ later in the doc.
 - **Two assistant lanes** exist; selection is one env var
   (`ASSISTANT_PROVIDER=openclaw|nemoclaw`) and the deployment YAML's
   `base_url`. **OpenClaw is the production default since 2026-05-07**
-  ([`LANE-COMPARISON-direct-vs-openclaw.md` §8](./LANE-COMPARISON-direct-vs-openclaw.md)).
+  ([`LANE-COMPARISON.md` §8](./LANE-COMPARISON.md)).
 - The **vllm-proxy** sits in front of vLLM as a logger/mutator. Even with
   zero mutation env vars set, it logs every request/response to JSONL; with
   env vars set, it injects caps, budgets, tool_choice, user-suffixes, and a

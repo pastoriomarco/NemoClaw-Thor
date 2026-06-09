@@ -26,7 +26,7 @@ A cosmos-reason2-based profile that:
 
 The production cosmos-reason2-8b default reaches 9/9 on the curated smoke
 corpus but the corpus is small. Lane-parity work in early May 2026 (see
-[`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md`](../../manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md))
+[`manyforge/docs/LANE-COMPARISON.md`](../../manyforge/docs/LANE-COMPARISON.md))
 landed several vendor-side adjustments (sampling, MCP null-arg validation,
 removed schema examples) but model-side behavior is still the gating factor
 on edge cases. Targeted SFT against the OpenClaw bridge audit log set is
@@ -460,5 +460,5 @@ fallback.
 - Production default decision: see `VERSIONS.md` §C Phase 2 (2026-05-07 flip)
 - Smoke corpus contract: `manyforge/scripts/debug/smoke_corpus.yaml`
 - Bridge audit logs: `manyforge/openclaw_assistant_bridge/` mount point
-- Lane parity analysis: [`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md`](../../manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md)
+- Lane parity analysis: [`manyforge/docs/LANE-COMPARISON.md`](../../manyforge/docs/LANE-COMPARISON.md)
 - 32B quantization (related, larger-target reference): [`COSMOS-REASON2-32B-QUANTIZATION.md`](COSMOS-REASON2-32B-QUANTIZATION.md)

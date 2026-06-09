@@ -15,7 +15,7 @@ MCP bridge**. The fallback "direct vLLM" lane is documented in
 | **Lane** | `openclaw` (`scripts/demo-assistant-known-good.sh:48`) |
 | **Model** | `cosmos-reason2-8b` — `nvidia/Cosmos-Reason2-8B`, FP8 KV, hermes parser, 64K ctx (`serving/config.sh:189` default fallback) |
 | **vLLM sampling** | `temperature=0.2, top_p=0.95` server-side, `enable_thinking=false` from the model's chat template |
-| **Why this combo** | OpenClaw lane achieves 9/9 on the 3-prompt × 3-round parity smoke (Qwen3.6 OpenClaw was 1/9; Nemotron 0/9). See [LANE-COMPARISON-direct-vs-openclaw.md §8](./LANE-COMPARISON-direct-vs-openclaw.md) for the full benchmark and reproduction recipe. |
+| **Why this combo** | OpenClaw lane achieves 9/9 on the 3-prompt × 3-round parity smoke (Qwen3.6 OpenClaw was 1/9; Nemotron 0/9). See [LANE-COMPARISON.md §8](./LANE-COMPARISON.md) for the full benchmark and reproduction recipe. |
 
 To bring the default stack up after a reboot:
 
@@ -158,7 +158,7 @@ after 300.000s". (Older docs reference 180s; raised to 300s on
 Default provider is `openclaw` (sandboxed gateway lane on `:8200`,
 2026-05-06 — lane parity verified). Set `ASSISTANT_PROVIDER=nemoclaw`
 on the launcher for the direct-vLLM backup on `:8100`. See
-[`LANE-COMPARISON-direct-vs-openclaw.md`](./LANE-COMPARISON-direct-vs-openclaw.md)
+[`LANE-COMPARISON.md`](./LANE-COMPARISON.md)
 §9 for the data behind the default switch and the trio of fixes
 (vendor sampling at vLLM, MCP wrapper null-arg validation, schema
 worked examples).

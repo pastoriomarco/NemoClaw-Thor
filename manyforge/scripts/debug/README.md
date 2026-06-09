@@ -33,7 +33,7 @@ launched by `start-openclaw-assistant-bridge.sh` /
   from `manyforge_assistant_bridge/audit.log` (direct lane) and
   `docker logs manyforge-e2e-composer` filtered to the in-sandbox
   bridge IP `172.18.0.2` (OpenClaw lane). See
-  [LANE-COMPARISON-direct-vs-openclaw.md §8.2](../../docs/LANE-COMPARISON-direct-vs-openclaw.md)
+  [LANE-COMPARISON.md §8.2](../../docs/LANE-COMPARISON.md)
   for the production matrix this script generates.
 - `pipeline_message_monitor.py` — live, read-only tail of **every inter-component
   message** during a smoke: runner→composer HTTP, bridge↔agent

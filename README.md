@@ -47,7 +47,7 @@ nemoclaw my-assistant connect          # inside sandbox: `openclaw tui`
 `cosmos-reason2-8b` (NVIDIA Cosmos Reason 2 8B; FP8 KV; `hermes` tool-call
 parser; 64 K context). Selected as the production default 2026-05-07 after a
 3-prompt × 3-round parity benchmark — see
-[`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §8](manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md)
+[`manyforge/docs/LANE-COMPARISON.md` §8](manyforge/docs/LANE-COMPARISON.md)
 for the data.
 
 For **higher single-stream throughput** at the cost of a less-reliable
@@ -145,7 +145,7 @@ cd ~/workspaces/dev_ws/src/manyforge
 
 **Production default = OpenClaw + cosmos-reason2-8b.** The decision and
 benchmark data are in
-[manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md §8](manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md);
+[manyforge/docs/LANE-COMPARISON.md §8](manyforge/docs/LANE-COMPARISON.md);
 the operational runbook is
 [manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md](manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md);
 the lane parity debug tooling lives at
@@ -214,7 +214,7 @@ after a version bump.
 Production default for the ManyForge Composer-assistant lane: 9/9 reliability
 on the OpenClaw lane in the 3-prompt × 3-round parity smoke vs Qwen3.6's
 1/9 (full benchmark in
-[`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §8](manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md)).
+[`manyforge/docs/LANE-COMPARISON.md` §8](manyforge/docs/LANE-COMPARISON.md)).
 Footprint: ~17 GiB weights + ~6 GiB FP8 KV at 64 K context.
 
 If you need higher single-stream throughput (and don't depend on the OpenClaw

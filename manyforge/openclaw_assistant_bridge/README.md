@@ -25,7 +25,7 @@
 >    `scene.draft.add_object` and `tree.draft.wrap_node`.
 >
 > Full diagnosis + reproducer:
-> [`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md`](../docs/LANE-COMPARISON-direct-vs-openclaw.md)
+> [`manyforge/docs/LANE-COMPARISON.md`](../docs/LANE-COMPARISON.md)
 > §9.
 
 Phase 2 adapter for routing the ManyForge Composer assistant provider
@@ -94,7 +94,7 @@ MANYFORGE_ASSISTANT_ENDPOINT_URL=http://127.0.0.1:8200/v1/manyforge/assistant
 ## Current status
 
 **Production lane (default, 2026-05-06).** Lane parity with direct vLLM is
-verified — see `manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md` §9
+verified — see `manyforge/docs/LANE-COMPARISON.md` §9
 for the per-task numbers and the trio of fixes that closed the gap.
 
 Routing is end-to-end live across all 5 probe tasks (scene_inspect,

@@ -1,7 +1,12 @@
-# Lane comparison — three-lane Phase 3 result
+# Lane comparison (direct / openclaw / hermes)
 
-> Phase 3 of [THREE-LANE-MIGRATION-PLAN.md](./THREE-LANE-MIGRATION-PLAN.md), measured 2026-06-03.
-> Renames `LANE-COMPARISON-direct-vs-openclaw.md` once Phase 4 numbers are in.
+> Canonical lane-comparison reference (dev/analysis). Phase 3 three-lane result
+> measured 2026-06-03; see [THREE-LANE-MIGRATION-PLAN.md](./THREE-LANE-MIGRATION-PLAN.md).
+> Earlier direct-vs-openclaw A/B benchmark is archived at
+> [archive/LANE-COMPARISON-direct-vs-openclaw.md](./archive/LANE-COMPARISON-direct-vs-openclaw.md).
+> Operational per-lane bring-up / operate / live-monitor lives in the **`manyforge`**
+> deployment repo: `docs/operations/LANE_BRINGUP.md`. The latest three-lane parity
+> run (with the corrected scorer) folds in here from the manyforge scorer-note.
 
 ## TL;DR
 

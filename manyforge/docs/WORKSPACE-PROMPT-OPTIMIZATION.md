@@ -12,7 +12,7 @@ verbosity / regressions on this stack.
 ## 1. Why we investigated
 
 In the side-by-side lane comparison
-([LANE-COMPARISON-direct-vs-openclaw.md](./LANE-COMPARISON-direct-vs-openclaw.md))
+([LANE-COMPARISON-direct-vs-openclaw.md](./archive/LANE-COMPARISON-direct-vs-openclaw.md))
 we observed that the OpenClaw lane was **3.6× slower per task** than
 the direct vLLM lane on the same model and same tool surface — same
 14/15 pass rate, but ~80 s/test vs ~22 s/test.

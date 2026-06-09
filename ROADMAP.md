@@ -26,7 +26,7 @@ Current state context:
 [`cosmos-reason2-8b`](https://huggingface.co/nvidia/Cosmos-Reason2-8B)
 is the production assistant model on the OpenClaw lane (default since
 2026-05-07; see
-[`manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md`](manyforge/docs/LANE-COMPARISON-direct-vs-openclaw.md)).
+[`manyforge/docs/LANE-COMPARISON.md`](manyforge/docs/LANE-COMPARISON.md)).
 Smoke corpus iter 32 production recipe scores 51/66 = 77.3% with the
 bridge-fired `/compact` every 2 prompts.
 

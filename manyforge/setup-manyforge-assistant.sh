@@ -310,7 +310,7 @@ step "Step 1c: set tools.toolSearch.mode=tools (Phase 3 production default)"
 # Tools mode is the production default for the OpenClaw lane since
 # Phase 3 (2026-06-03). Measured 58.3% effective rate on cosmos-
 # reason2-8b vs 29.0% for code mode (see
-# docs/LANE-COMPARISON-three-lane.md). The flip is a single field
+# docs/LANE-COMPARISON.md). The flip is a single field
 # in openclaw.json: the bare boolean ``tools.toolSearch: true`` gets
 # replaced with the dict form ``tools.toolSearch: {enabled: true,
 # mode: "tools"}`` which signals the OpenClaw runtime

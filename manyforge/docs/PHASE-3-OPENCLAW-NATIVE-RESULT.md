@@ -52,7 +52,7 @@ If it doesn't: document the gap, keep the archived artifacts available as a feat
 
 ## Decision (2026-06-03)
 
-**Tools mode is the production OpenClaw default.** Code mode is functional but model-quality-limited on cosmos-reason2-8b. Full numbers, methodology, and verdict in [LANE-COMPARISON-three-lane.md](./LANE-COMPARISON-three-lane.md). Brief:
+**Tools mode is the production OpenClaw default.** Code mode is functional but model-quality-limited on cosmos-reason2-8b. Full numbers, methodology, and verdict in [LANE-COMPARISON.md](./LANE-COMPARISON.md). Brief:
 
 | Mode | Real cases | First-try | Effective | Gate (46/66 ≈ 70%) |
 |---|---|---|---|---|
