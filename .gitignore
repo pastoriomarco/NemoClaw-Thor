@@ -13,6 +13,14 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Python virtualenvs — runtime artifacts, platform-specific, ~1.7k files each.
+# The Hermes lane bridge venv lives at manyforge/lanes/hermes/.venv (the
+# launcher's start_bridge_hermes defaults to it); recreate with
+# `python3 -m venv` + `pip install fastapi uvicorn httpx`. Never tracked.
+# (Mirrors manyforge/openclaw_assistant_bridge/.gitignore.)
+.venv/
+.pytest_cache/
+
 # Built wheels — large (≈0.5-1 GB per build), aarch64-specific, reproducible
 # from serving/docker/ build scripts. Use Git LFS or attach to a GitHub Release
 # if air-gapped reproducibility is needed.

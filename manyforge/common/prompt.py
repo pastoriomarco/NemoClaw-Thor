@@ -47,20 +47,25 @@ def build_agent_prompt(
       directly in ``tools[]``. No additional protocol explanation.
     - ``"openclaw_discovery"`` (Phase 3): adds the discovery-primer
       paragraph teaching ``tool_search`` → ``tool_describe`` → ``tool_call``.
-    - ``"hermes_direct"`` (Phase 4): similar to direct, with a memory-
-      note acknowledging that prior session memory is in play.
-
-    Phase 1: only ``"direct"`` is implemented (matching adapter.py's
-    current behavior). The parameter exists now to keep the interface
-    stable across the upcoming phases.
+    - ``"hermes_direct"`` (Phase 4): the Hermes lane. Selects the ``mcp``
+      dispatch surface — the Hermes gateway exposes the ManyForge tools as
+      native MCP functions (``mcp_manyforge_<id>``) directly in ``tools[]``,
+      so the model is told to call them natively rather than through
+      OpenClaw's code/tools discovery surface.
     """
     if discovery_mode not in ("direct", "openclaw_discovery", "hermes_direct"):
         raise ValueError(
             f"discovery_mode must be one of direct/openclaw_discovery/hermes_direct, "
             f"got {discovery_mode!r}"
         )
-    # Phase 1: discovery_mode is accepted but adapter.py emits the same
-    # prompt regardless. Phase 3/4 will plumb it through.
+    # Phase 3/4: map lane-level discovery names to the adapter's concrete
+    # dispatch-surface primer. Runtime OpenClaw still passes tool_surface from
+    # OPENCLAW_ASSISTANT_TOOL_SURFACE directly; this mapping keeps direct calls
+    # to the shared helper honest.
+    if discovery_mode == "openclaw_discovery":
+        kwargs.setdefault("tool_surface", "tools")
+    elif discovery_mode == "hermes_direct":
+        kwargs.setdefault("tool_surface", "mcp")
     return _build_agent_prompt(payload, **kwargs)
 
 

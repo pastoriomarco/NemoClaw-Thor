@@ -762,6 +762,30 @@ content + success table, plus aggregates.
 
 ---
 
+## Phase 4 — Hermes lane mcp_servers (landed)
+
+The Hermes lane reaches the same composer `/api/assistant/bridge/tools/{toolId}`
+mutation path as OpenClaw, but via Hermes' **native** `mcp_servers` config rather
+than an OpenClaw `mcp set`. No wrapper code — the integration is ~30 lines of
+YAML ([`lanes/hermes/mcp_servers_config.yaml`](../lanes/hermes/mcp_servers_config.yaml))
+pointing Hermes at the lane-neutral `manyforge-mcp-bridge.py` (which runs with
+`MANYFORGE_LANE=hermes`, `MANYFORGE_PRINCIPAL=hermes-<sandbox>`). Hermes registers
+the tools with an `mcp_manyforge_` prefix; the bridge's progress observer strips
+it for cross-lane audit parity (`common.tool_calls.strip_mcp_prefix`).
+
+**Emission strategy (Q7):** the direct-config-write path — `setup-hermes.sh`
+renders the YAML (env-substituted) into `/sandbox/.hermes/config.yaml` **before**
+the gateway starts. This is required because (spike probe 3 online finding) the
+`mcp_servers` auto-reload watcher only runs under Hermes' interactive CLI, **not**
+the gateway. So: inject before start; any later change needs a gateway `recover`
+(NOT `rebuild`, which wipes the config). The `hermes-config.ts` overlay remains a
+valid alternative for upstream-friendliness but is not required for the lane to
+work. `NO_PROXY` must NOT include `host.openshell.internal` — the bridge reaches
+Composer only through the OpenShell proxy at `10.200.0.1:3128`. Full bring-up:
+[PHASE-4-HERMES-LONGITUDINAL.md](./PHASE-4-HERMES-LONGITUDINAL.md).
+
+---
+
 ## Cross-references
 
 - Runtime tree-mutation hardening (manyforge side):

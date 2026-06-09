@@ -1,0 +1,34 @@
+# Longitudinal corpus for the Hermes lane (THREE-LANE-MIGRATION-PLAN.md §9.3).
+#
+# Unlike the per-turn smoke corpus, this is designed for SESSION COMPOUNDING:
+# every session attempts the SAME repeated pattern, and the harness measures
+# whether later sessions complete it in fewer turns / via an emerged skill /
+# from remembered preference. It is the metric the Hermes lane is allowed to
+# win on (its memory + skills are ENABLED for this run; see lanes/hermes/
+# policy.yaml). Reset state between bake-off runs with --reset-hermes-state.
+#
+# This file mirrors the harness's embedded DEFAULT_CORPUS; edit here and pass
+# --corpus to override. JSON is also accepted (stdlib parse); YAML needs PyYAML.
+api_version: manyforge.longitudinal_corpus.v0
+
+pattern:
+  name: wrap_root_in_repeat
+  # Completion signal: this manyforge tool firing (prefix-stripped, as recorded
+  # in hermes-session-events.jsonl by the progress observer). turns-to-completion
+  # is the turn index at which it first fires within a session.
+  expect_tool: tree_draft_wrap_node
+  # Attempted in order within each session until expect_tool fires; rephrasings
+  # give a weaker model more than one shot per session without inflating the
+  # turn budget (the longitudinal signal is the cross-session trend, not the
+  # within-session retries).
+  turns:
+    - "Wrap the current root node in a new repeat node named loop_root, configured for infinite cycles."
+    - "Make loop_root (a repeat node, infinite cycles) the new root, with the existing tree as its child."
+    - "Insert a repeat node loop_root above the root so the whole behavior tree repeats forever."
+
+# Stated ONCE on session 1, turn 1, then never repeated. Later sessions test
+# whether Hermes recalled the preference (a memory hit → completion in 1 turn).
+preference:
+  statement: >-
+    Remember this for future requests: I always want the root behavior wrapped
+    in a repeat node named loop_root with infinite cycles.

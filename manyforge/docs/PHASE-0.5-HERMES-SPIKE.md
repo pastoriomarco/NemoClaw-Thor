@@ -1,7 +1,11 @@
 # Phase 0.5 — Hermes contract spike
 
 **Date:** 2026-06-03
-**Status:** In progress
+**Status:** Spike complete — superseded by Phase 4 (landed). Q4 (session API) is
+**resolved to `/v1/runs`** and Q6 (`API_SERVER_KEY`) to an env-var bearer key;
+both are implemented in [`lanes/hermes/`](../lanes/hermes/). The remaining
+blocked probes (4 live callback, 6 vLLM hermes-parser) are folded into the
+Phase 4 live gate — see [PHASE-4-HERMES-LONGITUDINAL.md](./PHASE-4-HERMES-LONGITUDINAL.md).
 **Anchor model:** cosmos-reason2-8b
 **Companion doc:** [THREE-LANE-MIGRATION-PLAN.md §Phase 0.5](./THREE-LANE-MIGRATION-PLAN.md#phase-05--hermes-contract-spike-1-2-days)
 

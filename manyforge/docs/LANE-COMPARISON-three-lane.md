@@ -12,9 +12,68 @@ For OpenClaw's `tool_search` shim, **tools mode (`tool_search` / `tool_describe`
 | OpenClaw **tools mode** (corrected primer) | 12 | **6** | 1 | 5 | **50.0%** | **58.3%** |
 | OpenClaw **code mode** (corrected primer) | 31 | 4 | 5 | 22 | 12.9% | 29.0% |
 | Direct lane | TBD next sprint | — | — | — | — | — |
-| Hermes lane | inert until Phase 4 | — | — | — | — | — |
+| Hermes lane (per-turn, memory off) | Pipeline fixes validated — clean 75-case run pending | — | — | — | — | — |
 
 Both partial samples — neither smoke completed all 74 cases (stack issues on tools mode at case 13, smoke killed at user request on code mode at case 26 of 31, both produced 0.0s-time tail-entries from cascaded composer-state-reset failures that are NOT model measurements). The first-try and effective rates above are computed only on real per-case measurements (cases that produced a non-zero elapsed time).
+
+## 2026-06-08 Hermes readiness update
+
+The Hermes lane is ready for a clean full-corpus measurement, but the current
+numbers should not be compared as final baselines. The contaminated exploratory
+runs were useful for pipeline diagnosis and closed four concrete issues:
+
+1. **Native-MCP dispatch primer.** Hermes is now prompted against its native
+   MCP surface rather than an OpenClaw-shaped discovery flow.
+2. **Dispatcher termination.** The Hermes dispatcher treats only `run.*`
+   lifecycle events as terminal. `tool.completed` no longer truncates recovery
+   loops.
+3. **Lean catalog Rule 5.** `nodeCatalog` is documented as the lean chooser
+   surface. Parameterized node kinds must fetch full schema via `catalog_read`
+   instead of relying on stripped inline params.
+4. **Catalog-read loop breaker.** Repeated identical read-only `catalog_read`
+   fetches are interrupted so the model acts instead of analyzing indefinitely.
+
+Insert-family micro-probe after those fixes:
+
+| Case | Verdict | Interpretation |
+|---|---|---|
+| `P3_tree_insert_runtime_obj_specific` | soft-pass | Correct family path, residual param / assertion weakness. |
+| `TREE_insert_runtime_medium` | pass | Lean catalog + loop-breaker fixed the prior under-act. |
+| `INSERT_position_first_specific` | fail | Wrong node-kind choice (`command_gripper` vs `wait_for_signal_bool`); model comprehension, not dispatch. |
+
+Effective result: **2/3**, matching the inline-params variant without the
+prompt-size penalty. The remaining insert fail is classified as a model ceiling
+for gemma4 unless the same case passes in another lane/model with the same
+catalog contract.
+
+## Next clean comparison sequence
+
+1. Run a clean Hermes full corpus with **self-heal on**, live monitoring, reset
+   Hermes state, and the lean-catalog + loop-breaker pipeline. Do not use
+   inline param bloat for the baseline.
+2. Produce the Hermes taxonomy: pass / soft-pass / fail, first-try and
+   effective rates, latency distribution, heal count, catalog-read loop-breaker
+   events, MCP breaker events, and failure buckets.
+3. Restore OpenClaw to its production tools-mode configuration after the Hermes
+   run, then run same-day OpenClaw and Direct baselines on the same 75-case
+   corpus, same host, same model/profile, same proxy profile, same self-heal
+   policy.
+4. Compare final lanes only from clean runs. Exploratory contaminated runs stay
+   as diagnostic evidence, not score evidence.
+
+Review follow-ups to close before publishing final lane claims:
+
+- **`toolsObserved` telemetry parity.** Hermes audit must populate
+  `toolsObserved[]` from the same correctness source as Direct/OpenClaw:
+  Composer bridge-tool callbacks, with Hermes progress events used only as
+  augmentation.
+- **MCP breaker tuning.** Repeated validation 400s should back off or quarantine
+  the offending run so one bad insert-family case cannot contaminate later
+  cases via transient MCP circuit-breaker trips.
+- **Contract probe.** Before each full corpus run, probe the live assistant mode
+  and MCP surface: catalog hash, expected tool IDs, lean `nodeCatalog` shape,
+  `catalog_read` availability, and required parameter schema for representative
+  parameterized node kinds.
 
 ## Why tools mode wins
 
@@ -156,4 +215,3 @@ The 0/5 vs cosmos 4/5 gap is **stack-level integration** (tool-call parser + rea
 Production decision is unchanged from the cosmos-only data:
 - OpenClaw tools mode > OpenClaw code mode (58.3% vs 29.0% effective on cosmos)
 - Tools mode is the production default
-

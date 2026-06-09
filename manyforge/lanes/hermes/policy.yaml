@@ -30,9 +30,15 @@ hermes:
   todo_enabled: true
   delegation_enabled: true
 
-  # The session API head-to-head probe (Phase 0.5 / Phase 4) decides
-  # which to use. Default leaves both options open until then.
-  preferred_session_api: "sessions_chat"  # or "runs"
+  # Session API: RESOLVED to "runs" by the Phase 0.5 contract spike
+  # (docs/PHASE-0.5-HERMES-SPIKE.md probe 5). The plan's original
+  # "/api/sessions/{id}/chat" path does NOT exist in Hermes 0.14.0; the
+  # actual surface is /v1/runs (+ /events SSE, /stop, /approval), which is
+  # the only one that emits the structured lifecycle events the universal
+  # audit + progress observer need. The Hermes lane (session_dispatcher.py)
+  # implements /v1/runs. The live head-to-head is now validation, not a
+  # decision.
+  preferred_session_api: "runs"
 
   # Hermes prefixes MCP tools as mcp_<server>_<tool>. The bridge audit
   # strips the manyforge prefix for cross-lane parity reports.

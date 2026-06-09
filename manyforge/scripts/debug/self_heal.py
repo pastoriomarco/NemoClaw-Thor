@@ -2,14 +2,18 @@
 """self_heal.py — TEST-ONLY (smoke harness).
 
 Self-healing for chained corpus families (e.g. pnp_build). When a chained step
-fails, restore the canonical state and rewrite the openclaw session transcript so
-the model continues the chain as if the step had succeeded ("the model doesn't
-notice"). Two halves, both driven by the SAME golden change (single source of truth):
+fails, restore the canonical state. On lanes with a stable editable transcript
+ABI, also rewrite the session transcript so the model continues the chain as if
+the step had succeeded ("the model doesn't notice"). Two halves, both driven by
+the SAME golden change (single source of truth):
 
   STATE  — replay-from-base: reset the live program+scene to base, then re-apply the
            ordered golden changes 1..N via the real bridge tools (canonical post-N).
-  HISTORY— splice: rewrite the failed step's turn in the openclaw session `.jsonl`
-           (in the sandbox) to a golden assistant tool-call + tool-result + "done".
+  HISTORY— OpenClaw only: rewrite the failed step's turn in the openclaw session
+           `.jsonl` (in the sandbox) to a golden assistant tool-call +
+           tool-result + "done". Hermes stores session JSON plus SQLite rows; until
+           that ABI is contracted, Hermes healing is state-only to avoid split-brain
+           private runtime state.
 
 NOTHING here runs in production: it only POSTs to a test composer's bridge tool
 endpoints and edits sandbox session files, between steps, during a smoke run. The
@@ -143,10 +147,10 @@ def splice_golden_turn(container: str, agent: str, conversation_id: str, golden_
     return True, out
 
 
-def self_heal(composer: str, container: str, agent: str, conversation_id: str,
-              chain_spec: dict, failed_id: str) -> tuple[bool, str]:
+def self_heal(composer: str, container: str | None, agent: str, conversation_id: str,
+              chain_spec: dict, failed_id: str, *, lane: str = "openclaw") -> tuple[bool, str]:
     """Full self-heal after a chained step failure: canonical state replay + golden
-    transcript splice. `failed_id` is the corpus case id of the failed step. The golden
+    transcript splice where supported. `failed_id` is the corpus case id of the failed step. The golden
     step is matched by id (NOT by chain_step number) so the mapping stays correct even
     when the golden list omits steps the corpus skips (e.g. future-tier PnP_19)."""
     steps = chain_spec.get("steps") or []
@@ -156,6 +160,11 @@ def self_heal(composer: str, container: str, agent: str, conversation_id: str,
     ok, detail = replay_to_canonical(composer, chain_spec, gpos + 1)  # apply golden steps[0..gpos]
     if not ok:
         return False, f"state replay failed: {detail}"
+    lane_id = (lane or "openclaw").strip().lower()
+    if lane_id in {"hermes", "hermes-state", "state-only"}:
+        return True, "state replay OK; transcript splice skipped for hermes/state-only lane"
+    if not container:
+        return False, "state replay OK but transcript splice skipped: no sandbox container resolved"
     ok, detail = splice_golden_turn(container, agent, conversation_id, steps[gpos])
     if not ok:
         return False, f"transcript splice failed: {detail}"

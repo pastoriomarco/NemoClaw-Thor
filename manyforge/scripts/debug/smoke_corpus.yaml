@@ -356,8 +356,12 @@ cases:
     tools_called:
       - name: tree_draft_insert_node
         args_contain:
-          parentName: pick_and_place
-          # position should be index_of('approach') + 1
+          # 2026-06-09: verify the PLACEMENT intent (after the named anchor)
+          # rather than demanding parentName. "insert after X" is naturally
+          # expressed as afterName=X; Composer treats afterName/parentName as
+          # mutually exclusive, so requiring parentName=<parent-of-X> was a
+          # false negative. See docs/operations/THREE-LANE-SCORER-NOTE.md.
+          afterName: move_to_pick_approach
           node.id: timer
           node.params.duration_s: 2.0
         allow_retries: true
@@ -1140,6 +1144,13 @@ cases:
           shape.box_dims: [0.4, 0.02, 0.2]
           pose.position: [0.2, -0.45, 0.1]
         allow_retries: true
+    # Semantic-effect proof: the safety wall's specific dims distinguish it
+    # from pre-existing scene objects, so this confirms the add actually
+    # happened (Composer normalises flat box_dimensions_m -> shape.box_dimensions_m).
+    # With this, demote_args_when_state_proven credits the case even when the
+    # model emits an accepted flat alias the args_contain golden doesn't list.
+    state_after:
+      "scene.objects[*].shape.box_dimensions_m": "contains [0.4, 0.02, 0.2]"
     forbidden_tools: [tree_draft_insert_node]
     answer_must_contain: ["wall"]
 

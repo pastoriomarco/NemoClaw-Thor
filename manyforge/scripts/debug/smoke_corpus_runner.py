@@ -415,6 +415,17 @@ def _value_matches(actual: Any, expected: Any) -> bool:
                 return not any(needle in str(x) for x in actual)
             return needle not in str(actual)
     if isinstance(expected, list) and isinstance(actual, list):
+        # List-of-dict SUBSET match (2026-06-09): when the corpus expects a
+        # list of dicts (e.g. blackboard `keys: [{id, type}]`), accept it if
+        # every expected dict is a subset of *some* actual dict. The model
+        # legitimately emits supersets (extra `key`, `description` fields that
+        # Composer accepts), and field/element order is not significant.
+        if expected and all(isinstance(e, dict) for e in expected):
+            def _is_subset(exp_d: dict, act_d: Any) -> bool:
+                return isinstance(act_d, dict) and all(
+                    _value_matches(act_d.get(k), v) for k, v in exp_d.items()
+                )
+            return all(any(_is_subset(e, a) for a in actual) for e in expected)
         return list(expected) == list(actual)
     if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
         return float(expected) == float(actual)
@@ -463,16 +474,40 @@ def _flatten(d: dict, parent: str = "") -> dict[str, Any]:
 # older deployments via fixtures.
 _ARG_PATH_ALIASES: dict[str, list[str]] = {
     # Scene resource paths — legacy short → canonical / SI-unit-suffixed
+    # 2026-06-09: added the Composer-ACCEPTED top-level flat forms
+    # (`box_dimensions_m`, `shape_type`, `sphere_radius_m`, …) and the
+    # nested `shape.shape_type` variant. Composer normalises all of these;
+    # the Direct lane model emits the short flat form because the tool
+    # schema advertises them as top-level aliases. Crediting them here
+    # removes scorer false-negatives that were unique to the Direct lane.
+    # See docs/operations/THREE-LANE-SCORER-NOTE.md.
     "shape.box_dims":   ["shape.box_dimensions_m",
                          "sceneResource.shape.box_dimensions_m",
                          "sceneResource.shape.box_dims",
+                         "box_dimensions_m",
+                         "box_dims",
+                         "boxDimensionsM",
+                         "dimensions",
                          "size",
                          "sceneResource.shape.size"],
     "shape.box_dimensions_m": ["sceneResource.shape.box_dimensions_m",
                                "shape.box_dims",
+                               "box_dimensions_m",
+                               "dimensions",
                                "size"],
     "shape.type":       ["sceneResource.shape.type",
-                         "shapeType"],
+                         "shape.shape_type",
+                         "shapeType",
+                         "shape_type",
+                         "type"],
+    "shape.sphere_radius_m": ["shape.sphere_radius_m",
+                              "sphere_radius_m",
+                              "sphereRadiusM",
+                              "shape.radius",
+                              "radius"],
+    "shape.sphere_radius": ["shape.sphere_radius_m",
+                            "sphere_radius_m",
+                            "radius"],
     "shape.size":       ["shape.box_dimensions_m",
                          "sceneResource.shape.box_dimensions_m",
                          "sceneResource.shape.size",
@@ -622,6 +657,28 @@ def _match_args_contain(
                 )
                 if root_id and root_id == expected_value:
                     continue
+        # Shape-type inferred from dimensions (2026-06-09): a scene object
+        # whose dimension field is present IS that primitive type — Composer
+        # derives `shape.type` from `box_dimensions_m` / `sphere_radius_m` /
+        # `cylinder_*` / `mesh_resource_uri`. So when the corpus expects
+        # `shape.type: <T>` and the model omitted an explicit type string but
+        # DID supply the matching dimension field, credit it. Removes the
+        # Direct-lane false negative where the model emits only dims.
+        if legacy_path.endswith("shape.type") and isinstance(expected_value, str):
+            _TYPE_DIM_LEAVES = {
+                "box": {"box_dimensions_m", "box_dims", "boxdimensionsm",
+                        "dimensions", "size"},
+                "sphere": {"sphere_radius_m", "sphereradiusm", "radius"},
+                "cylinder": {"cylinder_radius_m", "cylinder_height_m",
+                             "cylinderradiusm", "cylinderheightm"},
+                "mesh": {"mesh_resource_uri", "mesh_resourceuri", "mesh_scale"},
+            }
+            dim_leaves = _TYPE_DIM_LEAVES.get(expected_value.lower(), set())
+            if dim_leaves and any(
+                k.rsplit(".", 1)[-1].lower() in dim_leaves and v not in (None, "", [])
+                for k, v in flat.items()
+            ):
+                continue
         failures.append(
             f"args_contain[{legacy_path}] expected {expected_value!r}, "
             f"got {av!r} (also tried aliases: {aliases or '[]'})"
@@ -797,6 +854,36 @@ def assert_state(case: dict, post_state: dict, failures: list[str]) -> None:
             failures.append(
                 f"state_after[{path_clean}] expected {expected_value!r}, got {actual!r}"
             )
+
+
+def demote_args_when_state_proven(
+    case: dict, failures: list[str], soft_failures: list[str]
+) -> None:
+    """Semantic-effect-first: an accepted-alias arg form is not a hard failure
+    when the post-state proves the operation's effect.
+
+    Composer accepts and normalises several arg forms for the same field
+    (top-level ``box_dimensions_m`` vs nested ``shape.box_dimensions_m``,
+    ``shape.shape_type`` vs ``shape.type``, ``afterName`` vs ``parentName``).
+    The corpus ``args_contain`` golden credits only the canonical form, which
+    produced Direct-lane-only false negatives (the model rationally emits the
+    short flat form the schema advertises). When the case declares a
+    ``state_after`` block AND it PASSED (no ``state_after[...]`` entry survives
+    in ``failures``) AND the only remaining hard failures are ``args_contain``
+    mismatches, demote those to soft: the effect is verified, the arg form is a
+    preferred-style nit, not a functional error. Genuine errors — missing/wrong
+    tool, over-act (``expected NO tool calls``), forbidden tool, or a FAILED
+    ``state_after`` — are left as hard failures untouched. Applied identically
+    to every lane. See docs/operations/THREE-LANE-SCORER-NOTE.md.
+    """
+    expected_state = case.get("expected", {}).get("state_after") or {}
+    if not expected_state or not failures:
+        return
+    # If state_after had passed, no `state_after[...]` failure is present.
+    # Require that EVERY surviving hard failure is an args_contain mismatch.
+    if all(f.startswith("args_contain[") for f in failures):
+        soft_failures.extend(failures)
+        failures[:] = []
 
 
 def _answer_match_variants(text: str) -> tuple[str, str, str]:
@@ -1099,7 +1186,21 @@ def run_case(case: dict, composer: str, default_pre: dict,
     soft_failures: list[str] = []
 
     if code != 200:
-        failures.append(f"chat HTTP {code}")
+        # 2026-06-09: attribute the failure honestly. A non-200 from the
+        # Composer is NOT necessarily a transport fault — the bridge surfaces
+        # model-behaviour exits (loop-stop / max-turns / stuck-loop) which the
+        # Composer now relays as 409 with a structured detail. Surface that
+        # reason so loop/turn exits don't read as "chat HTTP 502" transport
+        # failures. See docs/operations/THREE-LANE-SCORER-NOTE.md.
+        _reason = ""
+        if isinstance(body, dict):
+            _detail = body.get("detail")
+            if isinstance(_detail, str) and _detail.strip():
+                _reason = f": {_detail[:160]}"
+            elif isinstance(body.get("error"), dict):
+                _err = body["error"]
+                _reason = f": {_err.get('code') or ''} {str(_err.get('detail') or '')[:140]}".rstrip()
+        failures.append(f"chat HTTP {code}{_reason}")
     else:
         # Capture state ONCE: serves both as pre_state for `@root`-like
         # alias resolution AND as the post_state for state_after asserts.
@@ -1114,6 +1215,11 @@ def run_case(case: dict, composer: str, default_pre: dict,
         assert_state(case, observed_state, failures)
 
     assert_answer(case, answer, soft_failures)
+
+    # Semantic-effect-first: if the post-state proves the effect, demote
+    # accepted-alias args_contain mismatches to soft (see the helper docstring
+    # + docs/operations/THREE-LANE-SCORER-NOTE.md). Genuine failures untouched.
+    demote_args_when_state_proven(case, failures, soft_failures)
 
     recovered = False
     # Iter 8 (2026-05-09): generic recovery turn for 4xx tool failures.
@@ -1242,10 +1348,12 @@ def main() -> int:
         action="store_true",
         help=(
             "Self-healing chains (TEST-ONLY): on a chained-step FAIL, restore the "
-            "canonical state (replay-from-base via golden changes) and splice a "
-            "golden turn into the openclaw session transcript, so the NEXT step "
-            "runs from a correct state with the model unaware of the failure. Does "
-            "not change the failed step's own score. See self_heal.py + "
+            "canonical state (replay-from-base via golden changes). On OpenClaw, "
+            "also splice a golden turn into the session transcript, so the NEXT "
+            "step runs from a correct state with the model unaware of the failure. "
+            "Hermes uses state-only healing until its private JSON+SQLite session "
+            "store has a stable splice ABI. Does not change the failed step's own "
+            "score. See self_heal.py + "
             "docs/self-healing-chain-harness.md."
         ),
     )
@@ -1255,6 +1363,16 @@ def main() -> int:
     p.add_argument("--self-heal-container", default="openshell-my-assistant",
                    help="name substring of the openshell sandbox container holding session files")
     p.add_argument("--self-heal-agent", default="manyforge-composer")
+    p.add_argument(
+        "--self-heal-lane",
+        default=os.environ.get("MANYFORGE_SMOKE_SELF_HEAL_LANE", "openclaw"),
+        choices=("openclaw", "hermes", "state-only"),
+        help=(
+            "Transcript strategy for --self-heal. openclaw = replay state + "
+            "splice OpenClaw JSONL transcript; hermes/state-only = replay state "
+            "only, avoiding Hermes private JSON+SQLite session-store mutation."
+        ),
+    )
     args = p.parse_args()
 
     args.runtime_flags = {f.strip(): True for f in args.runtime_flags.split(",") if f.strip()}
@@ -1283,8 +1401,12 @@ def main() -> int:
         import self_heal as _sh  # noqa: E402
         with open(args.self_heal_golden) as gf:
             self_heal_specs = yaml.safe_load(gf) or {}
-        self_heal_container = _sh.resolve_container(args.self_heal_container)
-        print(f"  self-heal: ENABLED  chains={list(self_heal_specs)}  container={self_heal_container}")
+        if args.self_heal_lane == "openclaw":
+            self_heal_container = _sh.resolve_container(args.self_heal_container)
+        print(
+            f"  self-heal: ENABLED  lane={args.self_heal_lane} "
+            f"chains={list(self_heal_specs)}  container={self_heal_container}"
+        )
 
     print(f"Running {len(cases)} cases against {args.composer}")
     print(f"  catalogHash: {catalog_hash[:16]}...\n" if catalog_hash else "  (no catalogHash yet)\n")
@@ -1327,9 +1449,10 @@ def main() -> int:
             ch_id, ch_step = pre.get("chain_id"), pre.get("chain_step")
             spec = self_heal_specs.get(ch_id) if ch_id else None
             conv = chain_state.get(ch_id) if ch_id else None
-            if spec and conv and ch_step and self_heal_container:
+            if spec and conv and ch_step and (self_heal_container or args.self_heal_lane != "openclaw"):
                 ok, detail = _sh.self_heal(args.composer, self_heal_container,
-                                           args.self_heal_agent, conv, spec, case["id"])
+                                           args.self_heal_agent, conv, spec, case["id"],
+                                           lane=args.self_heal_lane)
                 r.healed = ok          # r is already in `results` by reference → lands in the report
                 r.heal_detail = detail
                 print(f"      🩹 self-heal {'OK' if ok else 'FAILED'} (step {ch_step}): {detail}")

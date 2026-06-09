@@ -141,6 +141,24 @@ _PRIMER_TOOLS_MODE = (
     "(see Rule 8a below)."
 )
 
+# 2026-06-08: Phase-4 Hermes lane. The Hermes gateway exposes the ManyForge
+# tools as native MCP functions (`mcp_manyforge_<id>`) directly in tools[],
+# so the model dispatches with an ordinary native tool call — there is no
+# code/tools discovery surface here. Positive framing only: name the real
+# surface and never reference dispatch mechanisms the Hermes lane does not
+# carry (the model has no reason to consider them, so negating them would
+# only add noise and tokens).
+_PRIMER_MCP_NATIVE = (
+    "0. **Dispatch surface — native tools.** The ManyForge tools are in "
+    "your tools[] as native functions named `mcp_manyforge_<id>` (for "
+    "example `mcp_manyforge_tree_draft_wrap_node`). To act, emit an ordinary "
+    "tool call: set the function name to the exact `mcp_manyforge_<id>` "
+    "entry from your tools[] and pass a single JSON object of arguments. "
+    "Each tool's full input schema is already in tools[] — read the argument "
+    "names and shapes from there. Argument keys are camelCase + nested "
+    "objects (see Rule 8a below)."
+)
+
 # 2026-06-04: Rule 0b — OpenClaw MCP tool-id contract. The post-Phase-3
 # OpenClaw bundle-mcp surface exposes ManyForge tools under three
 # fields per `tool_search` result row:
@@ -190,6 +208,7 @@ _PRIMER_TOOLS_MODE_RULE_0B = (
 _TOOL_SURFACE_PRIMERS: dict[str, str] = {
     "code": _PRIMER_CODE_MODE,
     "tools": _PRIMER_TOOLS_MODE,
+    "mcp": _PRIMER_MCP_NATIVE,
 }
 
 
@@ -673,7 +692,12 @@ def build_agent_prompt(
         "conversationId": payload.get("conversationId"),
         "runtime": runtime,
         "allowedTools": allowed_tool_ids,
-        "nodeCatalog": _project_node_catalog(node_catalog),
+        # mcp surface: omit the inline node catalog — it was a params-stripped
+        # summary that misled the native model into thinking it had the full
+        # catalog (so it never called catalog_read and guessed insert params).
+        # Point it at catalog_read instead (Rule 5). code/tools keep the inline
+        # projection (their discovery flow fetches schemas on demand anyway).
+        "nodeCatalog": ([] if tool_surface == "mcp" else _project_node_catalog(node_catalog)),
         "skillCatalog": _project_skill_catalog(skill_catalog),
     }
     preamble["stateContext"] = _build_state_context(
@@ -748,12 +772,23 @@ def build_agent_prompt(
             "the capsule is skipped by cadence, call `program_read` or "
             "`scene_inspect` if the request requires state you cannot "
             "infer safely.",
-            "5. The `nodeCatalog` and `skillCatalog` in the context "
-            "below carry the SAME payload `catalog_read` and "
-            "`skills_read` would return — full descriptions, "
-            "parameters, capabilities. Read them directly; do not "
-            "round-trip through the read tools for first-pass "
-            "discovery.",
+            ("5. The node catalog is NOT inlined in this context "
+             "(`nodeCatalog` is intentionally empty to keep the context lean and "
+             "avoid a params-stripped summary). Before you select or parameterize "
+             "a node kind, call `catalog_read` to get the authoritative catalog — "
+             "every kind id, description, and exact parameter (names, types, "
+             "required flags). Most efficient: `catalog_read({\"kind\": \"<id>\", "
+             "\"includeParameters\": true})` for one kind, or "
+             "`catalog_read({\"includeParameters\": true})` for all. Do not guess "
+             "kind ids or parameters — read them from `catalog_read`. The "
+             "`skillCatalog` below is inlined as usual."
+             if tool_surface == "mcp" else
+             "5. The `nodeCatalog` and `skillCatalog` in the context "
+             "below carry the SAME payload `catalog_read` and "
+             "`skills_read` would return — full descriptions, "
+             "parameters, capabilities. Read them directly; do not "
+             "round-trip through the read tools for first-pass "
+             "discovery."),
             "6. On a 4xx tool-call response, read the structured fields "
             "(`allowedNodeKinds`, `validParentNames`, "
             "`validTargetNames`, `validNodeNames`, "
@@ -771,10 +806,16 @@ def build_agent_prompt(
             "calling it repeatedly nests deeper instead of reaching the "
             "root, producing a spiral. If you cannot identify the "
             "current root from `stateContext.program`, stop and ask.",
-            "" if _ITER32_COMPAT_MODE else
+            "" if _ITER32_COMPAT_MODE else (
             "8a. **Tool argument names are camelCase, NOT snake_case.** "
-            "Even when emitting JavaScript-like code via "
-            "`tool_search_code`, the JSON object keys passed to real "
+            # Lead-in is surface-specific: code mode reminds the model that
+            # even JS emitted via tool_search_code uses camelCase keys; the
+            # mcp/tools surfaces have no such code body, so they get a plain
+            # lead-in (and never name a dispatch mechanism they don't carry).
+            + ("Even when emitting JavaScript-like code via "
+               "`tool_search_code`, the "
+               if tool_surface == "code" else "The ")
+            + "JSON object keys passed to real "
             "tools must use the EXACT camelCase field names from the "
             "schema. Common pitfalls and correct forms: "
             "`tree_draft_wrap_node` → `{targetName, wrapper: {id, "
@@ -812,7 +853,7 @@ def build_agent_prompt(
             "`hint` line naming the EXACT rename (e.g. \"Rename keys: "
             "'target_name' → 'targetName'\"). Read those fields before "
             "retrying — identical-args retries are auto-detected and "
-            "terminated as runaway loops.",
+            "terminated as runaway loops."),
             "9. Every tool result carries a `result.delta` block with "
             "the live state diff: `result.delta.rootName` and "
             "`result.delta.rootKind` are the LIVE tree root after "
@@ -861,9 +902,10 @@ def build_agent_prompt(
         ] if s
     )
     tail_block = _TAIL_CHECKLIST_BODY if _TAIL_CHECKLIST_ENABLED else ""
+    lane_label = "Hermes" if tool_surface == "mcp" else "OpenClaw"
     return "\n".join(
         [
-            "You are the ManyForge composer assistant running inside OpenClaw.",
+            f"You are the ManyForge composer assistant running inside {lane_label}.",
             "Follow the installed `manyforge-composer` skill — its workspace AGENTS.md "
             "carries the role, vocabulary, tool surface, and the long-form guardrails.",
             "Use only the `manyforge` MCP server for ManyForge state reads and draft edits.",

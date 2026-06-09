@@ -4,9 +4,13 @@
 # 0.14.0 wheel (cli.py:2691 + cli.py:9314+ auto-reload + tools/mcp_tool.py
 # native MCP support).
 #
-# This YAML block is emitted into Hermes' /sandbox/.hermes/config.yaml by
-# the Phase 4 hermes-config overlay. Hermes' config-watcher detects the
-# mtime change and auto-registers the manyforge MCP tools at runtime.
+# This YAML block belongs in Hermes' /sandbox/.hermes/config.yaml. It must be
+# present BEFORE the gateway starts: the config-watcher that would auto-register
+# on mtime change (cli.py:9314+) only runs under Hermes' interactive CLI, NOT
+# the gateway-only deployment NemoClaw provisions (Phase 0.5 probe-3 online
+# finding). So the durable path is to bake this into the NemoClaw Hermes
+# blueprint's generated config (born-with-MCP); the direct config write +
+# `nemoclaw recover` restart is the diagnostic fallback for an existing sandbox.
 #
 # Hermes prefixes MCP tools as ``mcp_<server>_<tool>`` — the model sees
 # ``mcp_manyforge_tree_draft_wrap_node``. The bridge strips the
