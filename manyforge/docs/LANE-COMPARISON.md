@@ -5,8 +5,9 @@
 > Earlier direct-vs-openclaw A/B benchmark is archived at
 > [archive/LANE-COMPARISON-direct-vs-openclaw.md](./archive/LANE-COMPARISON-direct-vs-openclaw.md).
 > Operational per-lane bring-up / operate / live-monitor lives in the **`manyforge`**
-> deployment repo: `docs/operations/LANE_BRINGUP.md`. The latest three-lane parity
-> run (with the corrected scorer) folds in here from the manyforge scorer-note.
+> deployment repo: `docs/operations/LANE_BRINGUP.md`. The 2026-06-09 three-lane
+> parity run (corrected scorer) is summarized below; the full analysis is archived
+> at [archive/THREE-LANE-SCORER-NOTE.md](./archive/THREE-LANE-SCORER-NOTE.md).
 
 ## TL;DR
 
@@ -20,6 +21,44 @@ For OpenClaw's `tool_search` shim, **tools mode (`tool_search` / `tool_describe`
 | Hermes lane (per-turn, memory off) | Pipeline fixes validated — clean 75-case run pending | — | — | — | — | — |
 
 Both partial samples — neither smoke completed all 74 cases (stack issues on tools mode at case 13, smoke killed at user request on code mode at case 26 of 31, both produced 0.0s-time tail-entries from cascaded composer-state-reset failures that are NOT model measurements). The first-try and effective rates above are computed only on real per-case measurements (cases that produced a non-zero elapsed time).
+
+## 2026-06-09 three-lane parity + scorer strictness (gemma4-12b QAT)
+
+Same-day three-lane run on gemma4-12b-it QAT (temp 1.0, single llama.cpp slot),
+66 scored cases, heal on. Full analysis archived at
+[archive/THREE-LANE-SCORER-NOTE.md](./archive/THREE-LANE-SCORER-NOTE.md)
+(folded here from the `manyforge` deployment repo, which keeps no analysis).
+
+| Lane | First-try | Effective | Fails | Per-case median |
+|---|---|---|---|---|
+| Hermes | 78.8% (52/66) | 81.8% (54/66) | 12 | 67.5s |
+| OpenClaw | 66.7% (44/66) | 77.3% (51/66) | 15 | 36.8s |
+| Direct — original scorer | 50.0% (33/66) | 57.6% (38/66) | 28 | **11.4s** |
+| **Direct — corrected scorer** | **59.1% (39/66)** | **71.2% (47/66)** | 19 | **11.4s** |
+
+Two findings, kept separate:
+
+- **Speed.** Direct's typical case is **~6× faster than Hermes, ~3× faster than
+  OpenClaw** (median 11.4s vs 67.5s vs 36.8s) — it runs the tool loop in-process
+  (no gateway hops). That same rapid-fire is why Direct alone hits the proxy
+  loop-stop / heavy-generation upstream errors.
+- **Scorer strictness, not model capability.** Direct's original low number was
+  depressed because the corpus golden credited only the nested `shape.type` /
+  `shape.box_dims` form, while Composer also accepts (and the Direct model
+  rationally emits) the flat aliases (`shape_type`, `box_dimensions_m`, …). Two
+  scorer-contract fixes — **accepted-form aliases** and **semantic-effect-first**
+  (demote `args_contain` mismatches to soft when a `state_after` block passed) —
+  were implemented in `scripts/debug/smoke_corpus_runner.py` and applied to all
+  lanes, lifting Direct 50.0/57.6 → **59.1/71.2** with 0 regressions. With the
+  corrected scorer the three lanes are functionally comparable (71.2 ≈ 77.3,
+  approaching 81.8). Direct's 19 residual fails are all **genuine**: 7
+  clarification over-acts (fail on all three lanes), 5 wrong arg value/id, 4
+  model-loop / heavy-generation, 3 wrong/missing tool.
+
+A reporting-only fix also stopped mis-attributing model loops as infra faults:
+`upstream_loop_stop` / `stuck_loop` / `max_turns_exceeded` now map to 409, not a
+bare `chat HTTP 502`. See the archived note for the case-by-case audit and the
+recommended scorer-contract changes.
 
 ## 2026-06-08 Hermes readiness update
 

@@ -102,6 +102,7 @@ archive path.
 | [`archive/SMOKE-BAKEOFF-2026-06-01-3model.md`](manyforge/docs/archive/SMOKE-BAKEOFF-2026-06-01-3model.md) | Completed 3-model pre-rebuild bake-off. |
 | [`archive/WORKSPACE-PROMPT-OPTIMIZATION.md`](manyforge/docs/archive/WORKSPACE-PROMPT-OPTIMIZATION.md) | Completed 2026-05-06 prompt-tuning session. |
 | [`archive/PIPELINE-TRACE-2026-06-03.md`](manyforge/docs/archive/PIPELINE-TRACE-2026-06-03.md) | Closed OpenClaw-lane failure diagnosis. |
+| [`archive/THREE-LANE-SCORER-NOTE.md`](manyforge/docs/archive/THREE-LANE-SCORER-NOTE.md) | Moved from the `manyforge` deployment repo (which keeps no analysis); 2026-06-09 scorer-strictness analysis, summarized in [`LANE-COMPARISON.md`](manyforge/docs/LANE-COMPARISON.md). |
 | [`manyforge/archive/openclaw-plugin-attempt-2026-06-02/`](manyforge/archive/openclaw-plugin-attempt-2026-06-02/) | Archived OpenClaw plugin-attempt code/build artifacts (not docs). |
 
 ## The three lanes
