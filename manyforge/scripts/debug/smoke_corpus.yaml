@@ -360,7 +360,7 @@ cases:
           # rather than demanding parentName. "insert after X" is naturally
           # expressed as afterName=X; Composer treats afterName/parentName as
           # mutually exclusive, so requiring parentName=<parent-of-X> was a
-          # false negative. See docs/operations/THREE-LANE-SCORER-NOTE.md.
+          # false negative. See docs/archive/THREE-LANE-SCORER-NOTE.md.
           afterName: move_to_pick_approach
           node.id: timer
           node.params.duration_s: 2.0

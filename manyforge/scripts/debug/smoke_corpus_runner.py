@@ -480,7 +480,7 @@ _ARG_PATH_ALIASES: dict[str, list[str]] = {
     # the Direct lane model emits the short flat form because the tool
     # schema advertises them as top-level aliases. Crediting them here
     # removes scorer false-negatives that were unique to the Direct lane.
-    # See docs/operations/THREE-LANE-SCORER-NOTE.md.
+    # See docs/archive/THREE-LANE-SCORER-NOTE.md.
     "shape.box_dims":   ["shape.box_dimensions_m",
                          "sceneResource.shape.box_dimensions_m",
                          "sceneResource.shape.box_dims",
@@ -874,7 +874,7 @@ def demote_args_when_state_proven(
     preferred-style nit, not a functional error. Genuine errors — missing/wrong
     tool, over-act (``expected NO tool calls``), forbidden tool, or a FAILED
     ``state_after`` — are left as hard failures untouched. Applied identically
-    to every lane. See docs/operations/THREE-LANE-SCORER-NOTE.md.
+    to every lane. See docs/archive/THREE-LANE-SCORER-NOTE.md.
     """
     expected_state = case.get("expected", {}).get("state_after") or {}
     if not expected_state or not failures:
@@ -1191,7 +1191,7 @@ def run_case(case: dict, composer: str, default_pre: dict,
         # model-behaviour exits (loop-stop / max-turns / stuck-loop) which the
         # Composer now relays as 409 with a structured detail. Surface that
         # reason so loop/turn exits don't read as "chat HTTP 502" transport
-        # failures. See docs/operations/THREE-LANE-SCORER-NOTE.md.
+        # failures. See docs/archive/THREE-LANE-SCORER-NOTE.md.
         _reason = ""
         if isinstance(body, dict):
             _detail = body.get("detail")
@@ -1218,7 +1218,7 @@ def run_case(case: dict, composer: str, default_pre: dict,
 
     # Semantic-effect-first: if the post-state proves the effect, demote
     # accepted-alias args_contain mismatches to soft (see the helper docstring
-    # + docs/operations/THREE-LANE-SCORER-NOTE.md). Genuine failures untouched.
+    # + docs/archive/THREE-LANE-SCORER-NOTE.md). Genuine failures untouched.
     demote_args_when_state_proven(case, failures, soft_failures)
 
     recovered = False
