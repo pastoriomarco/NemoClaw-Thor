@@ -7,7 +7,9 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 > this repo is, what it does NOT own (specs live in `manyforge_specs`;
 > orchestration lives in `manyforge`), and the branch + commit workflow
 > that applies to LLM contributors. Full contributor reference is
-> [`CONTRIBUTING.md`](CONTRIBUTING.md).
+> [`CONTRIBUTING.md`](CONTRIBUTING.md). For the full **doc map** see
+> [`INDEX.md`](INDEX.md); for **plan/report status** (live + archived) see
+> [`PLANS_INDEX.md`](PLANS_INDEX.md).
 
 > **📖 Operator manual**: this README is a landing page / quickstart.
 > For the full step-by-step procedure — swap setup, image rebuild, JIT
