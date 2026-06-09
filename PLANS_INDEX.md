@@ -43,10 +43,11 @@ This board covers only the assistant-lane and serving work owned here.
   production decision is interim. Latest evidence: same-day three-lane parity
   run on gemma4-12b QAT — see [`manyforge/docs/LANE-COMPARISON.md`](manyforge/docs/LANE-COMPARISON.md)
   and `smoke-evidence/2026-06-09-thor-three-lane-parity-qat/`.
-- **V9.1 serving execution** — [`serving/docs/V9.1-EXECUTION-RESULTS.md`](serving/docs/V9.1-EXECUTION-RESULTS.md):
-  Phases 1-4 complete, Phase 4c smoke in progress, Phase 5 deferred, Phase 6 in
-  progress. The plan itself ([`V9.1-EXECUTION-PLAN.md`](serving/docs/V9.1-EXECUTION-PLAN.md))
-  is Draft awaiting approval for any remaining phases.
+- **V9.1 serving execution** — [`serving/docs/V9.1-EXECUTION.md`](serving/docs/V9.1-EXECUTION.md)
+  (consolidated plan + results; executed 2026-05-30 → 31): Phases 0-4 ran, Phase 5
+  deferred. Status markers in the doc are point-in-time as of 2026-05-31. Forward
+  FP4 work in [`V9.1-TASK4-FP4-UNLOCK.md`](serving/docs/V9.1-TASK4-FP4-UNLOCK.md) +
+  [`V9.1-FOLLOWUP-TASKS.md`](serving/docs/V9.1-FOLLOWUP-TASKS.md).
 
 ## Assistant-lane plans (`manyforge/docs/`)
 
@@ -64,8 +65,7 @@ This board covers only the assistant-lane and serving work owned here.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`V9.1-EXECUTION-PLAN.md`](serving/docs/V9.1-EXECUTION-PLAN.md) | Draft (awaiting approval) | V9.1 serving execution plan. |
-| [`V9.1-EXECUTION-RESULTS.md`](serving/docs/V9.1-EXECUTION-RESULTS.md) | In progress | Phases 1-4 complete; 4c smoke in progress; 5 deferred; 6 in progress. |
+| [`V9.1-EXECUTION.md`](serving/docs/V9.1-EXECUTION.md) | Completed (2026-05-30 → 31) | Consolidated V9.1 execution plan + results (Phases 0-4 ran; 5 deferred). Status markers point-in-time. |
 | [`V9.1-FOLLOWUP-TASKS.md`](serving/docs/V9.1-FOLLOWUP-TASKS.md) | Open | V9.1 follow-up tasks / findings. |
 | [`V9.1-TASK4-FP4-UNLOCK.md`](serving/docs/V9.1-TASK4-FP4-UNLOCK.md) | Done (2026-05-31) | Thor sm_110a FP4 kernel unlock. |
 | [`V9.1-IMAGE-NOTES.md`](serving/docs/V9.1-IMAGE-NOTES.md) | Reference | vLLM nightly with PR #42124 (LM-head ModelOpt). |

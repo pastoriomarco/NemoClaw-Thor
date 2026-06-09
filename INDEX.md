@@ -89,8 +89,8 @@ Production-decision status (interim): [`manyforge/docs/PHASE-5-PRODUCTION-DECISI
 - [`serving/docs/`](serving/docs/) — serving plans, recipes, performance
   reports, and architectural investigations. Status board for these is in
   [`PLANS_INDEX.md`](PLANS_INDEX.md). Highlights:
-  - **V9.1 serving execution** — [`V9.1-EXECUTION-PLAN.md`](serving/docs/V9.1-EXECUTION-PLAN.md)
-    (+ `-EXECUTION-RESULTS`, `-FOLLOWUP-TASKS`, `-IMAGE-NOTES`, `-TASK4-FP4-UNLOCK`).
+  - **V9.1 serving execution** — [`V9.1-EXECUTION.md`](serving/docs/V9.1-EXECUTION.md)
+    (plan + results; companions `-FOLLOWUP-TASKS`, `-IMAGE-NOTES`, `-TASK4-FP4-UNLOCK`).
   - **Serving recipe** — [`V9-35B-A3B-NVFP4-NVIDIA-RECIPE.md`](serving/docs/V9-35B-A3B-NVFP4-NVIDIA-RECIPE.md),
     baseline [`V9-SMOKE-CORPUS-BASELINE.md`](serving/docs/V9-SMOKE-CORPUS-BASELINE.md).
   - **Fine-tune** — [`COSMOS-REASON2-FINETUNE-PLAN.md`](serving/docs/COSMOS-REASON2-FINETUNE-PLAN.md).
