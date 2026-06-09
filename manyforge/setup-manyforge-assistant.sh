@@ -448,25 +448,59 @@ SANDBOX_HASH="$(remote_hash)"
 if [[ -n "${SANDBOX_HASH}" && "${STAGED_HASH}" == "${SANDBOX_HASH}" ]]; then
   ok "skill 'manyforge-composer' already installed (content sha256 ${STAGED_HASH:0:12}…); skipping upload"
 else
-  if nemoclaw "${SANDBOX}" skill install "${STAGING_DIR}"; then
-    ok "skill installed"
-  else
+  # `nemoclaw skill install` races the OpenClaw gateway's hot-reload of
+  # openclaw.json triggered by the Step 1b/1c patches just above: while the
+  # gateway reloads it briefly drops sandbox comms, so nemoclaw's own
+  # pre-check ("could not check sandbox for existing skill") and the upload
+  # ("Failed to upload N file(s)") transiently fail. This is the SAME race
+  # the openclaw.json writers handle via sandbox_bash_retry_idempotent — but
+  # `skill install` is its own nemoclaw subcommand (not an `exec`), and was a
+  # bare one-shot call, so a transient aborted the entire launch (observed
+  # 2026-06-09 on a fresh `restart`). Retry with a settle + backoff on the
+  # same SANDBOX_EXEC_ATTEMPTS budget, re-checking the remote hash between
+  # attempts so a partial-upload-then-settle (or a prior attempt that landed)
+  # still counts as installed.
+  install_ok=0
+  install_rc=0
+  for ((attempt = 1; attempt <= SANDBOX_EXEC_ATTEMPTS; attempt++)); do
+    # Wait for the sandbox exec path to be live again (gateway reload settled)
+    # before re-attempting the upload; never fatal on its own.
+    sandbox_settle "skill install settle (attempt ${attempt}/${SANDBOX_EXEC_ATTEMPTS})" 2>/dev/null || true
+    set +e
+    nemoclaw "${SANDBOX}" skill install "${STAGING_DIR}"
     install_rc=$?
-    # If nemoclaw failed but a copy already exists in-sandbox, the
-    # most likely cause is the upstream idempotency bug. Re-check the
-    # remote hash; if it now equals the staged hash, treat as success
-    # (race: maybe nemoclaw partial-uploaded then refused). Otherwise
-    # fall through to fail() so the operator sees the real problem.
+    set -e
+    if [[ ${install_rc} -eq 0 ]]; then
+      ok "skill installed"
+      install_ok=1
+      break
+    fi
+    # Upload reported failure: if the content is nonetheless present and
+    # current (race: a partial/earlier upload landed), accept it.
     SANDBOX_HASH_AFTER="$(remote_hash)"
     if [[ -n "${SANDBOX_HASH_AFTER}" && "${STAGED_HASH}" == "${SANDBOX_HASH_AFTER}" ]]; then
-      ok "skill 'manyforge-composer' already in-sandbox at the expected version (sha256 ${STAGED_HASH:0:12}…); continuing despite nemoclaw exit ${install_rc}"
-    elif [[ -n "${SANDBOX_HASH_AFTER}" ]]; then
-      printf '  ! nemoclaw skill install failed (exit %d) and the in-sandbox copy differs from staged content.\n' "${install_rc}" >&2
+      ok "skill 'manyforge-composer' in-sandbox at the expected version (sha256 ${STAGED_HASH:0:12}…); continuing despite nemoclaw exit ${install_rc}"
+      install_ok=1
+      break
+    fi
+    if [[ ${attempt} -lt ${SANDBOX_EXEC_ATTEMPTS} ]]; then
+      backoff=$(( attempt < 5 ? attempt * 2 : 10 ))
+      printf '    skill install attempt %d/%d failed (rc=%d); retrying in %ds...\n' \
+        "${attempt}" "${SANDBOX_EXEC_ATTEMPTS}" "${install_rc}" "${backoff}" >&2
+      sleep "${backoff}"
+    fi
+  done
+  if [[ ${install_ok} -ne 1 ]]; then
+    # Exhausted retries — surface the real problem, distinguishing a stale
+    # in-sandbox copy from nothing-installed, as before.
+    SANDBOX_HASH_AFTER="$(remote_hash)"
+    if [[ -n "${SANDBOX_HASH_AFTER}" ]]; then
+      printf '  ! nemoclaw skill install failed (exit %d) after %d attempt(s) and the in-sandbox copy differs from staged content.\n' "${install_rc}" "${SANDBOX_EXEC_ATTEMPTS}" >&2
       printf '  ! staged sha256:  %s\n' "${STAGED_HASH}" >&2
       printf '  ! sandbox sha256: %s\n' "${SANDBOX_HASH_AFTER}" >&2
       fail "skill install failed and in-sandbox copy is stale; resolve manually"
     else
-      fail "skill install failed (exit ${install_rc}) and no skill found in sandbox"
+      fail "skill install failed (exit ${install_rc}) after ${SANDBOX_EXEC_ATTEMPTS} attempt(s) and no skill found in sandbox"
     fi
   fi
 fi
