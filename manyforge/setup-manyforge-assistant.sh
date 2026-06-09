@@ -180,7 +180,7 @@ step "Step 1/5: apply lane presets (local-inference + manyforge-composer merged)
 # 'local-inference' active alongside the manyforge stack. Prior versions
 # of this script removed 'local-inference' on the assumption that the
 # manyforge preset was a strict superset for the inference path.
-# Empirical evidence in the Phase 0 O-1 baseline (PHASE-0-LANE-BASELINE.md)
+# Empirical evidence in the Phase 0 O-1 baseline (docs/archive/PHASE-0-LANE-BASELINE.md)
 # shows it is NOT — without local-inference active, the OpenShell network
 # proxy denies sandbox→host:8000 with `policy_denied` for chat-completion
 # POSTs.

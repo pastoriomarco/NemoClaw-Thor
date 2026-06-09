@@ -31,7 +31,7 @@ hermes:
   delegation_enabled: true
 
   # Session API: RESOLVED to "runs" by the Phase 0.5 contract spike
-  # (docs/PHASE-0.5-HERMES-SPIKE.md probe 5). The plan's original
+  # (docs/archive/PHASE-0.5-HERMES-SPIKE.md probe 5). The plan's original
   # "/api/sessions/{id}/chat" path does NOT exist in Hermes 0.14.0; the
   # actual surface is /v1/runs (+ /events SSE, /stop, /approval), which is
   # the only one that emits the structured lifecycle events the universal

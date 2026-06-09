@@ -1,7 +1,7 @@
 """Hermes ``/v1/runs`` session dispatcher — the lane's client to Hermes Agent.
 
 Per THREE-LANE-MIGRATION-PLAN.md §5.3 and the Phase 0.5 contract spike
-([docs/PHASE-0.5-HERMES-SPIKE.md]), the Hermes lane talks to Hermes' native
+([docs/archive/PHASE-0.5-HERMES-SPIKE.md]), the Hermes lane talks to Hermes' native
 **runs** API rather than ``/v1/chat/completions``. The spike (probe 5)
 inspected ``gateway/platforms/api_server.py`` in the Hermes 0.14.0 wheel and
 established the surface:

@@ -191,7 +191,7 @@ cases:
   # radius normalization is missing from the composer's
   # `_normalize_scene_resource_aliases` pipeline.
   #
-  # Track in: docs/PHASE-0.5-HERMES-SPIKE.md "Composer cylinder
+  # Track in: docs/archive/PHASE-0.5-HERMES-SPIKE.md "Composer cylinder
   # diameter→radius normalization gap". Promote back to active once
   # composer normalizes diameter to radius (or vice versa) so that
   # the scene-runtime apply succeeds.
