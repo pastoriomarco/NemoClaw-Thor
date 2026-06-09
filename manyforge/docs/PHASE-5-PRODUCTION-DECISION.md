@@ -24,6 +24,68 @@ Full report: [`smoke-evidence/2026-06-07-thor-7model-sweep-qat/REPORT.md`](./smo
 
 **Net correction:** the lane default (`openclaw`) is now empirically validated end-to-end, not just historical; foundation triage and the Phase-0 O-probes are unblocked. The genuinely-remaining work is **Phase 4 (Hermes lane — still unbuilt), Phase 2 (direct-lane formalization under `lanes/direct/`), the bake-off harnesses (`compare_lanes.py` / `longitudinal_hermes.py`), and a clean cosmos-anchor re-run** before this doc goes final. The interim record below is preserved as-was.
 
+## Update — 2026-06-09: first real three-lane head-to-head (direct / openclaw / hermes)
+
+[`smoke-evidence/2026-06-09-thor-three-lane-parity-qat/`](./smoke-evidence/2026-06-09-thor-three-lane-parity-qat/REPORT.md)
+fixes the **model** (gemma-QAT) and sweeps the **lane** — the comparison this doc
+was waiting on. Same 66-case corpus, `--self-heal` ON, shared vLLM+proxy, lane
+selected by `ASSISTANT_PROVIDER`.
+
+| Lane | effective | first-try | median latency | full run |
+|---|---|---|---|---|
+| **hermes** (native MCP) | **81.8%** (54/66) | 78.8% | 67.5s | ~80 min |
+| openclaw (gateway discovery) | 77.3% (51/66) | 66.7% | 36.8s | ~53 min |
+| direct — corrected scorer | 71.2% (47/66) | 59.1% | **11.4s** | **~30 min** |
+| direct — original scorer | 57.6% (38/66) | 50.0% | 11.4s | ~30 min |
+
+**Three findings that reshape this decision:**
+
+1. **Hermes tops per-turn quality (81.8%)** — above OpenClaw's best-ever (78.8 on
+   06-07) — and uniquely passed the two genuinely-hard runtime cases
+   (`CUR_runtime_remove_then_restore`, `CUR_runtime_update_pose`) that OpenClaw
+   failed. This is a *per-turn* win; the longitudinal metric Hermes is designed
+   for is still unmeasured.
+2. **Direct's old 57.6% was a scorer artifact, not a model gap.** Direct emits the
+   flat schema form Composer accepts; the golden credited only the nested form. A
+   semantic-effect-first re-score (state-proven) lifts Direct to **71.2%** — into
+   the gateway band — and it is **3–6× faster** than the gateways (in-process, no
+   sandbox hops).
+3. **With a fair scorer the three lanes are functionally comparable (71–82%).** The
+   differentiator is no longer pass-rate — it is **latency vs autonomy/sandboxing.**
+
+**Caveats before this becomes final:** (a) the Hermes run is *not* apples-to-apples
+— its `hermes.json` predates the local `catalog_read` serve fix (report follow-up
+#2 calls for a re-run); (b) OpenClaw landed slightly below its own baseline here
+(late-PnP context bloat near the 131k ctx), so the hermes↔openclaw gap is closer to
+a tie than 4.5 pts; (c) Hermes is the slowest lane (67.5s median, ~80 min/run) — a
+real interactive-product cost.
+
+**Net production read (revised):** Do *not* flip the single default to Hermes on a
+per-turn win plus an un-clean measurement. Production runs **one lane at a time,
+chosen at startup** via `ASSISTANT_PROVIDER` (the launcher starts only that lane's
+bridge — no second sandbox or agent loop is up concurrently). So the decision this
+doc owns is simply **which single lane is the default**, and on current evidence
+that stays **openclaw** until the two gating items below land. The per-lane
+strengths still inform *operator choice* of which lane to boot for a given session:
+
+- **direct** → latency-bound / simple known workflows (11s, in-process)
+- **openclaw** → balanced default (sandboxed, moderate latency) — **current default**
+- **hermes** → hard multi-step / long-running where autonomy + memory compound
+  (the cases the others fail), latency-tolerant
+
+**Gating items before changing the default:** (1) the apples-to-apples Hermes
+re-run; (2) the Phase-4 longitudinal gate (still TBD) — the metric Hermes is
+*allowed* to win on.
+
+**Explicit non-goal (2026-06-09):** *concurrent* multi-lane serving (a per-request
+router picking among live lanes) is **not** a current goal. It would require
+multiple sandboxes + agent loops running at once — a large step up in complexity and
+resource use for no demonstrated need. A per-request router was prototyped against
+the `_resolve_provider` seam and **reverted** to keep the single-lane-at-startup
+model. `lane_routing.yaml` therefore remains aspirational: only its `default_lane`
+concept is live today, and it is expressed through `ASSISTANT_PROVIDER`, not a
+router. Revisit only if a concrete need for simultaneous lanes appears.
+
 ## Empirical evidence collected
 
 | Run | Lane | Proxy in path | Effective rate | Notes |
@@ -33,8 +95,9 @@ Full report: [`smoke-evidence/2026-06-07-thor-7model-sweep-qat/REPORT.md`](./smo
 | **Phase 0 D-1 (this branch)** | Direct (cosmos-reason2-8b) | YES (vLLM:8050) | 28/66 (42.4%) | Sanity floor 40/66 NOT met — model-quality issue (`<MISSING>` args) |
 | **Phase 0 O-1 (this branch)** | OpenClaw (cosmos-reason2-8b) | NO (vLLM:8000, no proxy) | 14/66 (21.2%) | NOT a measure of the lane; without-proxy config |
 | **Phase 0 O-1 retry (this branch)** | OpenClaw (cosmos-reason2-8b) | YES (banner shows `compat`) but L7 policy 403 | 14/66 (21.2%) | OpenClaw → inference.local → not actually reaching the proxy (zero `/chat/completions` entries in proxy log) |
-| Phase 3 OpenClaw native + skill addendum | OpenClaw (cosmos-reason2-8b) | YES | **pending** (gate: ≥46/66) | Skill addendum landed; needs foundation triage to measure |
-| Phase 4 Hermes (per-turn + longitudinal) | Hermes | YES | **pending** | Phase 4 not yet implemented (inert) |
+| Phase 3 OpenClaw native + skill addendum | OpenClaw (gemma-QAT) | YES | **77.3/66 (06-09)** ; gemma-QAT 78.8 (06-07) | Gate ≥46/66 cleared on strong models |
+| Phase 4 Hermes per-turn (06-09 three-lane) | Hermes (gemma-QAT) | YES | **81.8% (54/66)** — tops the per-turn board | NOT apples-to-apples (predates catalog_read local-serve fix); re-run pending |
+| Phase 4 Hermes longitudinal | Hermes | YES | **pending** | The metric Hermes is designed to win on; harness exists, run TBD |
 
 ## Production default — interim
 
@@ -48,7 +111,17 @@ Caveats:
 
 ## Lane routing (`lane_routing.yaml`)
 
-The Composer-side lane router config landed at [`manyforge/lanes/lane_routing.yaml`](../lanes/lane_routing.yaml):
+> **⚠️ Config-only — by design (2026-06-09).** Nothing in Composer reads
+> `lane_routing.yaml`, and that is intentional under the single-lane-at-startup
+> model. The active lane is whatever the launcher sets via `ASSISTANT_PROVIDER`
+> (one provider for the whole process; only that lane's bridge runs); a per-request
+> `provider_id` can only *match* the configured lane (`_resolve_provider` in
+> `routes_assistant.py` 404s otherwise). Per-request routing across concurrently
+> live lanes is an explicit non-goal (see above) — a prototype router was reverted.
+> Of this file, only `default_lane` is operative today, and it is expressed through
+> `ASSISTANT_PROVIDER`. The `overrides`/`rollback_force` fields are aspirational.
+
+The lane-routing config (aspirational beyond `default_lane`) lives at [`manyforge/lanes/lane_routing.yaml`](../lanes/lane_routing.yaml):
 
 ```yaml
 default_lane: openclaw  # based on the iter-32 historical evidence
@@ -93,4 +166,23 @@ rollback_force: ""  # emergency lever — set to one of: openclaw|direct|hermes
 - [ ] Phase 2 direct-lane formalization (`lanes/direct/`) + Q1 decision (move vs cross-repo import)
 - [ ] Phase 0.5 Hermes contract spike run (doc exists; gated on `HERMES_LANE_PHASE4_ENABLED`)
 - [ ] Phase 4 Hermes implementation + longitudinal harness
-- [ ] **Phase 5 final decision** (this document, once Phase 4 numbers + the cosmos re-run exist)
+- [x] **First real three-lane head-to-head (2026-06-09)** — hermes 81.8 / openclaw 77.3 / direct 71.2 (corrected); lanes functionally comparable, differentiator is latency vs autonomy
+- [ ] Apples-to-apples Hermes re-run (local `catalog_read` serve + corrected scorer)
+- [x] **Per-request lane routing prototyped and reverted (2026-06-09)** — out of scope under the single-lane-at-startup model; concurrent multi-lane is an explicit non-goal (needs multiple sandboxes + agent loops live at once)
+- [ ] **Phase 5 final decision** (this document, once the longitudinal gate + apples-to-apples Hermes re-run exist) — the decision is *which single default lane*, selected at startup via `ASSISTANT_PROVIDER`
+
+## Lane selection model (settled 2026-06-09)
+
+Production serves **one lane at a time, chosen at startup** by `ASSISTANT_PROVIDER`
+(`direct` | `openclaw` | `hermes`; hermes additionally gated by
+`HERMES_LANE_PHASE4_ENABLED`). The launcher starts only the selected lane's bridge;
+no second sandbox or agent loop runs concurrently. This is the whole mechanism —
+there is no per-request router and `lane_routing.yaml` is not consulted at runtime.
+
+A feature-flagged per-request router (`lane_router.py` + a `_resolve_provider` hook)
+was prototyped on 2026-06-09 and **reverted the same day**: concurrent multi-lane
+serving would require multiple sandboxes / agent loops alive at once — a large
+complexity and resource step with no demonstrated need. If that need ever appears,
+the `_resolve_provider` seam is the integration point and `lane_routing.yaml`'s
+`overrides` / `rollback_force` schema is the intended policy source; until then both
+remain aspirational.
