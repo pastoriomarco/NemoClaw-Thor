@@ -146,40 +146,117 @@ resolve_thor_sandbox_name() {
     return 1
 }
 
+# ── Model profile catalog (single source of truth) ──────────────────────────
+#
+# One authoritative table. Every supported recipe appears here exactly once.
+# Row format (pipe-separated):
+#
+#     name | platforms | group | description
+#
+#   - platforms: SPACE-separated list of platform tags this recipe runs on. A
+#     recipe may target more than one platform (e.g. "thor orin") — assign it
+#     to several without duplicating the row. Nothing parses the recipe NAME to
+#     infer the platform; the tag list is authoritative.
+#   - group: family header, used only for the grouped human-readable listing.
+#
+# To add a platform: tag the relevant recipes with its tag. The platform menu
+# (list_model_platforms) and the per-platform recipe filter (list_model_profiles)
+# derive from this table automatically — no other code changes needed.
+#
+# Keep this in lockstep with the resolve_model_profile / prepare_thor_launch_profile
+# cases below: a recipe is only usable if it has both a catalog row AND a
+# resolve case.
+_MODEL_PROFILE_CATALOG=(
+    "qwen3.6-35b-a3b-nvfp4-nvidia|thor|Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration)|★★ DEFAULT (Task 4 winner) — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock"
+    "qwen3.6-27b-fp8-mtp-kvfp8|thor|Other Qwen3.6|dense 27B FP8 + MTP + FP8 KV (TEB 84)"
+    "qwen3.5-9b-claude-distilled-nvfp4|thor|Distilled / specialized|DeltaNet hybrid, 9B Opus-distilled, fast control loop (TEB 42)"
+    "cosmos-reason2-2b|thor|Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning)|Qwen3-VL-2B base, 32K ctx, 2-conc"
+    "cosmos-reason2-8b|thor|Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning)|Qwen3-VL-8B base, 64K ctx, 3-conc (TEB 81)"
+    "cosmos-reason2-8b-gguf|thor|Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning)|GGUF Q4_K_M via llama.cpp (text-only, 256K ctx, q8_0 KV), Jetson Thor image"
+    "cosmos-reason2-8b-gguf-orin|orin|Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning)|GGUF Q4_K_M via llama.cpp (text-only, 256K ctx, q8_0 KV), Jetson Orin AGX image + NVMe caches"
+    "nemotron3-nano-30b-a3b-nvfp4|thor|Nemotron 3 Nano (NVIDIA hybrid Mamba-2 + 4 attn, reasoning + tools)|text-only A3B sibling of Omni, ~18GB NVFP4, 3.5B active; primary tool-call A3B"
+    "nemotron3-nano-4b-bf16|thor|Nemotron 3 Nano (NVIDIA hybrid Mamba-2 + 4 attn, reasoning + tools)|NVIDIA's explicit Jetson Thor agentic default (HF card); hybrid Mamba+attn, 8GB BF16, native 262K ctx"
+    "nemotron3-nano-4b-gguf|thor|Nemotron 3 Nano (NVIDIA hybrid Mamba-2 + 4 attn, reasoning + tools)|GGUF Q4_K_M via llama.cpp (text-only, 256K ctx), Jetson Thor image"
+    "nemotron3-nano-4b-gguf-orin|orin|Nemotron 3 Nano (NVIDIA hybrid Mamba-2 + 4 attn, reasoning + tools)|GGUF Q4_K_M via llama.cpp (text-only, 256K ctx), Jetson Orin AGX image + NVMe caches"
+    "nemotron3-nano-omni-30b-a3b-nvfp4|thor|Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text)|tool-calling regime (think OFF, no reasoning parser)"
+    "nemotron3-nano-omni-30b-a3b-nvfp4-reasoning|thor|Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text)|reasoning regime (think ON + nemotron_v3 parser)"
+    "gemma4-e4b-it|thor|Gemma 4 (Google, vision+text+tools)|BF16 MoE, 8B/4B-active"
+    "gemma4-31b-it-nvfp4|thor|Gemma 4 (Google, vision+text+tools)|NVFP4 quantized"
+    "gemma4-26b-a4b-it|thor|Gemma 4 (Google, vision+text+tools)|BF16 MoE 128E/8A"
+    "gemma4-12b-it-gguf|thor|Gemma 4 (Google, vision+text+tools)|GGUF Q4_K_XL via llama.cpp + E2B spec-decode (text-only), Jetson Thor image"
+    "gemma4-12b-it-gguf-orin|orin|Gemma 4 (Google, vision+text+tools)|same model/recipe as above, Jetson Orin AGX image + NVMe-backed caches"
+)
+
+# detect_platform — best-effort host platform tag (echoes thor|orin|…), or
+# non-zero with no output if it can't tell.
+#
+# Thor and Orin now share JetPack 7.2, so the OS/JetPack version does NOT
+# distinguish them. Use the SoC/board model (stable across JetPack), then fall
+# back to GPU compute capability (Thor = sm110 = 11.x, Orin = sm87 = 8.7).
+detect_platform() {
+    local model="" cc=""
+    if [[ -r /proc/device-tree/model ]]; then
+        model="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+    fi
+    case "${model}" in
+        *thor*) echo thor; return 0 ;;
+        *orin*) echo orin; return 0 ;;
+    esac
+    cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')"
+    case "${cc}" in
+        11.*) echo thor; return 0 ;;
+        8.7)  echo orin; return 0 ;;
+    esac
+    return 1
+}
+
+# list_model_platforms — distinct platform tags across the catalog, first-seen order.
+list_model_platforms() {
+    local row name platforms group desc p seen=" "
+    for row in "${_MODEL_PROFILE_CATALOG[@]}"; do
+        IFS='|' read -r name platforms group desc <<<"${row}"
+        for p in ${platforms}; do
+            case "${seen}" in
+                *" ${p} "*) ;;
+                *) printf '%s\n' "${p}"; seen="${seen}${p} " ;;
+            esac
+        done
+    done
+}
+
+# list_model_profiles [platform] — emit "name<TAB>description" for every recipe
+# whose platform list includes PLATFORM. With no/empty PLATFORM, emit all.
+list_model_profiles() {
+    local want="${1:-}"
+    local row name platforms group desc p
+    for row in "${_MODEL_PROFILE_CATALOG[@]}"; do
+        IFS='|' read -r name platforms group desc <<<"${row}"
+        if [[ -z "${want}" ]]; then
+            printf '%s\t%s\n' "${name}" "${desc}"
+            continue
+        fi
+        for p in ${platforms}; do
+            if [[ "${p}" == "${want}" ]]; then
+                printf '%s\t%s\n' "${name}" "${desc}"
+                break
+            fi
+        done
+    done
+}
+
+# print_supported_model_profiles — human-readable grouped listing, rendered
+# from the catalog above (single source of truth).
 print_supported_model_profiles() {
-    cat <<'EOF'
-Supported model profiles:
-
-  Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration):
-    qwen3.6-35b-a3b-nvfp4-nvidia       ★★ DEFAULT (Task 4 winner) — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock
-
-  Other Qwen3.6:
-    qwen3.6-27b-fp8-mtp-kvfp8     dense 27B FP8 + MTP + FP8 KV (TEB 84)
-
-  Distilled / specialized:
-    qwen3.5-9b-claude-distilled-nvfp4  DeltaNet hybrid, 9B Opus-distilled, fast control loop (TEB 42)
-
-  Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning):
-    cosmos-reason2-2b              Qwen3-VL-2B base, 32K ctx, 2-conc
-    cosmos-reason2-8b              Qwen3-VL-8B base, 64K ctx, 3-conc (TEB 81)
-    cosmos-reason2-8b-gguf         GGUF Q4_K_M via llama.cpp (text-only, 256K ctx, q8_0 KV), Jetson Thor image
-    cosmos-reason2-8b-gguf-orin    GGUF Q4_K_M via llama.cpp (text-only, 256K ctx, q8_0 KV), Jetson Orin AGX image + NVMe caches
-
-  Nemotron 3 Nano (NVIDIA hybrid Mamba-2 + 4 attn, reasoning + tools):
-    nemotron3-nano-4b-gguf         GGUF Q4_K_M via llama.cpp (text-only, 256K ctx), Jetson Thor image
-    nemotron3-nano-4b-gguf-orin    GGUF Q4_K_M via llama.cpp (text-only, 256K ctx), Jetson Orin AGX image + NVMe caches
-
-  Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text):
-    nemotron3-nano-omni-30b-a3b-nvfp4            tool-calling regime (think OFF, no reasoning parser)
-    nemotron3-nano-omni-30b-a3b-nvfp4-reasoning  reasoning regime (think ON + nemotron_v3 parser)
-
-  Gemma 4 (Google, vision+text+tools):
-    gemma4-e4b-it             BF16 MoE, 8B/4B-active
-    gemma4-31b-it-nvfp4       NVFP4 quantized
-    gemma4-26b-a4b-it         BF16 MoE 128E/8A
-    gemma4-12b-it-gguf        GGUF Q4_K_XL via llama.cpp + E2B spec-decode (text-only, Jetson Thor image)
-    gemma4-12b-it-gguf-orin   same model/recipe as above, Jetson Orin AGX image + NVMe-backed caches
-EOF
+    local row name platforms group desc last_group=""
+    echo "Supported model profiles:"
+    for row in "${_MODEL_PROFILE_CATALOG[@]}"; do
+        IFS='|' read -r name platforms group desc <<<"${row}"
+        if [[ "${group}" != "${last_group}" ]]; then
+            printf '\n  %s:\n' "${group}"
+            last_group="${group}"
+        fi
+        printf '    %-44s %s\n' "${name}" "${desc}"
+    done
 }
 
 normalize_model_profile() {
