@@ -1198,8 +1198,10 @@ cases:
           parentName: pick_and_place
           node.id: upsert_collision_object
           node.params.object_id: graspable
-          node.params.shape_type: box
-          node.params.box_dimensions_m: [0.1, 0.01, 0.01]
+          # catalog v1 (0.2.0): shape is a nested object; flat shape_type /
+          # top-level box_dimensions_m are rejected by tree-param validation.
+          node.params.shape.type: box
+          node.params.shape.box_dimensions_m: [0.1, 0.01, 0.01]
           node.params.pose.frame_id: universe
           # "at its initial scene pose": position [0.3,-0.3,0.15] + orientation
           # -45deg about Z. orientation is matched as a rotation (either rep).
