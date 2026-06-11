@@ -167,7 +167,7 @@ resolve_thor_sandbox_name() {
 # cases below: a recipe is only usable if it has both a catalog row AND a
 # resolve case.
 _MODEL_PROFILE_CATALOG=(
-    "qwen3.6-35b-a3b-nvfp4-nvidia|thor|Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration)|★★ DEFAULT (Task 4 winner) — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock"
+    "qwen3.6-35b-a3b-nvfp4-nvidia|thor|Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration)|Historical Task 4 winner — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock"
     "qwen3.6-27b-fp8-mtp-kvfp8|thor|Other Qwen3.6|dense 27B FP8 + MTP + FP8 KV (TEB 84)"
     "qwen3.5-9b-claude-distilled-nvfp4|thor|Distilled / specialized|DeltaNet hybrid, 9B Opus-distilled, fast control loop (TEB 42)"
     "cosmos-reason2-2b|thor|Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning)|Qwen3-VL-2B base, 32K ctx, 2-conc"
@@ -183,7 +183,7 @@ _MODEL_PROFILE_CATALOG=(
     "gemma4-e4b-it|thor|Gemma 4 (Google, vision+text+tools)|BF16 MoE, 8B/4B-active"
     "gemma4-31b-it-nvfp4|thor|Gemma 4 (Google, vision+text+tools)|NVFP4 quantized"
     "gemma4-26b-a4b-it|thor|Gemma 4 (Google, vision+text+tools)|BF16 MoE 128E/8A"
-    "gemma4-12b-it-gguf|thor|Gemma 4 (Google, vision+text+tools)|GGUF Q4_K_XL via llama.cpp + E2B spec-decode (text-only), Jetson Thor image"
+    "gemma4-12b-it-gguf|thor|Gemma 4 (Google, vision+text+tools)|DEFAULT for ManyForge assistant on Thor — GGUF Q4_K_XL via llama.cpp + E2B spec-decode (text-only), Jetson Thor image; 52/66 (78.8%) on 2026-06-07 OpenClaw sweep"
     "gemma4-12b-it-gguf-orin|orin|Gemma 4 (Google, vision+text+tools)|same model/recipe as above, Jetson Orin AGX image + NVMe-backed caches"
 )
 
@@ -294,17 +294,13 @@ resolve_model_profile() {
     # markers on the line make the mirror explicit at-a-glance.
     # =====================================================================
     local requested
-    # Default profile: cosmos-reason2-8b (NVIDIA Cosmos Reason 2 8B — Qwen3-VL-8B base,
-    # FP8 KV, hermes tool parser, 64K context). Production default for the ManyForge
-    # Composer assistant lane (chosen 2026-05-07 after a 3-prompt × 3-round parity
-    # smoke vs Qwen3.6 and Nemotron — Cosmos-8B is the only profile where the
-    # OpenClaw lane achieves 9/9 on the matrix; the larger Qwen3.6 wins on raw
-    # throughput but its OpenClaw lane regresses to 1/9 because qwen3_xml's
-    # tool-call extraction is brittle without a tool_choice pin and the OpenClaw
-    # gateway never forwards one — see manyforge/docs/LANE-COMPARISON-direct-
-    # vs-openclaw.md §8 for the full benchmark). Override via THOR_MODEL_PROFILE
-    # or arg: `./serving/start-model.sh qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge`.
-    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-cosmos-reason2-8b}}")
+    # Default profile: gemma4-12b-it-gguf. This matches manyforge's launcher
+    # default and the current ManyForge assistant evidence: the 2026-06-07
+    # OpenClaw-lane sweep scored Gemma QAT at 52/66 (78.8%), ahead of the
+    # historical Cosmos anchor on the same hardened corpus. Override via
+    # THOR_MODEL_PROFILE or an explicit arg, e.g.
+    # `./serving/start-model.sh cosmos-reason2-8b`.
+    requested=$(normalize_model_profile "${1:-${THOR_MODEL_PROFILE:-gemma4-12b-it-gguf}}")
 
     case "${requested}" in
         # minimax-m2.7-139b-a10b-nvfp4 profile removed 2026-04-23.
@@ -766,13 +762,13 @@ resolve_model_profile() {
     THOR_DASHBOARD_PORT="${THOR_DASHBOARD_PORT:-${NEMOCLAW_DASHBOARD_PORT:-18789}}"
 
     # The sandbox/OpenClaw client should always talk to inference.local. The
-    # underlying OpenShell provider target is what changes between direct vLLM
+    # underlying OpenShell provider target is what changes between direct local-model
     # and ManyForge mux mode.
     THOR_OPENCLAW_BASE_URL="${THOR_OPENCLAW_BASE_URL:-https://inference.local/v1}"
 
     # When ManyForge mux is enabled, the provider target URL MUST point to the
     # mux proxy — this is not a default, it's a forced override. When disabled,
-    # reset to direct vLLM if the URL still points to the mux port (cleanup
+    # reset to the direct local-model route if the URL still points to the mux port (cleanup
     # from a previous mux-enabled run); otherwise keep the saved/user value.
     # THOR_HOST_VLLM_MODELS_URL always points directly to vLLM for health checks.
     if [[ "${THOR_MANYFORGE_MUX_ENABLED}" == "true" ]]; then

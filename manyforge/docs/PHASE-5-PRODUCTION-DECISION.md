@@ -22,7 +22,7 @@ Full report: [`smoke-evidence/2026-06-07-thor-7model-sweep-qat/REPORT.md`](./smo
 
 **Phase-3 read (honest):** the native-discovery lane clears the ≥46/66 gate comfortably on the stronger models (gemma / qwen / gemma-QAT, 71–79%) — so the lane architecture is empirically sound, not just historically. **But on the production-anchor cosmos-reason2-8b it scored 39/66 this session — below the gate and below the iter-32 51/66 baseline.** The comparison is NOT apples-to-apples: the corpus grew and hardened since iter-32 (2026-05-10); these runs used `--self-heal`; and the **`P2_scene_add` false-fail counted against every model here** and has since been fixed (commit `7571da2`). A clean cosmos re-run with the P2 fix in is required before declaring the anchor pass/fail. Separately, **gemma-QAT (78.8%) is now the strongest model on this lane** and a candidate to re-anchor the production *model* choice — orthogonal to the lane-routing decision this doc owns.
 
-**Net correction:** the lane default (`openclaw`) is now empirically validated end-to-end, not just historical; foundation triage and the Phase-0 O-probes are unblocked. The genuinely-remaining work is **Phase 4 (Hermes lane — still unbuilt), Phase 2 (direct-lane formalization under `lanes/direct/`), the bake-off harnesses (`compare_lanes.py` / `longitudinal_hermes.py`), and a clean cosmos-anchor re-run** before this doc goes final. The interim record below is preserved as-was.
+**Net correction:** the lane default (`openclaw`) is now empirically validated end-to-end, not just historical; foundation triage and the Phase-0 O-probes are unblocked. This 2026-06-07 note is superseded by the 2026-06-09 three-lane head-to-head below for Hermes status and model-default evidence.
 
 ## Update — 2026-06-09: first real three-lane head-to-head (direct / openclaw / hermes)
 
@@ -101,13 +101,19 @@ router. Revisit only if a concrete need for simultaneous lanes appears.
 
 ## Production default — interim
 
-**Recommend `openclaw` as the production default** based on the historical iter-32 51/66 number for cosmos-reason2-8b, which is the only empirically-validated baseline above the 40/66 sanity floor on this model.
+**Recommend `openclaw` as the production default lane** and
+`gemma4-12b-it-gguf` as the clean-start model default. The lane decision is
+still interim pending the Hermes apples-to-apples rerun and longitudinal gate,
+but the current launcher/serving default is aligned to Gemma QAT because it led
+the 2026-06-07 model sweep and remained strong in the 2026-06-09 head-to-head.
 
 Caveats:
 
-1. The current branch could not reproduce the iter-32 number due to the proxy-in-path race condition + the L7 policy 403 from sandbox to `host.openshell.internal:8000`. The foundation triage is a Phase 5 follow-up.
-2. Phase 3's native-discovery skill addendum has not been empirically measured. The gate (≥46/66) determines whether the archived plugin path is retired or kept as a feature-flagged rollback.
-3. Phase 4 Hermes longitudinal numbers don't exist yet.
+1. Hermes needs an apples-to-apples rerun after the local `catalog_read` serve
+   fix and corrected scorer.
+2. Phase 4 Hermes longitudinal numbers do not exist yet.
+3. Cosmos remains a historical anchor profile, but it is no longer the
+   clean-start default.
 
 ## Lane routing (`lane_routing.yaml`)
 
@@ -152,8 +158,11 @@ rollback_force: ""  # emergency lever — set to one of: openclaw|direct|hermes
    - The sandbox is hitting a different proxy than the host's `:8000`.
 3. **Re-run O-1..O-5 probes** once foundation triage lands. The full results populate this doc and gate the Phase 3 decision.
 4. **Phase 3 empirical** — append the discovery-protocol skill addendum to the OpenClaw lane's system prompt and re-run the smoke corpus. Pass criteria: ≥46/66.
-5. **Phase 4 implementation** — when ready, set `HERMES_LANE_PHASE4_ENABLED=true`, implement the Hermes bridge per the scaffolding in [`manyforge/lanes/hermes/`](../lanes/hermes/), run the Phase 0.5 contract spike probes, then the per-turn smoke + longitudinal harness.
-6. **Phase 5 final decision** — once Phase 3 + Phase 4 numbers exist, update this document with the chosen default, the lane routing rules, and the rollback playbook.
+5. **Hermes follow-up** — rerun Hermes apples-to-apples after the local
+   `catalog_read` serve fix, then run the longitudinal harness.
+6. **Phase 5 final decision** — once the Hermes follow-ups exist, update this
+   document with the chosen default, the startup lane rule, and the rollback
+   playbook.
 
 ## Sign-off
 
@@ -161,11 +170,11 @@ rollback_force: ""  # emergency lever — set to one of: openclaw|direct|hermes
 - [x] **Foundation triage RESOLVED** (proxy-in-path race + L7 403) — §4.6 rev.5 merged policy; OpenClaw lane runs full corpora end-to-end (2026-06-07)
 - [x] Empirical Phase 0 D-1 (28/66) + O-1 root-caused (14/66, foundation issue — now fixed)
 - [x] Phase 3 empirical: ≥46/66 met on gemma/qwen/gemma-QAT (71–79%) via the 2026-06-07 sweep
-- [~] **Sign-off corrections (tree does NOT match the original "all code-complete" claim):** `lanes/direct/` NOT created; Hermes lane code (transport/service/dispatcher/observer) NOT built; `setup-{direct,openclaw,hermes}.sh` absent; `compare_lanes.py` / `longitudinal_hermes.py` absent
+- [~] **Sign-off corrections (tree does NOT match the original "all code-complete" claim):** `lanes/direct/` NOT created; `setup-{direct,openclaw,hermes}.sh` absent; longitudinal harness absent
 - [ ] Clean cosmos-reason2-8b anchor re-run with the P2 fix in (current 39/66 not apples-to-apples vs iter-32 51/66)
 - [ ] Phase 2 direct-lane formalization (`lanes/direct/`) + Q1 decision (move vs cross-repo import)
-- [ ] Phase 0.5 Hermes contract spike run (doc exists; gated on `HERMES_LANE_PHASE4_ENABLED`)
-- [ ] Phase 4 Hermes implementation + longitudinal harness
+- [x] Phase 0.5/Hermes per-turn implementation has live 2026-06-09 evidence
+- [ ] Phase 4 Hermes apples-to-apples rerun + longitudinal harness
 - [x] **First real three-lane head-to-head (2026-06-09)** — hermes 81.8 / openclaw 77.3 / direct 71.2 (corrected); lanes functionally comparable, differentiator is latency vs autonomy
 - [ ] Apples-to-apples Hermes re-run (local `catalog_read` serve + corrected scorer)
 - [x] **Per-request lane routing prototyped and reverted (2026-06-09)** — out of scope under the single-lane-at-startup model; concurrent multi-lane is an explicit non-goal (needs multiple sandboxes + agent loops live at once)

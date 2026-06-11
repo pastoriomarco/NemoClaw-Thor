@@ -85,13 +85,14 @@ later in the doc.
 ## TL;DR
 
 - A user message in **Composer** (FastAPI + React UI on `:9000`) traverses
-  five hops on the way to vLLM and back: **Composer → bridge → OpenClaw
-  gateway → vllm-proxy → vLLM**. Each hop is a separate process; each can
-  inject, strip, or mutate fields independently.
-- **Two assistant lanes** exist; selection is one env var
-  (`ASSISTANT_PROVIDER=openclaw|nemoclaw`) and the deployment YAML's
-  `base_url`. **OpenClaw is the production default since 2026-05-07**
-  ([`LANE-COMPARISON.md` §8](./LANE-COMPARISON.md)).
+  five hops on the way to the local model endpoint and back: **Composer →
+  bridge → OpenClaw gateway → vllm-proxy → model server**. Each hop is a
+  separate process; each can inject, strip, or mutate fields independently.
+- **Three assistant lanes** exist; selection is one startup env var
+  (`ASSISTANT_PROVIDER=direct|openclaw|hermes`) and the deployment YAML's
+  `base_url`. **OpenClaw is the production default lane since 2026-05-07**;
+  the clean-start model default is `gemma4-12b-it-gguf` as of 2026-06-11
+  ([`PHASE-5-PRODUCTION-DECISION.md`](./PHASE-5-PRODUCTION-DECISION.md)).
 - The **vllm-proxy** sits in front of vLLM as a logger/mutator. Even with
   zero mutation env vars set, it logs every request/response to JSONL; with
   env vars set, it injects caps, budgets, tool_choice, user-suffixes, and a
@@ -112,8 +113,9 @@ later in the doc.
 - **No bridge-side clarification bypass or corpus-specific prompt rule.**
   The model must decide whether to ask or act from the user request and
   available context.
-- **Production default**: `cosmos-reason2-8b` (8B Qwen3-VL VLM, FP8 KV,
-  hermes tool parser, qwen3 reasoning parser, thinking-on, 256K ctx).
+- **Production default**: `openclaw` lane + `gemma4-12b-it-gguf` model on
+  Thor. Explicit `MODEL_PROFILE=...` still wins for bake-offs and historical
+  Cosmos-anchor reruns.
 
 ---
 
@@ -182,8 +184,8 @@ later in the doc.
 │                     │ forward to upstream                                   │
 │                     ▼                                                       │
 │  ┌────────────────────────────── Hop 5 ──────────────────────────────┐    │
-│  │  vLLM container :8050  (`manyforge-e2e-vllm`, served via Docker)   │    │
-│  │  ─ runs the model (cosmos-reason2-8b by default)                   │    │
+│  │  local model server :8050 (`manyforge-e2e-vllm`, Docker)           │    │
+│  │  ─ runs the model (gemma4-12b-it-gguf by default)                  │    │
 │  │  ─ flags from `serving/launch.sh` per-profile case branch          │    │
 │  │  ─ per-profile: tool-call parser, reasoning parser, kv dtype,      │    │
 │  │    moe backend, default chat_template_kwargs, quantization, …     │    │
@@ -226,12 +228,14 @@ later in the doc.
 
 Knobs are grouped by **owning component**. Within each group they are listed in **rough order of operational impact** for the current production stack.
 
-### B.1 vLLM launch flags (per-profile in `serving/launch.sh`)
+### B.1 Model launch flags (per-profile in `serving/launch.sh`)
 
 Each profile is a case branch in `serving/launch.sh`. Adding a profile requires
-matching edits to `serving/config.sh` (sizing) AND `serving/launch.sh` (vLLM
-args). The slug must be identical between the two files; it is also the
-`served-model-name` advertised by vLLM.
+matching edits to `serving/config.sh` (sizing) AND `serving/launch.sh` (model
+server args). The slug must be identical between the two files; it is also the
+served model name advertised by the OpenAI-compatible endpoint. vLLM profiles
+use the flags below; GGUF profiles such as `gemma4-12b-it-gguf` use the
+llama.cpp branch but preserve the same `/v1` contract.
 
 | Flag | Default for cosmos-reason2-8b | What it controls | When to change |
 |------|-------------------------------|------------------|---------------|
@@ -296,7 +300,7 @@ supervisor) with `THOR_RESTART_PROXY=0`.
 
 | Profile | `THOR_TARGET_PROXY_LOOP_REFLECT_AT` | `THOR_TARGET_PROXY_LOOP_STOP_AT` | `THOR_TARGET_PROXY_FORCE_ENABLE_THINKING` | Rationale |
 |---------|--------------------------------------|----------------------------------|--------------------------------------------|-----------|
-| `cosmos-reason2-8b` | `4` | `8` | _(unset — server default thinking-on dominates)_ | Production default; the proxy mirror picks up server-side thinking-on so no force needed. |
+| `cosmos-reason2-8b` | `4` | `8` | _(unset — server default thinking-on dominates)_ | Historical anchor profile; the proxy mirror picks up server-side thinking-on so no force needed. |
 | `cosmos-reason2-2b` | `4` | `8` | _(unset)_ | Same as 8B with smaller footprint. |
 | `nemotron3-nano-omni-30b-a3b-nvfp4` | `3` | `6` | `on` | Tighter loop because the model loops faster; force thinking-on because Composer's top-level `enable_thinking:false` would otherwise cancel the thinking budget. |
 | `qwen3.6-35b-a3b-nvfp4-nvidia` | `4` | `8` | _(unset)_ | Heavier model; default thresholds suffice. |
@@ -378,7 +382,7 @@ this pipeline are documented here. Production runs use the
 | Env var / setting | Default | What it controls |
 |-------------------|---------|------------------|
 | `ASSISTANT_PROVIDER` | `openclaw` | Selects which bridge Composer hits. Values: `openclaw` (production, `:8200`) or `nemoclaw` (direct lane, `:8100`). |
-| `MODEL_PROFILE` | `cosmos-reason2-8b` | Profile slug for `serving/start-model.sh` and `configure-local-provider.sh`. The `served-model-name` advertised by vLLM equals this slug. |
+| `MODEL_PROFILE` | `gemma4-12b-it-gguf` | Profile slug for `serving/start-model.sh` and `configure-local-provider.sh`. The served model name advertised by the local OpenAI-compatible endpoint equals this slug. |
 | `START_VLLM_PROXY` | `true` | Whether the launcher starts the vllm-proxy mutator. When `false`, the proxy is assumed externally managed. |
 | `OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS` | `2048` | Forwarded to the proxy. **Load-bearing.** See §B.2. |
 | `OPENCLAW_PROXY_THINKING_TOKEN_BUDGET` | `512` | Forwarded to the proxy. See §B.2. |
@@ -520,7 +524,7 @@ report sweet spot — ~95% accuracy, ~half the latency of unbounded).
 | Profile | `--default-chat-template-kwargs` | Reasoning parser | Notes |
 |---------|--------------------------------|------------------|-------|
 | `cosmos-reason2-2b` | _(unset)_ | _(none)_ | Template defaults apply; thinking opt-in. |
-| `cosmos-reason2-8b` | `{"enable_thinking":true}` | `qwen3` | **Thinking-on** since iter 17 (2026-05-09). Matches post-training distribution. Production default. |
+| `cosmos-reason2-8b` | `{"enable_thinking":true}` | `qwen3` | **Thinking-on** since iter 17 (2026-05-09). Matches post-training distribution; historical anchor profile. |
 | `nemotron3-nano-4b-bf16` | `{"enable_thinking":false}` | _(none)_ | Tool-call regime per HF card. |
 | `nemotron3-nano-omni-30b-a3b-nvfp4` | `{"enable_thinking":false}` | _(none, dropped 2026-05-06)_ | Bridges consume `content`; reasoning parser would route output into `reasoning` and the lane would return empty. |
 | `nemotron3-nano-omni-30b-a3b-nvfp4-reasoning` | `{"enable_thinking":true}` | `nemotron_v3` | Reasoning variant; consumers must read `reasoning` not `content`. Today the bridges do not. |
@@ -654,14 +658,15 @@ the same case-statement label.
 
 | Slug | Model source | Quant | Footprint | Ctx | Tool parser | Reasoning parser | Default thinking | BFCL / smoke | Recommended use |
 |------|-------------|-------|-----------|-----|-------------|-----------------|------------------|---------------|-----------------|
-| **`cosmos-reason2-8b`** | `nvidia/Cosmos-Reason2-8B` (Qwen3-VL-8B base) | _(none, BF16)_ | ~16 GB weights + FP8 KV pool | 262 144 | `hermes` | `qwen3` | on | smoke 9/9 OpenClaw lane | **Production default (2026-05-07).** VLM, physical-AI reasoner, agentic. |
+| `cosmos-reason2-8b` | `nvidia/Cosmos-Reason2-8B` (Qwen3-VL-8B base) | _(none, BF16)_ | ~16 GB weights + FP8 KV pool | 262 144 | `hermes` | `qwen3` | on | historical 9/9 OpenClaw parity smoke; 39/66 on hardened 2026-06-07 corpus | Historical anchor. VLM, physical-AI reasoner, agentic. |
 | `cosmos-reason2-2b` | `nvidia/Cosmos-Reason2-2B` (Qwen3-VL-2B base) | _(none, BF16)_ | ~4.3 GB weights | 32 768 | `hermes` | _(none)_ | template default | _(not benched)_ | VLM small-footprint, low concurrency. Co-serve candidate with 8B for fan-out. |
 | `nemotron3-nano-4b-bf16` | `nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16` | _(none, BF16)_ | ~8 GB weights | 65 536 (conservative; native 262K) | `qwen3_coder` | _(none, intentional)_ | off | BFCL v3 = 61.1 | NVIDIA's explicit Jetson Thor agentic default. Hybrid Mamba+attn. Tool-call-trained. Edge-class. |
-| `nemotron3-nano-omni-30b-a3b-nvfp4` | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` | NVFP4 | 20.9 GB on disk | 262 144 | `qwen3_coder` | _(none, dropped 2026-05-06)_ | off | TEB 80/100 ★★★★ Good, IFEval 87.7% (vendor regime) | Multimodal (vision+audio+video), MoE, instruct mode. Lane parity hit 0/9 vs cosmos 9/9 — use cosmos for production. |
+| `nemotron3-nano-omni-30b-a3b-nvfp4` | `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` | NVFP4 | 20.9 GB on disk | 262 144 | `qwen3_coder` | _(none, dropped 2026-05-06)_ | off | TEB 80/100 Good, IFEval 87.7% (vendor regime) | Multimodal (vision+audio+video), MoE, instruct mode. Not the ManyForge assistant default. |
 | `nemotron3-nano-omni-30b-a3b-nvfp4-reasoning` | same weights | NVFP4 | 20.9 GB | 262 144 | `qwen3_coder` | `nemotron_v3` | on | _(not benched on assistant pipeline)_ | Reasoning variant; **bridges would need to read `reasoning` field — they don't today**. Don't route Composer through this without a bridge change. |
 | `qwen3.6-35b-a3b-nvfp4-nvidia` | `nvidia/Qwen3.6-35B-A3B-NVFP4` | NVFP4 (W4A16, ModelOpt) + Marlin MoE | ~18 GB weights | 262 144 | `qwen3_coder` | `qwen3` | on | NVIDIA card: τ²-Bench Telecom 94.7 NVFP4 vs 95.5 BF16. Smoke: 56/66 (2026-05-31, head-to-head Task 4) | EXPERIMENTAL. Heavier model with MoE 3B active. MTP K=3 + Marlin. Use when 8B quality isn't enough and 65 min wall-clock per smoke is acceptable. |
 | `qwen3.6-27b-fp8-mtp-kvfp8` | `Qwen/Qwen3.6-27B-FP8` | FP8 | ~27 GB weights | 262 144 | _(profile default)_ | _(none)_ | template default | _(not benched on assistant pipeline)_ | EXPERIMENTAL dense hybrid; preserves MTP heads (NVFP4 toolchains strip them on this model). Slower than 8B. |
 | `qwen3.5-9b-claude-distilled-nvfp4` | _(Claude 4.6-distilled VLM)_ | NVFP4 + FP8 KV | ~9 GB | 131 072 | _(profile default)_ | _(none)_ | off (no-think template) | _(internal eval)_ | Fast-control / no-think VLM; vision + text + tools. |
+| **`gemma4-12b-it-gguf`** | `unsloth/gemma-4-12b-it-GGUF` + E2B draft | GGUF Q4_K_XL | ~7 GB model + draft | 131 072 | `gemma4` | _(none)_ | off | 52/66 (2026-06-07), 51/66 OpenClaw in 2026-06-09 three-lane | **Current ManyForge assistant default on Thor.** Lightweight llama.cpp path, OpenAI-compatible `/v1` endpoint. |
 | `gemma4-e4b-it` | _(Gemma-4 E4B IT)_ | _(none)_ | ~4 GB | 131 072 | `gemma4` | `gemma4` | template default | _(not benched on assistant pipeline)_ | Small Gemma-4 edge profile. |
 | `gemma4-31b-it-nvfp4` | _(Gemma-4 31B IT NVFP4)_ | NVFP4 (modelopt) | ~16 GB | 262 144 | `gemma4` | `gemma4` | template default | _(not benched)_ | Medium Gemma-4 quantized. |
 | `gemma4-26b-a4b-it` | _(Gemma-4 26B A4B IT)_ | _(none)_ | ~26 GB | 262 144 | `gemma4` | `gemma4` | template default | _(not benched)_ | Gemma-4 MoE variant. |
@@ -744,7 +749,7 @@ request; new prompts work as soon as the bridge `/healthz` returns ok.
 ### F.3 A/B test a proxy knob (e.g., reflection threshold)
 
 ```bash
-# Baseline run — keep the production defaults:
+# Baseline run — keep the production lane defaults:
 OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048 \
 OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 \
 OPENCLAW_PROXY_LOG_PATH=/tmp/iterA_proxy.jsonl \
@@ -948,7 +953,7 @@ Composer (container) :9000          ─┐
 openclaw_assistant_bridge :8200      │   ┌─ proxy log: /tmp/manyforge-assistant-e2e/vllm-proxy.jsonl
                                       ├─►│  bridge log: /tmp/manyforge-assistant-e2e/known-good-bridge.log
 vllm-proxy :8000 (mutator + logger)  │   │  bridge audit: /tmp/manyforge-assistant-e2e/known-good-bridge-audit.jsonl
-vLLM container :8050  cosmos-8b      ─┘
+model server :8050  gemma4-12b       ─┘
 ```
 
 ### G.2 Env vars (every load-bearing one)
@@ -956,7 +961,7 @@ vLLM container :8050  cosmos-8b      ─┘
 ```bash
 # Composer
 ASSISTANT_PROVIDER=openclaw
-MODEL_PROFILE=cosmos-reason2-8b
+MODEL_PROFILE=gemma4-12b-it-gguf
 START_VLLM_PROXY=true
 ASSISTANT_TIMEOUT_S=300
 DROP_CACHES=true
@@ -1012,7 +1017,7 @@ cd ~/workspaces/dev_ws/src/manyforge
 To swap to the **direct lane** (fast-path for simple prompts only):
 
 ```bash
-ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
+ASSISTANT_PROVIDER=direct ./scripts/demo-assistant-known-good.sh restart
 ```
 
 ---

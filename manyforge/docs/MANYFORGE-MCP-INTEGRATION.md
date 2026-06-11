@@ -4,7 +4,7 @@ End-to-end runbook for routing the ManyForge composer-assistant through the
 OpenClaw agent runtime in the NemoClaw `my-assistant` sandbox, using
 official NemoClaw / OpenClaw / OpenShell extension points only. The goal is
 to exploit the agent's skill mechanism and the Model Context Protocol (MCP)
-tool surface so the in-sandbox agent — not direct vLLM chat-completions —
+tool surface so the in-sandbox agent — not direct model chat-completions —
 plans the model's work, while ManyForge remains the enforcement boundary
 for tools, modes, and draft mutations.
 
@@ -36,7 +36,7 @@ Status:
   Composer draft through `/api/assistant/bridge/tools/tree.draft.wrap_node`.
   The route is still experimental because latency is high and the A/B
   reliability harness is not implemented yet.
-- **Phase 3 — A/B harness comparing direct-vLLM vs OpenClaw-skill paths:**
+- **Phase 3 — A/B harness comparing direct model vs OpenClaw-skill paths:**
   designed, not yet implemented.
 
 This is the deployment-side companion to the runtime tree-mutation
@@ -256,7 +256,7 @@ calls) and *"What does the manyforge-composer skill say about Repeat?"*
   audit records carry these alongside `assistantMode`, `catalogHash`,
   `principal`, and `stuckTool` / `stuckRepeatCount` when applicable —
   so OpenClaw-driven calls are attributable in the same audit trail
-  as direct-vLLM calls.
+  as direct model calls.
 - **Skill-vs-runtime compatibility check at install time.** The skill's
   frontmatter declares the assistant mode it expects; the provisioner
   GETs `/api/assistant/modes/{mode}` before installing the skill and
@@ -319,8 +319,8 @@ Then run the verification commands above.
 The composer's existing `openclaw` provider at
 `manyforge/manyforge_composer/backend/assistant_provider.py:584` accepts
 any HTTP endpoint speaking the `manyforge.assistant.provider_request.v0`
-contract. Today it points at `manyforge_assistant_bridge` (which runs the
-agent loop directly against vLLM). Phase 2 introduces a new endpoint that
+contract. Historically it pointed at `manyforge_assistant_bridge` (which runs
+the agent loop directly against the local model endpoint). Phase 2 introduces a new endpoint that
 runs the agent loop through OpenClaw inside the sandbox instead.
 
 ### Scope
@@ -473,11 +473,10 @@ Remaining validation:
 
 ### Spec note
 
-The normative bridge spec currently locks the direct-vLLM bridge as the
-v0.1 assistant request path and explicitly says that bridge does not
-delegate to the sandbox runtime. This Phase 2 adapter is therefore an
-experimental deployment-side alternate provider until the specs are
-updated or the experiment is retired.
+The direct model bridge remains the non-sandbox fallback provider, while the
+OpenClaw bridge is the clean-start Composer assistant default. Both implement
+the same assistant-provider contract; compatibility changes must be checked in
+both lanes.
 
 ---
 
@@ -575,14 +574,15 @@ Known Phase 2 limitations:
   request-scoped MCP tool-window support showed:
   - host-to-sandbox shell launch (`docker exec` -> `kubectl exec` -> `su`) is
     about 220-260 ms and is not the bottleneck;
-  - a trivial direct vLLM call with a capped response can complete in under one
-    second;
+  - a trivial direct model-endpoint call with a capped response can complete in
+    under one second;
   - a trivial OpenClaw agent turn with `--local --thinking off` and a narrowed
     ManyForge MCP tool window still takes about 58-61 s;
   - an unconstrained Composer root-wrap prompt through OpenClaw still timed out
     at the 180 s Composer provider budget before issuing a ManyForge callback.
-  Direct vLLM remains the known-good demo default until the Phase 3 A/B harness
-  quantifies reliability and latency.
+  This historical note predates the OpenClaw default flip; as of 2026-06-11
+  OpenClaw remains the clean-start Composer default, with the direct lane kept
+  as a fallback and comparison path.
 - The OpenClaw adapter now passes request-scoped tool windows via a short-lived
   sandbox file (`/tmp/manyforge-openclaw-allowed-tools.txt`) because OpenClaw's
   configured MCP server environment is static and does not inherit
@@ -606,7 +606,7 @@ Known Phase 2 limitations:
   `THOR_ENABLE_PREFIX_CACHING=0`. A 2026-05-05 post-restart check confirmed
   the running `manyforge-e2e-vllm` container includes the flag, but a direct
   `manyforge-composer` OpenClaw "OK" turn still took ~81 s wall time and vLLM
-  still stayed slow. Direct vLLM controls prove prefix caching works on this
+  still stayed slow. Direct model controls prove prefix caching works on this
   server: an identical ~10k-token prompt took 3.6 s on the first call, then
   ~0.58 s on repeated calls with ~8.5k cached tokens. Repeated OpenClaw
   same-session calls also produced partial cache hits (~2.1k cached tokens per
@@ -735,13 +735,14 @@ force_nonempty_content: true}` via
 the canonical OpenClaw config knob per
 [docs.openclaw.ai/providers/vllm](https://docs.openclaw.ai/providers/vllm).
 
-Latency: direct vLLM is **~7× faster at P50, ~24× faster at P95**.
+Latency: the direct model lane is **~7× faster at P50, ~24× faster at P95**.
 OpenClaw's agent loop adds a roughly constant 5-7 s on simple prompts
 (visible as the trivial "OK" minimum) plus high variance (5-67 s)
 that scales with how much internal reasoning the model decides to do
 even with `enable_thinking: false`. The variance is the next thing to
-investigate before declaring the OpenClaw lane production-default;
-direct vLLM remains the known-good demo path.
+investigate before declaring the OpenClaw lane production-default. Current
+default status has since moved to the OpenClaw lane; the direct lane remains a
+fallback/comparison path.
 
 Side observation: model accuracy is similar across paths (both
 hallucinate "MCP" answers) but OpenClaw's responses tend to be shorter
@@ -804,7 +805,7 @@ Composer only through the OpenShell proxy at `10.200.0.1:3128`. Full bring-up:
 ## Removal criteria
 
 This integration is intended to be permanent. The Phase-1 wiring becomes
-the production deployment shape once Phase 2 lands; the direct-vLLM path
+the production deployment shape once Phase 2 lands; the direct model path
 in `manyforge_assistant_bridge/` may eventually retire after Phase 3 shows
 the OpenClaw-routed path matches or exceeds the baseline on every metric.
 

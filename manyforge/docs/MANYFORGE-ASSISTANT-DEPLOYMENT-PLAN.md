@@ -1,7 +1,8 @@
 # ManyForge Assistant — LLM Stack Deployment Plan for Thor and Jetson Orin AGX
 
-**Status (2026-05-10, iter 32):** Thor-side assistant lane is operative
-end-to-end through both the direct-vLLM bridge (`nemoclaw` provider) and the
+**Status (2026-05-10, iter 32; default updated 2026-06-11):** Thor-side
+assistant lane is operative end-to-end through both the direct model bridge
+(`nemoclaw` provider) and the
 canonical OpenClaw gateway lane (`openclaw` provider, **production default
 since 2026-05-07**). The Phase 3 A/B harness landed at
 [`../ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py) with first-run
@@ -9,7 +10,9 @@ measurements captured (see runbook validation log in
 [`./MANYFORGE-MCP-INTEGRATION.md`](./MANYFORGE-MCP-INTEGRATION.md)
 "Phase 3 A/B harness — first run, 2026-05-05 evening"). Outstanding work in
 this plan is **per-Orin per-profile validation** of the candidate outcomes
-below — Thor mechanics are no longer the gate.
+below — Thor mechanics are no longer the gate. Clean-start Thor assistant
+serving now defaults to `gemma4-12b-it-gguf`; historical Cosmos/Qwen profile
+sections remain comparison records and explicit profile options.
 
 **Active production profile (2026-05-10):** **Outcome A — Cosmos-Reason2-8B
 alone, with thinking-on.** Validated via the smoke corpus iter 32 baseline
@@ -326,14 +329,14 @@ recipe). Remaining steps to ship:
    starts) or install at container boot (slower but doesn't require a
    rebuild).
 6. **Nemotron 3 family agentic ceiling** — *partially answered
-   2026-05-05*. The Omni variant runs through both the direct-vLLM
+   2026-05-05*. The Omni variant runs through both the direct model
    lane and the canonical OpenClaw gateway lane on Thor with 100%
    reliability on a small (N=3 × 3 prompts) suite of trivial and
    short-factual prompts; null-content failures (#71847) are gone
    after applying `chat_template_kwargs.{enable_thinking: false,
    force_nonempty_content: true}` via `openclaw config set
    agents.defaults.models.<id>.params.chat_template_kwargs`. Latency
-   profile P50: direct vLLM 2.14 s, OpenClaw gateway 15.04 s; P95
+   profile P50: direct model lane 2.14 s, OpenClaw gateway 15.04 s; P95
    2.78 s vs 67.30 s. **Still open**: complex agentic chains (TC-52..69
    in tool-eval-bench equivalents) and multi-tool workflows. The A/B
    harness scaffold at [`../ab-direct-vs-openclaw.py`](../ab-direct-vs-openclaw.py)
@@ -344,7 +347,7 @@ recipe). Remaining steps to ship:
    (A/B reliability + latency probe, configurable `--runs` and
    `--prompt`). Companion reliability smoke at
    [`../smoke-openclaw-assistant-reliability.py`](../smoke-openclaw-assistant-reliability.py).
-   Both reuse the same direct-vLLM and gateway endpoints we use in the
+   Both reuse the same direct model and gateway endpoints we use in the
    demo flow. First-run results captured in
    [`./MANYFORGE-MCP-INTEGRATION.md`](./MANYFORGE-MCP-INTEGRATION.md)
    "Phase 3 A/B harness — first run, 2026-05-05 evening".

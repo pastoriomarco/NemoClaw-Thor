@@ -23,7 +23,7 @@ log "bringing up composer (direct/nemoclaw -> :8100)"
 docker rm -f manyforge-e2e-composer >/dev/null 2>&1 || true
 docker run -d --rm --name manyforge-e2e-composer --network host \
   -v "$MF:/workspace" -v manyforge_build-cache:/tmp/manyforge-build -w /workspace \
-  -e MANYFORGE_ASSISTANT_PROVIDER=nemoclaw \
+  -e MANYFORGE_ASSISTANT_PROVIDER=direct \
   -e MANYFORGE_ASSISTANT_ENDPOINT_URL="$ENDPOINT" \
   -e MANYFORGE_ASSISTANT_TIMEOUT_S=180 \
   manyforge-dev:latest \

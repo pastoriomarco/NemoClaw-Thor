@@ -622,7 +622,7 @@ profile = {
     # the model then looped on an invalid result, and the run timed
     # out at 240s (verified 2026-05-06 against R5 in the comparison
     # matrix). 100 KB gives 1.5x headroom over the worst observed
-    # tool result and matches what direct-vLLM lane handles cleanly.
+    # tool result and matches what the direct model lane handles cleanly.
     # postCompactionMaxChars also raised so the compacted prompt can
     # still carry the full result on multi-turn conversations.
     # OpenClaw 2026.5.22 caps postCompactionMaxChars at 50000 (was

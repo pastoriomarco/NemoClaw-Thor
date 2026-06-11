@@ -40,8 +40,10 @@ Cross-repo ownership detail: [`manyforge_specs/docs/cross-workspace-conventions.
 
 ## The three assistant lanes
 
-The Composer assistant runs over three first-class lanes, routed per request
-shape by [`manyforge/lanes/lane_routing.yaml`](manyforge/lanes/lane_routing.yaml).
+The Composer assistant has three first-class lanes, but the live stack starts
+one lane per Composer process via `ASSISTANT_PROVIDER`. The
+[`manyforge/lanes/lane_routing.yaml`](manyforge/lanes/lane_routing.yaml)
+file is design-only today, not a runtime router.
 **Operational bring-up + live-monitoring for all three lanes lives in the
 deployment repo** at
 [`manyforge/docs/operations/LANE_BRINGUP.md`](/home/tndlux/workspaces/dev_ws/src/manyforge/docs/operations/LANE_BRINGUP.md);
@@ -54,7 +56,7 @@ the dev/analysis deep-dives live here.
 
 | Lane | Wire path | Dev/analysis docs | Implementation |
 |---|---|---|---|
-| **Direct vLLM** | in-process bridge → vLLM (no gateway hops; fastest) | [`lanes/direct/README.md`](manyforge/lanes/direct/README.md) | bridge in **`manyforge` repo** (`manyforge_assistant_bridge/`) |
+| **Direct model** | in-process bridge → local model endpoint (no gateway hops; fastest) | [`lanes/direct/README.md`](manyforge/lanes/direct/README.md) | bridge in **`manyforge` repo** (`manyforge_assistant_bridge/`) |
 | **OpenClaw** | Composer → OpenClaw gateway agent (native `tool_search`/`describe`/`call` discovery) | [`lanes/openclaw/README.md`](manyforge/lanes/openclaw/README.md), [`PHASE-3-OPENCLAW-NATIVE-RESULT.md`](manyforge/docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md) | `manyforge/openclaw_assistant_bridge/` (here) |
 | **Hermes** | Hermes Agents native MCP + session/runs APIs (memory + skills; opt-in `HERMES_LANE_PHASE4_ENABLED`) | [`lanes/hermes/README.md`](manyforge/lanes/hermes/README.md), [`PHASE-4-HERMES-LONGITUDINAL.md`](manyforge/docs/PHASE-4-HERMES-LONGITUDINAL.md) | `manyforge/lanes/hermes/` (here) |
 

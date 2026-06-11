@@ -685,10 +685,10 @@ with openclaw_path.open(encoding="utf-8") as f:
 #   https://inference.local/v1
 # The underlying OpenShell provider target is configured separately on the host:
 #   - direct mode provider target: http://host.openshell.internal:8000/v1
-#   - ManyForge mode provider target: http://host.openshell.internal:8888/v1
-# In ManyForge mode the host mux forwards normal inference to vLLM on :8000
-# and ManyForge plugin traffic to ManyForge on :9000. The sandbox-facing URL is
-# controlled by THOR_OPENCLAW_BASE_URL and persisted by config.sh.
+#   - legacy mux diagnostics target: http://host.openshell.internal:8888/v1
+# The current ManyForge assistant path keeps inference on :8000 and reaches
+# ManyForge through the assistant-provider bridge; mux/plugin traffic is retained
+# only for historical reproduction and diagnostics.
 inference = (
     openclaw_cfg.setdefault("models", {})
     .setdefault("providers", {})

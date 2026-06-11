@@ -1145,7 +1145,7 @@ def build_gateway_chat_completions_command(
     # raw_user_prompt = payload.get("message")
     # if is_action_shaped_prompt(raw_user_prompt):
     #     request_body["tool_choice"] = "required"
-    # Sampling-parameter parity with the direct-vLLM bridge. The gateway
+    # Sampling-parameter parity with the direct model bridge. The gateway
     # accepts standard OpenAI fields and forwards them; without these
     # the model rambles 2-15x longer per turn at OpenClaw's defaults.
     if config.gateway_temperature is not None:

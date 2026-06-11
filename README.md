@@ -31,11 +31,11 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 
 ## Quick start
 
-From scratch, using the validated v6-pinned image and default profile
-(`cosmos-reason2-8b`, NVIDIA Cosmos Reason 2 8B):
+From scratch, using the default ManyForge assistant profile
+(`gemma4-12b-it-gguf`, Gemma 4 12B GGUF served by llama.cpp):
 
 ```bash
-# Terminal 1: start the fastest model
+# Terminal 1: start the default model
 cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 ./serving/start-model.sh
 
@@ -46,11 +46,11 @@ nemoclaw my-assistant connect          # inside sandbox: `openclaw tui`
 ```
 
 `./serving/start-model.sh` with no args picks up the default profile
-`cosmos-reason2-8b` (NVIDIA Cosmos Reason 2 8B; FP8 KV; `hermes` tool-call
-parser; 64 K context). Selected as the production default 2026-05-07 after a
-3-prompt × 3-round parity benchmark — see
-[`manyforge/docs/LANE-COMPARISON.md` §8](manyforge/docs/LANE-COMPARISON.md)
-for the data.
+`gemma4-12b-it-gguf`. This matches the ManyForge launcher default and the
+current OpenClaw-lane evidence: 52/66 on the 2026-06-07 model sweep and 51/66
+in the 2026-06-09 three-lane head-to-head (75 total / 66 scored). See
+[`manyforge/docs/PHASE-5-PRODUCTION-DECISION.md`](manyforge/docs/PHASE-5-PRODUCTION-DECISION.md)
+for the decision record.
 
 For **higher single-stream throughput** at the cost of a less-reliable
 OpenClaw lane, the 35B Qwen variant remains the documented alternative from
@@ -61,10 +61,9 @@ the PrismaQuant + DFlash-15 benchmark set:
 ./setup/configure-local-provider.sh qwen3.6-35b-a3b-nvfp4-tq-mtp-manyforge
 ```
 
-The Qwen profile is faster on direct/single-prompt workloads but its
-OpenClaw lane regresses on compound prompts (1/9 vs Cosmos-8B's 9/9 on the
-parity matrix) because the `qwen3_xml` tool-call parser is brittle without
-a `tool_choice` pin and the OpenClaw gateway never forwards one.
+The Qwen profile is faster on direct/single-prompt workloads, but default
+selection is based on the ManyForge assistant smoke corpus, not raw token
+throughput.
 
 For **many concurrent sequences or huge context**, use the TQ-MTP variant:
 
@@ -112,8 +111,8 @@ the control-plane bring-up live in
 ```bash
 cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 
-# Terminal 1: start vLLM with the default profile
-./serving/start-model.sh               # loads cosmos-reason2-8b (production default)
+# Terminal 1: start the default local model
+./serving/start-model.sh               # loads gemma4-12b-it-gguf
 
 # Terminal 2: configure and verify
 ./setup/configure-local-provider.sh    # picks up the same default
@@ -129,7 +128,7 @@ Pass a profile name to either script to pick a non-default (e.g.
 
 The Composer-assistant lane (`openclaw` provider, in-sandbox gateway,
 manyforge MCP bridge) is the supported user-facing path. Bring it up
-end-to-end after vLLM is serving:
+end-to-end after the local model server is running:
 
 ```bash
 # 1. Provision the sandbox (idempotent — policy + skill + MCP register +
@@ -145,9 +144,9 @@ cd ~/workspaces/dev_ws/src/manyforge
 ./scripts/demo-assistant-known-good.sh start
 ```
 
-**Production default = OpenClaw + cosmos-reason2-8b.** The decision and
+**Production default = OpenClaw + gemma4-12b-it-gguf.** The decision and
 benchmark data are in
-[manyforge/docs/LANE-COMPARISON.md §8](manyforge/docs/LANE-COMPARISON.md);
+[manyforge/docs/PHASE-5-PRODUCTION-DECISION.md](manyforge/docs/PHASE-5-PRODUCTION-DECISION.md);
 the operational runbook is
 [manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md](manyforge/docs/COMPOSER-ASSISTANT-RUNBOOK.md);
 the lane parity debug tooling lives at
@@ -159,7 +158,7 @@ bypass — bridge runs its own loop with a tool_choice pin):
 ```bash
 # manyforge's unified launcher tears the assistant stack down
 # and brings it back up with the new provider.
-ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
+ASSISTANT_PROVIDER=direct ./scripts/demo-assistant-known-good.sh restart
 ```
 
 ### After reboot
@@ -210,14 +209,12 @@ after a version bump.
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | Vision+text, BF16 |
 
-**Default profile**: `cosmos-reason2-8b` — what
-`./serving/start-model.sh` (no args) loads. NVIDIA Cosmos Reason 2 8B
-(Qwen3-VL-8B base, FP8 KV, `hermes` tool-call parser, 64 K context).
-Production default for the ManyForge Composer-assistant lane: 9/9 reliability
-on the OpenClaw lane in the 3-prompt × 3-round parity smoke vs Qwen3.6's
-1/9 (full benchmark in
-[`manyforge/docs/LANE-COMPARISON.md` §8](manyforge/docs/LANE-COMPARISON.md)).
-Footprint: ~17 GiB weights + ~6 GiB FP8 KV at 64 K context.
+**Default profile**: `gemma4-12b-it-gguf` — what
+`./serving/start-model.sh` (no args) loads on a clean config. Gemma 4 12B GGUF
+is served by llama.cpp with the E2B speculative draft and is the current
+ManyForge assistant default. Footprint is much smaller than the historical
+Cosmos/vLLM anchor; persisted `THOR_MODEL_PROFILE` or an explicit CLI profile
+still overrides the clean-start default.
 
 If you need higher single-stream throughput (and don't depend on the OpenClaw
 lane's reliability — e.g. direct-bridge usage), fall back to the 35B Qwen
@@ -234,13 +231,15 @@ If you can't use NVFP4 at all (no HF token, or prefer FP8 weights), run:
 
 ```
 Host (Jetson AGX Thor)
-├── vLLM v6 container (Docker, --network host, port 8000)
-│   └── Model serving: Qwen3.6 DFlash/MTP + flash_attn/FlashInfer
+├── Local model server (Docker, --network host, port 8000)
+│   └── Model serving: Gemma GGUF default, plus vLLM profiles for bake-offs
 ├── OpenShell gateway (K3s, openshell-cluster-nemoclaw)
 │   ├── L7 proxy (10.200.0.1:3128) — TLS termination, policy enforcement
 │   └── Inference route:
 │       • direct mode      → vllm-local → host:8000
-│       • ManyForge mode   → vllm-local → host:8888 (mux)
+│       • ManyForge default → vllm-local → host:8000; Composer talks to
+│         openclaw_assistant_bridge(:8200) or direct bridge(:8100)
+│       • legacy mux diagnostics → vllm-local → host:8888
 └── Sandbox pod (thor-v5)
     ├── OpenClaw gateway (port 18789) — agent orchestration
     ├── OpenClaw agent — LLM-powered task execution
@@ -253,7 +252,7 @@ Host (Jetson AGX Thor)
 
 | Setting | Onboard default | What we need | Why |
 |---------|----------------|--------------|-----|
-| `baseUrl` | `https://inference.local/v1` | Keep `https://inference.local/v1` in the sandbox, but repoint the OpenShell provider target to `http://host.openshell.internal:8000/v1` by default or `http://host.openshell.internal:8888/v1` in ManyForge mode | In this build the sandbox/OpenClaw client works through the proxy route; the provider target decides whether inference goes straight to vLLM or through the ManyForge mux |
+| `baseUrl` | `https://inference.local/v1` | Keep `https://inference.local/v1` in the sandbox, but repoint the OpenShell provider target to `http://host.openshell.internal:8000/v1` by default | In this build the sandbox/OpenClaw client works through the proxy route; Composer reaches ManyForge through the assistant-provider bridge, not the old mux |
 | `contextWindow` | 131072 | 262144 | Models support 256K context |
 | `maxTokens` | 4096 | 16384 | Agent needs long outputs for code generation |
 | `timeoutSeconds` | (unset) | 1800 | Long reasoning sessions need 30min timeout |
@@ -263,9 +262,9 @@ The `setup/configure-local-provider.sh` script patches these via `kubectl exec` 
 the sandbox. This bypasses Landlock (kubectl exec starts a new process, not a
 child of the sandbox entrypoint) and DAC restrictions (runs as root).
 
-When ManyForge integration is enabled, the same script also persists the mux
-state in `~/.config/nemoclaw-thor/config.env` so `setup/status.sh` and later runs
-stay consistent.
+Legacy mux diagnostics can still persist mux state in
+`~/.config/nemoclaw-thor/config.env`, but the current ManyForge assistant path
+does not require mux.
 
 ## Building images
 

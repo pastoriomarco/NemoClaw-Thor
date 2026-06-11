@@ -1,10 +1,14 @@
 # Cosmos-Reason2 — fine-tune + NVFP4 quantize on Thor
 
-Working plan for improving the cosmos-reason2 production default (currently
-`cosmos-reason2-8b` at 9/9 smoke on the ManyForge composer-assistant lane,
+Working plan for improving the historical cosmos-reason2 production default
+(`cosmos-reason2-8b` at 9/9 smoke on the ManyForge composer-assistant lane,
 flipped 2026-05-07) by either fine-tuning the existing 8B or distilling it
 into a tuned 2B, then NVFP4-quantizing the text weights for deployment on
 Jetson AGX Thor.
+
+Status as of 2026-06-11: superseded for the clean-start ManyForge assistant
+default by `gemma4-12b-it-gguf`. Keep this as a Cosmos-specific research and
+reproduction note, not as current default-selection guidance.
 
 This is a **plan + reference**, not a shipped procedure. Steps that have not
 been executed are explicitly marked.
@@ -24,7 +28,7 @@ A cosmos-reason2-based profile that:
 
 ## Why fine-tune at all
 
-The production cosmos-reason2-8b default reaches 9/9 on the curated smoke
+The historical production cosmos-reason2-8b default reaches 9/9 on the curated smoke
 corpus but the corpus is small. Lane-parity work in early May 2026 (see
 [`manyforge/docs/LANE-COMPARISON.md`](../../manyforge/docs/LANE-COMPARISON.md))
 landed several vendor-side adjustments (sampling, MCP null-arg validation,

@@ -14,7 +14,7 @@ made:
 | Question | Authoritative repo | AGENTS.md |
 |---|---|---|
 | **What is the contract / spec / ADR?** ("what should this do?") | `dev_ws/src/manyforge_specs/` | `manyforge_specs/AGENTS.md` |
-| **What's in the implementation code / tests?** ("how is it written today?") | `dev_ws/src/manyforge/` | `manyforge/AGENTS.md` (a one-page redirect to `manyforge_specs`) |
+| **What's in the implementation code / tests?** ("how is it written today?") | `dev_ws/src/manyforge/` | `manyforge/AGENTS.md` (runtime/operator landing plus implementation map) |
 | **What does NemoClaw-Thor own for serving + sandbox + integration?** ("how does it run on Thor?") | `dev_ws/src/NemoClaw-Thor/` | [`NemoClaw-Thor/AGENTS.md`](../AGENTS.md) — the parent of this file |
 | **This subtree (integration-only artifacts)** | here | this file |
 
@@ -45,8 +45,8 @@ and [`../PLANS_INDEX.md`](../PLANS_INDEX.md).
 
 ## Default lane
 
-`openclaw` lane + `cosmos-reason2-8b` served model is the current default
-(since 2026-05-07). The production decision across the three lanes
+`openclaw` lane + `gemma4-12b-it-gguf` served model is the current default
+(lane since 2026-05-07, model aligned 2026-06-11). The production decision across the three lanes
 (direct / openclaw / hermes) is **interim** — see
 [`docs/PHASE-5-PRODUCTION-DECISION.md`](docs/PHASE-5-PRODUCTION-DECISION.md)
 and the architecture hub [`docs/THREE-LANE-MIGRATION-PLAN.md`](docs/THREE-LANE-MIGRATION-PLAN.md).

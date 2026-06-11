@@ -13,23 +13,24 @@ for build details).
 - Gateway: `nemoclaw`
 - Sandbox: created during `nemoclaw onboard` (typically `my-assistant`)
 - Provider route: `vllm-local` → `host.openshell.internal:8000` (direct
-  to vLLM); a muxed mode is available for ManyForge integration when
-  the bridge service is in play.
+  to the local model server). The current ManyForge assistant path uses
+  Composer's assistant-provider bridge (`:8200` OpenClaw or `:8100`
+  direct); muxed `:8888` mode is legacy diagnostics only.
 
-**Reproducibility note:** the vLLM container is fully pinned by this repo's
-build; NemoClaw and OpenShell install from their respective upstream
-release channels via the install script in NemoClaw's `scripts/`
-directory. To reproduce a specific tested baseline on a new host, pin
-to the versions in VERSIONS.md using the commands in section 3.
+**Reproducibility note:** local serving images are pinned by this repo's build
+files; NemoClaw and OpenShell install from their respective upstream release
+channels via the install script in NemoClaw's `scripts/` directory. To
+reproduce a specific tested baseline on a new host, pin to the versions in
+VERSIONS.md using the commands in section 3.
 
 Important rule:
 
-- `./serving/start-model.sh <profile>` only starts vLLM.
+- `./serving/start-model.sh <profile>` only starts the local model server.
 - `./setup/configure-local-provider.sh [profile]` binds OpenShell to the running
   model, patches openclaw.json inside the sandbox, and sends a warmup request.
-- `./setup/configure-local-provider.sh --with-manyforge-mux [profile]` switches the
-  provider to `http://host.openshell.internal:8888/v1` so the embedded
-  OpenClaw agent can use the verified ManyForge workspace-plugin path.
+- `./setup/configure-local-provider.sh --with-manyforge-mux [profile]` is a
+  legacy diagnostics path that switches the provider to
+  `http://host.openshell.internal:8888/v1`.
 
 ## 1. Shell Prep
 
@@ -143,7 +144,7 @@ vLLM inference — `setup/configure-local-provider.sh` fixes them (see Section 1
 3. Start the model server and leave it running in that terminal:
 
 ```bash
-./serving/start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
+./serving/start-model.sh
 ```
 
 4. In a second terminal, configure and verify:
@@ -154,12 +155,16 @@ vLLM inference — `setup/configure-local-provider.sh` fixes them (see Section 1
 nemoclaw my-assistant connect
 ```
 
-If you are enabling ManyForge tool access for the embedded OpenClaw agent, use:
+If you are reproducing the legacy mux/plugin ManyForge path, use:
 
 ```bash
 ./setup/configure-local-provider.sh --with-manyforge-mux
 ./setup/status.sh
 ```
+
+For the current ManyForge assistant path, keep the provider target on
+`host.openshell.internal:8000` and start the Composer assistant bridge via
+`manyforge/scripts/demo-assistant-known-good.sh`.
 
 ## 4. Start After Reboot
 
@@ -168,7 +173,7 @@ Same sequence every time — no special reboot handling needed:
 1. Start the model server:
 
 ```bash
-./serving/start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
+./serving/start-model.sh
 ```
 
 2. Rebind the provider and patch the sandbox:
@@ -194,14 +199,15 @@ If `./setup/status.sh` says the sandbox is missing, re-run `nemoclaw onboard`.
 
 ## 5. Switch Model
 
-Stop vLLM (Ctrl-C in the model terminal), drop caches, start the new model,
-reconfigure:
+Stop the model server (Ctrl-C in the model terminal), drop caches, start the
+new model, reconfigure:
 
 ```bash
 sudo sync && sudo sysctl -w vm.drop_caches=3
 ./serving/start-model.sh qwen3.6-35b-a3b-prismaquant-dflash
 ./setup/configure-local-provider.sh qwen3.6-35b-a3b-prismaquant-dflash
 ```
+Use `gemma4-12b-it-gguf` or omit the profile when returning to the default.
 
 Always drop caches between model switches — Thor's unified memory is not
 automatically freed.
@@ -242,11 +248,14 @@ All Qwen3.6 profiles use `--attention-backend flash_attn` (DFlash) or FlashInfer
 | `gemma4-e4b-it` | 8B MoE (4B active) | 12 | 3 | Vision+text+audio, BF16, 0.4 GPU mem |
 | `gemma4-31b-it-nvfp4` | 31B dense | 6 | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | 4 | Vision+text, BF16 |
+| `gemma4-12b-it-gguf` | 12B dense GGUF | 4 | 3 | **Default for ManyForge assistant on Thor**; llama.cpp + E2B speculative draft |
 
-**Seqs** = max concurrent sequences in vLLM. **Agents** = max concurrent
-OpenClaw main agents (subagents fill remaining slots automatically).
+**Seqs** = max concurrent sequences in the serving runtime. **Agents** = max
+concurrent OpenClaw main agents (subagents fill remaining slots automatically).
 
-**Default profile**: `qwen3.6-35b-a3b-fp8-dflash` (best overall for agentic work).
+**Default profile**: `gemma4-12b-it-gguf` for the ManyForge assistant path on
+Thor. It is the clean-start default for `./serving/start-model.sh`; persisted
+`THOR_MODEL_PROFILE` or an explicit CLI profile still wins for bake-offs.
 
 ### Launcher overrides
 
@@ -507,7 +516,7 @@ openshell gateway stop
 
 | Setting | Onboard default | What we need | Why |
 |---------|----------------|--------------|-----|
-| `baseUrl` | `https://inference.local/v1` | Keep `https://inference.local/v1` in the sandbox and repoint the OpenShell provider target to `http://host.openshell.internal:8000/v1` or `http://host.openshell.internal:8888/v1` in ManyForge mode | In the current build the embedded OpenClaw client works through `inference.local`; the provider target controls whether requests go direct to vLLM or through the ManyForge mux |
+| `baseUrl` | `https://inference.local/v1` | Keep `https://inference.local/v1` in the sandbox and repoint the OpenShell provider target to `http://host.openshell.internal:8000/v1` by default | In the current build the embedded OpenClaw client works through `inference.local`; Composer reaches ManyForge through the assistant-provider bridge, not mux |
 | `contextWindow` | 131072 | 262144 | Models support 256K context |
 | `maxTokens` | 4096 | 16384 | Agent needs long outputs for code generation |
 | `timeoutSeconds` | (unset) | 1800 | Long reasoning sessions need 30min timeout |

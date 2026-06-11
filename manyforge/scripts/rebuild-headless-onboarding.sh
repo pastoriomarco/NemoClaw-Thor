@@ -28,7 +28,7 @@
 #     SANDBOX  defaults to my-assistant
 #
 # Env overrides (rarely needed):
-#   NEMOCLAW_MODEL                 default cosmos-reason2-8b
+#   NEMOCLAW_MODEL                 default gemma4-12b-it-gguf
 #   THOR_VLLM_PORT                 default 8050 (proxy listens on 8000)
 #   MANYFORGE_COMPOSER_PRECHECK_BASE  default http://localhost:9000
 #   MANYFORGE_COMPOSER_BASE        default http://host.openshell.internal:9000
@@ -50,7 +50,7 @@ warn() { echo -e "${YELLOW}[onboard]${NC} $1"; }
 fail() { echo -e "${RED}[onboard]${NC} $1" >&2; exit "${2:-1}"; }
 
 SANDBOX="${1:-my-assistant}"
-MODEL="${NEMOCLAW_MODEL:-cosmos-reason2-8b}"
+MODEL="${NEMOCLAW_MODEL:-gemma4-12b-it-gguf}"
 THOR_VLLM_PORT="${THOR_VLLM_PORT:-8050}"
 PRECHECK_BASE="${MANYFORGE_COMPOSER_PRECHECK_BASE:-http://localhost:9000}"
 RUNTIME_BASE="${MANYFORGE_COMPOSER_BASE:-http://host.openshell.internal:9000}"

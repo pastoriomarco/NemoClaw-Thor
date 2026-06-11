@@ -7,5 +7,5 @@ and ships a thin FastAPI bridge service. Per THREE-LANE-MIGRATION-PLAN.md:
   API + ``mcp_servers``, memory/skills/cron/todo/delegation enabled. Bridge :8300.
 - ``lanes.openclaw`` — OpenClaw gateway lane (config-only here; the transport
   still lives in ``openclaw_assistant_bridge`` pending the Phase 3 extraction).
-- ``lanes.direct`` — Direct vLLM lane (Phase 2; not yet created here).
+- ``lanes.direct`` — Direct model lane (Phase 2; not yet created here).
 """

@@ -16,7 +16,7 @@ question. Land in the right one before making a change:
 | Question | Authoritative repo | AGENTS.md |
 |---|---|---|
 | **What is the contract / spec / ADR?** ("what should this do?") | `dev_ws/src/manyforge_specs/` | `manyforge_specs/AGENTS.md` |
-| **What's in the implementation code / tests?** ("how is it written today?") | `dev_ws/src/manyforge/` | `manyforge/AGENTS.md` (one-page redirect to `manyforge_specs`) |
+| **What's in the implementation code / tests?** ("how is it written today?") | `dev_ws/src/manyforge/` | `manyforge/AGENTS.md` (runtime/operator landing plus implementation map) |
 | **How does it run on Thor — serving, sandbox, integration?** ("how do we deploy and operate?") | this repo (`NemoClaw-Thor/`) | this file, plus the integration subtree's own [`manyforge/AGENTS.md`](manyforge/AGENTS.md) |
 
 ### Repository locations and fallbacks
@@ -38,9 +38,11 @@ If your change spans repos (most do): start at
 back here for the runtime artifacts. Don't write spec-level content
 in this repo; it belongs upstream in `manyforge_specs`.
 
-The Composer-assistant runs over three lanes (direct / openclaw / hermes);
-`openclaw` is the current default lane, with the production-default decision
-across the three tracked as **interim** in
+The Composer-assistant runs over three lanes (direct / openclaw / hermes).
+The live stack starts exactly one lane per Composer process, selected by
+`ASSISTANT_PROVIDER`; `openclaw` is the current default lane. The default model
+is `gemma4-12b-it-gguf` on Thor (`gemma4-12b-it-gguf-orin` on Orin). The
+production-default decision across the three lanes is tracked as **interim** in
 [`manyforge/docs/PHASE-5-PRODUCTION-DECISION.md`](manyforge/docs/PHASE-5-PRODUCTION-DECISION.md)
 (architecture + per-phase plan:
 [`manyforge/docs/THREE-LANE-MIGRATION-PLAN.md`](manyforge/docs/THREE-LANE-MIGRATION-PLAN.md)).
@@ -85,11 +87,12 @@ sandbox to ManyForge's MCP surfaces (egress preset, skill bundle, MCP
 server registration); see "ManyForge integration" below.
 
 There are three assistant lanes, each a provider bridge implementing
-ManyForge's provider HTTP contract (selected via Composer's
-`ASSISTANT_PROVIDER`; routed per request shape by
-[`manyforge/lanes/lane_routing.yaml`](manyforge/lanes/lane_routing.yaml)):
+ManyForge's provider HTTP contract. Runtime selection is Composer startup
+configuration: `ASSISTANT_PROVIDER=direct|openclaw|hermes` starts one lane and
+one bridge for the whole process. [`manyforge/lanes/lane_routing.yaml`](manyforge/lanes/lane_routing.yaml)
+is design-only today; Composer does not read it for live requests.
 
-- **Direct vLLM lane** — `manyforge_assistant_bridge` on `:8100`, lives
+- **Direct model lane** — `manyforge_assistant_bridge` on `:8100`, lives
   in the ManyForge repo. Talks straight to vLLM, runs the agent loop
   in-process. This repo does not own it.
 - **OpenClaw lane** — `openclaw_assistant_bridge` on `:8200`, lives in
@@ -134,12 +137,12 @@ ManyForge's provider HTTP contract (selected via Composer's
   (single source of truth for verified versions across all three
   scopes), and `USER_QUICKSTART_MANUAL.md`.
 
-This repo does **not** own the **direct-vLLM** assistant-provider
+This repo does **not** own the **direct model** assistant-provider
 bridge service (`manyforge_assistant_bridge`). That bridge implements
 ManyForge's HTTP contract and lives in the ManyForge repo
-(`manyforge/manyforge_assistant_bridge/`); it consumes the vLLM
-endpoint this repo's launch scripts expose. The bridge's architectural
-design lives alongside the contract in
+(`manyforge/manyforge_assistant_bridge/`); it consumes the local
+OpenAI-compatible model endpoint this repo's launch scripts expose. The
+bridge's architectural design lives alongside the contract in
 `manyforge_specs/docs/spec/485-assistant-bridge-architecture.md`.
 
 This repo **does** own the **OpenClaw-lane** adapter
@@ -345,7 +348,7 @@ ManyForge is the downstream consumer of this repo's serving stack.
 The integration has three pieces:
 
 1. **Model serving** — owned by this repo (`serving/`). Default served
-   profile: `cosmos-reason2-8b`.
+   profile: `gemma4-12b-it-gguf`.
 2. **Sandbox + agent runtime** — onboard and configure via the
    workflows above; provision the Composer-assistant skill +
    policy + MCP server via `manyforge/setup-manyforge-assistant.sh`.
@@ -355,7 +358,7 @@ The integration has three pieces:
    - `openclaw_assistant_bridge` (port 8200) — current default lane.
      Ships in this repo (`manyforge/openclaw_assistant_bridge/`). Routes
      through the in-sandbox OpenClaw gateway and the manyforge MCP bridge.
-   - `manyforge_assistant_bridge` (port 8100) — Direct vLLM fast-path /
+   - `manyforge_assistant_bridge` (port 8100) — Direct model fast-path /
      sandbox bypass. Ships in `dev_ws/src/manyforge/`. Runs its own agent
      loop with a `tool_choice` pin and an inline-snapshot context
      for compound prompts.
@@ -576,8 +579,8 @@ NemoClaw-Thor uses the same two-branch model as manyforge (mirroring
 ### Special rules for this repo
 
 - **Do not modify `serving/config.sh` model profiles** without
-  operator approval. The default profile (`cosmos-reason2-8b` as of
-  2026-05-07) is the default served model; changing it requires the
+  operator approval. The default profile (`gemma4-12b-it-gguf` as of
+  2026-06-11) is the default served model; changing it requires the
   full smoke-corpus retest documented in
   `manyforge/docs/MANYFORGE-PROFILE-CALIBRATION.md`.
 - **`VERSIONS.md` is the per-component pin table; `VERSION` is the

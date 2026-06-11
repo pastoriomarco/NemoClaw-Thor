@@ -111,8 +111,8 @@ live-monitoring is in the deployment repo's
 
 | Lane | Dev doc | Implementation | Routing default today |
 |---|---|---|---|
-| Direct vLLM | [`lanes/direct/README.md`](manyforge/lanes/direct/README.md) | bridge in **`manyforge` repo** (`manyforge_assistant_bridge/`) | latency-sensitive override only |
-| OpenClaw | [`lanes/openclaw/README.md`](manyforge/lanes/openclaw/README.md) | `manyforge/openclaw_assistant_bridge/` | **`default_lane`** in [`lane_routing.yaml`](manyforge/lanes/lane_routing.yaml) (starting default, not final) |
+| Direct model | [`lanes/direct/README.md`](manyforge/lanes/direct/README.md) | bridge in **`manyforge` repo** (`manyforge_assistant_bridge/`) | latency-sensitive override only |
+| OpenClaw | [`lanes/openclaw/README.md`](manyforge/lanes/openclaw/README.md) | `manyforge/openclaw_assistant_bridge/` | Current startup default via `ASSISTANT_PROVIDER=openclaw`; `lane_routing.yaml` is design-only |
 | Hermes | [`lanes/hermes/README.md`](manyforge/lanes/hermes/README.md) | `manyforge/lanes/hermes/` | opt-in (`HERMES_LANE_PHASE4_ENABLED`) for long-running |
 
 ## Raw smoke evidence — kept in place

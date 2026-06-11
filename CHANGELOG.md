@@ -124,8 +124,8 @@ milestones already tracked in [`VERSIONS.md` §C](VERSIONS.md#c-manyforge-integr
 
 - **ManyForge integration (`manyforge/`)**
   - Phase 1 (2026-05-04): OpenClaw assistant bridge on `:8200`,
-    persistent gateway, mode-scoped MCP wrapper. Direct vLLM
-    bridge on `:8100` (`nemoclaw` lane) preserved as backup.
+    persistent gateway, mode-scoped MCP wrapper. Direct model
+    bridge on `:8100` (`direct` lane, `nemoclaw` alias) preserved as backup.
   - Phase 2 (2026-05-07): OpenClaw lane promoted to production
     default. Lane-parity probe verified all 5 tasks within 1.3× of
     the direct lane; OpenClaw is faster on `scene_inspect` and

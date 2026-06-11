@@ -1,6 +1,6 @@
 # `manyforge/lanes/direct/`
 
-Dev/analysis pointer for the **Direct vLLM** assistant lane.
+Dev/analysis pointer for the **Direct model** assistant lane.
 
 > **Implementation lives in the `manyforge` deployment repo, not here.**
 > The Direct-lane bridge is

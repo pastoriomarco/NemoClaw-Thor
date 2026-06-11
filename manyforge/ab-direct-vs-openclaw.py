@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""A/B reliability + latency probe: direct vLLM vs canonical OpenClaw gateway.
+"""A/B reliability + latency probe: direct model lane vs canonical OpenClaw gateway.
 
 Hits the same prompt suite through both inference paths and prints a
 comparison table. The point is reproducible evidence, not a pass/fail
 replacement for the test suite.
 
-Path A — direct vLLM:
+Path A — direct model lane:
     POST http://127.0.0.1:8000/v1/chat/completions
     model = "<vLLM served-model-name>"
     chat_template_kwargs forced to enable_thinking=false +

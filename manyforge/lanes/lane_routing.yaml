@@ -1,23 +1,24 @@
-# Composer-side lane router config — Phase 5 of THREE-LANE-MIGRATION-PLAN.md.
+# Composer-side lane router design note — Phase 5 of THREE-LANE-MIGRATION-PLAN.md.
 #
-# The Composer's assistant route consumes this file and dispatches
-# requests to the lane that best matches the request shape. Users can
-# pin a lane manually (UI dropdown or chat command); the rules below
-# only apply when no manual pin is in effect.
+# Runtime status (2026-06-11): DESIGN-ONLY. Composer does not read this file.
+# The live stack starts one assistant lane per Composer process, selected by
+# ASSISTANT_PROVIDER (direct|openclaw|hermes). Only that lane's bridge is
+# launched. Per-request routing across concurrently live lanes was prototyped
+# and reverted on 2026-06-09 because it required multiple sandboxes / agent
+# loops for no demonstrated need.
 #
-# Phase 5 status: this is a STARTING DEFAULT, NOT a production
-# decision. The actual production default is set after Phase 3 + Phase 4
-# bake-offs land their numbers (see PHASE-5-PRODUCTION-DECISION.md).
+# Phase 5 status: `default_lane` records the operator-facing startup default
+# that launchers express through ASSISTANT_PROVIDER. `overrides` and
+# `rollback_force` are retained as an aspirational policy schema only.
 #
-# Today's empirical evidence (from Phase 0 D-1 baseline on
-# cosmos-reason2-8b):
-#   - Direct lane: 28/66 effective. Failure mode: <MISSING> args.
-#   - OpenClaw lane: 51/66 effective (iter-32 baseline).
-#   - Hermes lane: not yet measured (Phase 4).
+# Current evidence (gemma4-12b-it-gguf, 75 total / 66 scored, 2026-06-09):
+#   - Direct lane: 47/66 effective after scorer correction, fastest.
+#   - OpenClaw lane: 51/66 effective, balanced/sandboxed, current default.
+#   - Hermes lane: 54/66 effective in the first head-to-head, but needs
+#     apples-to-apples rerun + longitudinal evidence before a default flip.
 #
-# So today the default is OpenClaw. Phase 5 may change this after the
-# discovery-protocol skill rewrite is measured against the iter-32
-# baseline (Phase 3 gate ≥46/66) and Hermes longitudinal results.
+# So today the startup default is OpenClaw. Phase 5 may change this only after
+# the pending Hermes rerun and longitudinal gate land.
 
 default_lane: openclaw
 

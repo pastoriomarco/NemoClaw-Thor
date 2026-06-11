@@ -1,8 +1,12 @@
 # v9 image — smoke-corpus baseline (2026-05-30)
 
 Acceptance run for the v9 vLLM container generation. This is the formal
-result against the iter-32 production smoke recipe on the **`cosmos-reason2-8b`**
-production-default profile.
+result against the iter-32 production smoke recipe on the historical
+**`cosmos-reason2-8b`** production-default profile.
+
+Status as of 2026-06-11: historical v9/Cosmos baseline. The clean-start
+ManyForge assistant model default is now `gemma4-12b-it-gguf`; keep this
+document as v9 regression evidence for explicit Cosmos reruns.
 
 **Verdict: v9 falls below the ROADMAP Serving-lane acceptance gate of
 ≥51/66 on the iter-32 recipe.** A single dominant failure mode accounts
@@ -20,7 +24,7 @@ for over half the regressions; the rest of the stack appears healthy.
 | flash-attn-4 | `4.0.0b15` |
 | transformers | `5.9.0` |
 | torch | `2.13.0.dev20260426+cu130` (runner-stage `--override` retained the nightly against vLLM 0.22's transitive 2.10 downgrade) |
-| Model profile | `cosmos-reason2-8b` (production default since 2026-05-07) |
+| Model profile | `cosmos-reason2-8b` (historical production default since 2026-05-07) |
 | Bridge | `manyforge/openclaw_assistant_bridge/` PID 945766 with the 2026-05-11 metrics + circuit-breaker code |
 | OpenClaw lane recipe | `OPENCLAW_ASSISTANT_COMPACT_EVERY_N=2` (iter-32 chain-on production recipe) |
 | Corpus | `manyforge/scripts/debug/smoke_corpus.yaml` (74 cases, 8 future-tier gated → 66 attempted) |

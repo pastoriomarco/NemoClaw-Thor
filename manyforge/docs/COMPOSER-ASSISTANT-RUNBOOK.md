@@ -5,17 +5,17 @@ assistant lane: how it's wired, the gates a request passes through,
 and how to debug each stage.
 
 Scope: the in-sandbox **OpenClaw gateway** path with the **manyforge
-MCP bridge**. The fallback "direct vLLM" lane is documented in
+MCP bridge**. The fallback "direct model" lane is documented in
 [MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md](./MANYFORGE-ASSISTANT-DEPLOYMENT-PLAN.md).
 
-## Production default (2026-05-07)
+## Production default (2026-06-11)
 
 | | |
 |---|---|
-| **Lane** | `openclaw` (`scripts/demo-assistant-known-good.sh:48`) |
-| **Model** | `cosmos-reason2-8b` — `nvidia/Cosmos-Reason2-8B`, FP8 KV, hermes parser, 64K ctx (`serving/config.sh:189` default fallback) |
-| **vLLM sampling** | `temperature=0.2, top_p=0.95` server-side, `enable_thinking=false` from the model's chat template |
-| **Why this combo** | OpenClaw lane achieves 9/9 on the 3-prompt × 3-round parity smoke (Qwen3.6 OpenClaw was 1/9; Nemotron 0/9). See [LANE-COMPARISON.md §8](./LANE-COMPARISON.md) for the full benchmark and reproduction recipe. |
+| **Lane** | `openclaw` (`ASSISTANT_PROVIDER=openclaw`) |
+| **Model** | `gemma4-12b-it-gguf` — Gemma 4 12B GGUF via llama.cpp + E2B speculative draft (`serving/config.sh` clean-start default) |
+| **Sampling / thinking** | `enable_thinking=false`; launcher/proxy keep the same OpenAI-compatible `/v1` contract on `:8000` |
+| **Why this combo** | Gemma QAT is the current strongest lightweight default on the OpenClaw lane: 52/66 on the 2026-06-07 model sweep and 51/66 in the 2026-06-09 three-lane head-to-head (75 total / 66 scored). See [PHASE-5-PRODUCTION-DECISION.md](./PHASE-5-PRODUCTION-DECISION.md). |
 
 To bring the default stack up after a reboot:
 
@@ -30,20 +30,23 @@ To switch back to the direct lane (fast-path for simple prompts only —
 P3-style compound prompts race the 60s budget on this lane):
 
 ```bash
-ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
+ASSISTANT_PROVIDER=direct ./scripts/demo-assistant-known-good.sh restart
 ```
 
 ---
 
 ## Three-lane bring-up (THREE-LANE-MIGRATION-PLAN.md Phase 2/3/4)
 
-### Direct lane (`ASSISTANT_PROVIDER=nemoclaw`)
+### Direct lane (`ASSISTANT_PROVIDER=direct`)
+
+`nemoclaw` remains an accepted legacy alias for this lane, but operator docs
+should prefer the canonical `direct` id.
 
 Canonical bring-up via the launcher:
 
 ```bash
 cd $HOME/workspaces/dev_ws/src/manyforge
-ASSISTANT_PROVIDER=nemoclaw \
+ASSISTANT_PROVIDER=direct \
   THOR_VLLM_PORT=8050 THOR_RESTART_PROXY=0 MANYFORGE_NON_INTERACTIVE=1 \
   ./scripts/launch.sh start --lane manyforge-only --assistant on \
   --scenario ur10e-scene-authoring --non-interactive --yes
@@ -72,7 +75,7 @@ Canonical bring-up (after a clean sandbox onboard):
 # 1. Onboard a fresh sandbox with restricted policy + local-inference preset.
 NEMOCLAW_PROVIDER=custom \
   NEMOCLAW_ENDPOINT_URL=http://127.0.0.1:8000/v1 \
-  NEMOCLAW_MODEL=cosmos-reason2-8b \
+  NEMOCLAW_MODEL=gemma4-12b-it-gguf \
   NEMOCLAW_PROVIDER_KEY=dummy \
   NEMOCLAW_POLICY_TIER=restricted \
   NEMOCLAW_POLICY_PRESETS=local-inference \
@@ -90,16 +93,18 @@ ASSISTANT_PROVIDER=openclaw \
   --scenario ur10e-scene-authoring --non-interactive --yes
 ```
 
-iter-32 production baseline: **51/66 effective** on cosmos-reason2-8b
-with the chain-on recipe (bridge fires `/compact` every 2 prompts).
+Current Gemma QAT baseline: **51/66 effective** in the 2026-06-09
+three-lane head-to-head, with the earlier 2026-06-07 OpenClaw sweep at
+**52/66**. The historical Cosmos iter-32 baseline remains useful for anchor
+reruns but is no longer the clean-start default.
 
-### Hermes lane (`ASSISTANT_PROVIDER=hermes`) — Phase 4
+### Hermes lane (`ASSISTANT_PROVIDER=hermes`) — opt-in
 
-Inert until Phase 4 lands. The launcher rejects `ASSISTANT_PROVIDER=hermes`
-unless `HERMES_LANE_PHASE4_ENABLED=true` is also set, surfacing the
-gap clearly instead of falling back to Direct (the pre-Phase-1
-foot-gun). Composer-side `LANE_REGISTRY` carries the entry with
-`inert=True` for forward visibility.
+Implemented but not the default. The launcher still requires
+`HERMES_LANE_PHASE4_ENABLED=true` for `ASSISTANT_PROVIDER=hermes`, so operators
+make an explicit latency/quality trade-off. The first 2026-06-09 head-to-head
+put Hermes at 54/66 on Gemma QAT, but the apples-to-apples rerun and
+longitudinal gate remain pending before any default flip.
 
 ---
 
@@ -156,8 +161,8 @@ after 300.000s". (Older docs reference 180s; raised to 300s on
 2026-05-06 because legitimate OpenClaw runs occasionally take 100-200s.)
 
 Default provider is `openclaw` (sandboxed gateway lane on `:8200`,
-2026-05-06 — lane parity verified). Set `ASSISTANT_PROVIDER=nemoclaw`
-on the launcher for the direct-vLLM backup on `:8100`. See
+Gemma QAT default as of 2026-06-11). Set `ASSISTANT_PROVIDER=direct`
+on the launcher for the direct model backup on `:8100`. See
 [`LANE-COMPARISON.md`](./LANE-COMPARISON.md)
 §9 for the data behind the default switch and the trio of fixes
 (vendor sampling at vLLM, MCP wrapper null-arg validation, schema

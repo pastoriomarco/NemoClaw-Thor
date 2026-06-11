@@ -38,8 +38,8 @@ Composer-assistant pipeline:
 
 ## Bringing up the production default
 
-Production default = OpenClaw lane + `cosmos-reason2-8b`.
-After vLLM is serving (`./serving/start-model.sh` from the repo root),
+Production default = OpenClaw lane + `gemma4-12b-it-gguf`.
+After the local model server is running (`./serving/start-model.sh` from the repo root),
 the four commands that bring up the Composer-assistant pipeline:
 
 ```bash
@@ -58,7 +58,7 @@ To swap to the direct lane (fast-path for simple prompts only — sandbox
 bypass; the bridge runs its own loop with a `tool_choice` pin):
 
 ```bash
-ASSISTANT_PROVIDER=nemoclaw ./scripts/demo-assistant-known-good.sh restart
+ASSISTANT_PROVIDER=direct ./scripts/demo-assistant-known-good.sh restart
 ```
 
 ## Where to read

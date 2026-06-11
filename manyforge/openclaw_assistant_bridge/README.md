@@ -3,7 +3,7 @@
 > **Lane status (2026-05-06):** this is the **default assistant-provider
 > lane** in the ManyForge demo launcher
 > (`scripts/demo-assistant-known-good.sh`, `ASSISTANT_PROVIDER=openclaw`).
-> Lane parity with the direct-vLLM lane was verified on this date — all
+> Lane parity with the direct model lane was verified on this date — all
 > 5 probe tasks pass on both lanes within 1.3× of each other, OpenClaw
 > faster on `scene_inspect` and `scene_add`. The in-tree
 > `manyforge_assistant_bridge` (`nemoclaw` provider id, port :8100) is
@@ -93,7 +93,7 @@ MANYFORGE_ASSISTANT_ENDPOINT_URL=http://127.0.0.1:8200/v1/manyforge/assistant
 
 ## Current status
 
-**Production lane (default, 2026-05-06).** Lane parity with direct vLLM is
+**Production lane (default, 2026-05-06).** Lane parity with the direct model lane is
 verified — see `manyforge/docs/LANE-COMPARISON.md` §9
 for the per-task numbers and the trio of fixes that closed the gap.
 

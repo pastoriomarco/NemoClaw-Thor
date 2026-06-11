@@ -1,7 +1,7 @@
 # `manyforge.common` — universal core for the three-lane bridges
 
 This package holds the lane-agnostic code shared by all three assistant
-lanes (Direct vLLM, OpenClaw, Hermes Agents).
+lanes (Direct model, OpenClaw, Hermes Agents).
 
 ## What lives here
 

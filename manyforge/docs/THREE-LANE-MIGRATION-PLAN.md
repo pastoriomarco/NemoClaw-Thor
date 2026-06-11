@@ -11,10 +11,16 @@
 > **Revised 2026-06-03 (rev. 5)** after debugging the OpenClaw lane to first green smoke: §4.6 **split-policy guidance retracted** — `nemoclaw policy-add` REPLACES same-keyed `network_policies.<name>` blocks rather than additively merging, so applying `manyforge-egress-shared.yaml` then `manyforge-openclaw.overlay.yaml` silently dropped the port-9000 endpoints. The corrected shape is one merged file per lane (`policies/manyforge-composer.merged.yaml` for OpenClaw, `policies/manyforge-composer-hermes.merged.yaml` for Hermes), each carrying both endpoints AND binary subjects. Two additional findings folded into §4.6: (a) the MCP bridge runs in an isolated network namespace — direct TCP to `host.openshell.internal` times out, so `NO_PROXY` must list loopback only and the bridge must route through the OpenShell proxy at `10.200.0.1:3128`; (b) OpenShell's policy enforcer matches binary subjects by *resolved* exe path, so the whitelist must include `/usr/bin/python3.13` (or whichever versioned interpreter `readlink /proc/<pid>/exe` produces on the active base image), not only the `/usr/bin/python3` symlink. `setup-manyforge-assistant.sh` now applies the merged file with hard-fail post-apply verification on both invariants. End-to-end validated: 3/3 P-series smoke cases (P1 228s / P2 69s / P3 148s) on qwen3.6-35b-a3b-nvfp4 via OpenClaw tools-mode.
 >
 > **Revised 2026-06-08 (rev. 6)** after Hermes native-MCP pipeline validation: the Hermes lane keeps a **lean prompt catalog** and fetches parameterized node schemas through `catalog_read`; full inline node params are not the baseline because they match quality on the insert probe while adding prompt cost. The Hermes dispatcher now terminates only on `run.*` lifecycle events, and a repeated `catalog_read` loop-breaker prevents successful read-only discovery loops. Next publishable evidence is a clean 75-case Hermes run with self-heal on, followed by same-day restored OpenClaw and Direct baselines.
+>
+> **Current status 2026-06-11:** the request-shape lane router described in
+> this plan is not the live Composer behavior. Composer selects one assistant
+> lane per process through `ASSISTANT_PROVIDER`; the clean-start default is
+> `openclaw`. `manyforge/lanes/lane_routing.yaml` is retained as design-only
+> documentation until a later explicit router implementation is approved.
 
 ## TL;DR
 
-Stop treating any single lane as the production target. Build three first-class lanes — **Direct vLLM**, **OpenClaw**, **Hermes Agents** — each running in the configuration its upstream intends, behind one shared core of tooling. Then route per request shape and benchmark per lane on the metric that matches the lane's nature.
+Stop treating any single lane as the production target. Build three first-class lanes — **Direct model**, **OpenClaw**, **Hermes Agents** — each running in the configuration its upstream intends, behind one shared core of tooling. Then route per request shape and benchmark per lane on the metric that matches the lane's nature.
 
 ## 1. Three load-bearing principles
 
@@ -417,7 +423,7 @@ Each phase ends with an explicit pass/fail gate. No phase chains into the next w
 
 **Gate.** Per-turn smoke ≥40/66 with memory disabled (Hermes is not optimized for stateless turns; sanity floor only). Longitudinal harness shows measurable session-over-session improvement OR explicit "no improvement" finding documented with diagnosis. **Documentation deliverables**: (a) `setup-hermes.sh` script that takes a clean host to a working Hermes lane (provisions sandbox, applies `manyforge-composer-hermes.merged.yaml` with post-apply verification, emits `mcp_servers.manyforge`, sets `API_SERVER_KEY`); (b) new "Hermes lane bring-up" section in [COMPOSER-ASSISTANT-RUNBOOK.md](./COMPOSER-ASSISTANT-RUNBOOK.md); (c) new "Hermes mcp_servers" section in [MANYFORGE-MCP-INTEGRATION.md](./MANYFORGE-MCP-INTEGRATION.md) covering the config emission strategy chosen for Q7 (fork / overlay / direct config write); (d) `LANE-COMPARISON.md` Hermes row populated with both per-turn (memory off) and longitudinal (memory on) numbers; (e) `docs/PHASE-4-HERMES-LONGITUDINAL.md` documenting the longitudinal corpus design + measured skill emergences, memory hit-rates, and turns-to-completion across the session sequence. **Go = proceed to Phase 5.**
 
-### Phase 5 — Lane routing + production decision (2-3 days)
+### Phase 5 — Lane routing + production decision (design-only; not live)
 
 **Specs check (per principle #4).** The composer-side lane router (Section 9) introduces a new `lane_routing.yaml` config and a new dispatch path through `routes_assistant.py`. Before implementing, read `manyforge_specs/` sections on Composer's assistant-mode contract, the provider-id discipline, and any spec describing how Composer chooses between providers today. If the router design conflicts with a spec, escalate before coding.
 

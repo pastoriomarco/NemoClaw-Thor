@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# configure-local-provider.sh — Configure NemoClaw/OpenShell to use a local vLLM endpoint
+# configure-local-provider.sh — Configure NemoClaw/OpenShell to use a local model endpoint
 #
 # Usage:
 #   ./setup/configure-local-provider.sh [model-profile]
@@ -32,9 +32,9 @@ while [[ "${1:-}" == --* ]]; do
             echo "Usage: ./setup/configure-local-provider.sh [OPTIONS] [model-profile]"
             echo ""
             echo "Options:"
-            echo "  --with-manyforge-mux      Route inference.local through the ManyForge mux"
-            echo "                            proxy (port 8888) for ManyForge MCP tool access"
-            echo "  --without-manyforge-mux   Restore direct vLLM routing (port 8000)"
+            echo "  --with-manyforge-mux      Legacy diagnostic only: route inference.local"
+            echo "                            through the ManyForge mux proxy (port 8888)"
+            echo "  --without-manyforge-mux   Restore direct local-model routing (port 8000)"
             echo ""
             print_supported_model_profiles
             exit 0

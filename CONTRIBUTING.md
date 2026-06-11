@@ -49,8 +49,8 @@ is required for the vLLM container.
 ```bash
 git clone https://github.com/pastoriomarco/NemoClaw-Thor.git
 cd NemoClaw-Thor
-./serving/start-model.sh cosmos-reason2-8b   # ~10 min first time
-./setup/configure-local-provider.sh cosmos-reason2-8b
+./serving/start-model.sh                     # loads gemma4-12b-it-gguf by default
+./setup/configure-local-provider.sh
 ```
 
 See [`USER_QUICKSTART_MANUAL.md`](USER_QUICKSTART_MANUAL.md) for the
@@ -127,8 +127,8 @@ corpus scores.
 
 **Rules:**
 
-- Do not modify the default profile (`cosmos-reason2-8b` as of
-  2026-05-07) without operator approval. Default-swap requires the
+- Do not modify the default profile (`gemma4-12b-it-gguf` as of
+  2026-06-11) without operator approval. Default-swap requires the
   full smoke-corpus retest documented in `manyforge/docs/MANYFORGE-PROFILE-CALIBRATION.md`.
 - New profiles are additive — add a new entry; do not edit existing
   entries unless you've measured the impact.

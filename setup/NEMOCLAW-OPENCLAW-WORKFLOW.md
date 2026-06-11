@@ -1,9 +1,15 @@
 # NemoClaw / OpenClaw Workflow on Thor
 
 End-to-end recipe for running the ManyForge production agent stack on this
-Thor host: a single `cosmos-reason2-8b` vLLM endpoint served on port 8000,
+Thor host: a single local model endpoint served on port 8000,
 consumed by OpenClaw inside the `my-assistant` sandbox through an OpenShell
 `vllm-local` provider route.
+
+Current default as of 2026-06-11: `./serving/start-model.sh` resolves to
+`gemma4-12b-it-gguf` on Thor, and the ManyForge Composer launcher resolves to
+`ASSISTANT_PROVIDER=openclaw`. The Cosmos-specific commands and measurements
+below are retained for historical reproduction and explicit profile testing,
+not as the clean-start default.
 
 ## Versions verified (2026-04-30)
 
@@ -225,21 +231,19 @@ The supportable automation target is the `--non-interactive` flow
 above; if/when we want a single command on a clean host, that is the
 right wrapper to script around.
 
-## Starting the vLLM endpoint
+## Starting the local model endpoint
 
 ```bash
 cd ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor
-./serving/start-model.sh cosmos-reason2-8b
+./serving/start-model.sh
 ```
 
 What this does (see [../serving/launch.sh](../serving/launch.sh) for the full profile):
-- Pulls the `nemoclaw-thor/vllm:latest` container.
-- Serves `nvidia/Cosmos-Reason2-8B` on `0.0.0.0:8000` (override with `THOR_VLLM_PORT=...`).
-- Uses `flashinfer` attention backend (required for FP8 KV on SM110).
-- Uses `TORCH_SDPA` for the ViT encoder (SM110 workaround, vllm #38411).
-- Enables tool-calling with the **`hermes`** parser (not `qwen3_xml` — see caveat below).
-- max_model_len = **65536** (see "Why 64K context matters" below).
-- `gpu_memory_utilization=0.25` → ~30 GB total footprint: 6.4 GiB KV (93,696 tokens), ~16 GB weights, ~1.5 GB ViT, ~6 GB activations.
+- Starts the default model profile from [../serving/config.sh](../serving/config.sh).
+- On Thor clean-start, serves `gemma4-12b-it-gguf` on `0.0.0.0:8000`
+  (override with `THOR_VLLM_PORT=...`).
+- Explicit profile arguments such as `cosmos-reason2-8b` still select that
+  profile for historical reproduction or comparison runs.
 
 Readiness check:
 ```bash
@@ -251,8 +255,8 @@ curl -s http://127.0.0.1:8000/v1/models | head -c 300
 Use the same env hooks [start-duo.sh](start-duo.sh) uses:
 ```bash
 export HF_TOKEN="$(tr -d '[:space:]' < ~/.cache/huggingface/token)"
-THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-cosmos-reason2-8b" THOR_VLLM_PORT=8000 \
-    ./serving/start-model.sh cosmos-reason2-8b
+THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-gemma4-12b-it-gguf" THOR_VLLM_PORT=8000 \
+    ./serving/start-model.sh
 ```
 
 ## Wiring OpenShell to route OpenClaw to the local endpoint
@@ -265,12 +269,13 @@ THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-cosmos-reason2-8b" THOR_VLLM_PORT=80
 > the bound model on a sandbox you already have.
 
 ```bash
-./setup/configure-local-provider.sh cosmos-reason2-8b
+./setup/configure-local-provider.sh
 ```
 
 What this does:
 - Creates or updates the `vllm-local` provider to `http://host.openshell.internal:8000/v1`.
-- Sets the OpenShell gateway inference route to `vllm-local / Cosmos-Reason2-8B`.
+- Sets the OpenShell gateway inference route to `vllm-local` for the resolved
+  active model profile.
 - Syncs the `my-assistant` sandbox runtime config (`~/.nemoclaw/sandboxes.json`).
 - Applies the `local-inference` policy preset to the sandbox.
 - Starts the in-sandbox OpenClaw gateway on port 18789 and sends a warmup request.
@@ -528,11 +533,11 @@ export HF_TOKEN="$(tr -d '[:space:]' < ~/.cache/huggingface/token)"
 
 # 1. Start the model
 cd ${HOME}/workspaces/dev_ws/src/NemoClaw-Thor
-THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-cosmos-reason2-8b" \
-    ./serving/start-model.sh cosmos-reason2-8b
+THOR_DETACH=1 THOR_CONTAINER_NAME="nemoclaw-gemma4-12b-it-gguf" \
+    ./serving/start-model.sh
 
 # 2. Route OpenClaw to it
-./setup/configure-local-provider.sh cosmos-reason2-8b
+./setup/configure-local-provider.sh
 
 # 3. Use it (interactive)
 nemoclaw my-assistant connect
