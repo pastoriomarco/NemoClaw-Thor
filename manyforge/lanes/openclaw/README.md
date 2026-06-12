@@ -9,18 +9,19 @@ Lane-specific artifacts for the OpenClaw assistant lane.
 | [`skill_addendum.md`](./skill_addendum.md) | Discovery-protocol primer appended to the lane-agnostic skill body. Teaches the model how to use OpenClaw 2026.5.6+'s native `tool_search` / `tool_describe` / `tool_call` compaction surface efficiently. |
 | [`policy.yaml`](./policy.yaml) | `SessionPolicy` config for this lane (compaction, discovery_mode). Defaults reflect the current native OpenClaw route. |
 
-## Phase 3 status
+## Phase 3 status — GATE PASSED (on the strong models)
 
-Phase 3 of the THREE-LANE-MIGRATION-PLAN is the empirical validation
-that this skill addendum closes the gap between the discovery-surface
-overhead and the iter-32 baseline. Gate is **≥46/66 (≈70%)** on a clean
-discovery-surface run on cosmos-reason2-8b.
+Phase 3's gate (**≥46/66 ≈70%** on a clean discovery-surface run) was
+cleared on the stronger models: gemma-QAT 52/66 (2026-06-07 sweep) and
+51/66 in the 2026-06-09 three-lane head-to-head; qwen3.6-35b 51/66. The
+historical anchor cosmos-reason2-8b scored below gate (39/66, caveated —
+see [PHASE-3-OPENCLAW-NATIVE-RESULT.md](../../docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md)
+and [PHASE-5-PRODUCTION-DECISION.md](../../docs/PHASE-5-PRODUCTION-DECISION.md)),
+and the clean-start model default moved to gemma-QAT.
 
-If the gate passes, the archived plugin artifacts (in
-`manyforge/archive/openclaw-plugin-attempt-2026-06-02/`) can be deleted
-in Phase 5. If it doesn't, the archived artifacts remain as a
-feature-flagged rollback path (`OPENCLAW_LANE_MODE=plugin|native`)
-until a future cycle revisits the plugin path.
+The archived plugin artifacts (in
+`manyforge/archive/openclaw-plugin-attempt-2026-06-02/`) are retained as a
+rollback path until the (ad-interim) Phase 5 decision is finalized.
 
 ## Architecture
 
@@ -43,7 +44,7 @@ container (in-sandbox), not in the bridge. The bridge's job is:
 ## What's NOT here
 
 - Provider registration: the `LANE_REGISTRY` in
-  [`assistant_provider.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_provider.py)
+  [`assistant_provider.py`](../../../../manyforge/manyforge_composer/backend/assistant_provider.py)
   carries the `openclaw` entry.
 - Sandbox onboarding: the `setup-manyforge-assistant.sh` script
   bootstraps the OpenClaw sandbox (skill, MCP server, agent profile,
@@ -63,7 +64,7 @@ container (in-sandbox), not in the bridge. The bridge's job is:
 ## Operational & related docs
 
 - **Bring-up + live-monitoring (operational):**
-  [`manyforge/docs/operations/LANE_BRINGUP.md`](/home/tndlux/workspaces/dev_ws/src/manyforge/docs/operations/LANE_BRINGUP.md)
+  [`manyforge/docs/operations/LANE_BRINGUP.md`](../../../../manyforge/docs/operations/LANE_BRINGUP.md)
   — the `openclaw` section (bridge on `:8200`; revives the gateway in the
   `my-assistant` sandbox; health `curl http://127.0.0.1:8200/healthz`).
 - **Phase 3 result:** [`../../docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md`](../../docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md).

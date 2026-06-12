@@ -13,7 +13,7 @@ It is not the deployment repo and not the specs repo:
 | **`manyforge_specs`** | Normative specs, ADRs, and core development plans (kernel / collision / planner / scene). Private. | `dev_ws/src/manyforge_specs` |
 | **`NemoClaw-Thor`** (this repo) | Model serving + assistant-lane dev/analysis + operator setup for Thor/Orin. | here |
 
-Cross-repo ownership detail: [`manyforge_specs/docs/cross-workspace-conventions.md`](/home/tndlux/workspaces/dev_ws/src/manyforge_specs/docs/cross-workspace-conventions.md).
+Cross-repo ownership detail: [`manyforge_specs/docs/cross-workspace-conventions.md`](../manyforge_specs/docs/cross-workspace-conventions.md).
 
 ## Start here
 
@@ -46,7 +46,7 @@ one lane per Composer process via `ASSISTANT_PROVIDER`. The
 file is design-only today, not a runtime router.
 **Operational bring-up + live-monitoring for all three lanes lives in the
 deployment repo** at
-[`manyforge/docs/operations/LANE_BRINGUP.md`](/home/tndlux/workspaces/dev_ws/src/manyforge/docs/operations/LANE_BRINGUP.md);
+[`manyforge/docs/operations/LANE_BRINGUP.md`](../manyforge/docs/operations/LANE_BRINGUP.md);
 the dev/analysis deep-dives live here.
 
 - **Hub:** [`manyforge/docs/THREE-LANE-MIGRATION-PLAN.md`](manyforge/docs/THREE-LANE-MIGRATION-PLAN.md)

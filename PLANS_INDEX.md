@@ -16,7 +16,7 @@ this board first, then reconcile the plan body.
 
 Scope note: ManyForge **core** plans (kernel / collision / planner / scene)
 live in `manyforge_specs` —
-[`manyforge_specs/docs/plans/PLANS_INDEX.md`](/home/tndlux/workspaces/dev_ws/src/manyforge_specs/docs/plans/PLANS_INDEX.md).
+[`manyforge_specs/docs/plans/PLANS_INDEX.md`](../manyforge_specs/docs/plans/PLANS_INDEX.md).
 This board covers only the assistant-lane and serving work owned here.
 
 ## Status legend
@@ -38,9 +38,11 @@ This board covers only the assistant-lane and serving work owned here.
 ## Active work focus
 
 - **Three-lane assistant migration** — [`manyforge/docs/THREE-LANE-MIGRATION-PLAN.md`](manyforge/docs/THREE-LANE-MIGRATION-PLAN.md)
-  is the hub (rev. 6, 2026-06-08). Phases 0 / 0.5 / 1 are complete (archived);
-  Phase 3 (OpenClaw native) landed; Phase 4 (Hermes) is landed opt-in; Phase 5
-  production decision is interim. Latest evidence: same-day three-lane parity
+  is the hub (rev. 6, 2026-06-08). **AD INTERIM since 2026-06-12** (operator
+  decision): phases 0/0.5/1/2/3 complete, Phase 4 landed opt-in with the
+  longitudinal gate unrun, Phase 5 interim. Two gating items remain (Hermes
+  apples-to-apples rerun; Phase-4 longitudinal run); resumes when those are
+  scheduled. Latest evidence: same-day three-lane parity
   run on gemma4-12b QAT — see [`manyforge/docs/LANE-COMPARISON.md`](manyforge/docs/LANE-COMPARISON.md)
   and `smoke-evidence/2026-06-09-thor-three-lane-parity-qat/`.
 - **V9.1 serving execution** — [`serving/docs/V9.1-EXECUTION.md`](serving/docs/V9.1-EXECUTION.md)
@@ -53,7 +55,7 @@ This board covers only the assistant-lane and serving work owned here.
 
 | Plan | Status | Stage / phase | Notes |
 |---|---|---|---|
-| [`THREE-LANE-MIGRATION-PLAN.md`](manyforge/docs/THREE-LANE-MIGRATION-PLAN.md) | In progress | Hub; rev. 6 (2026-06-08) | Architecture + the three load-bearing principles + per-phase plan/gates. Phases 0/0.5/1 archived complete. |
+| [`THREE-LANE-MIGRATION-PLAN.md`](manyforge/docs/THREE-LANE-MIGRATION-PLAN.md) | AD INTERIM (2026-06-12) | Hub; rev. 6 (2026-06-08) | Architecture + the three load-bearing principles + per-phase plan/gates. Phases 0/0.5/1 archived complete; 2/3 complete; paused with two gating items (Hermes apples-to-apples rerun, Phase-4 longitudinal). |
 | [`PHASE-3-OPENCLAW-NATIVE-RESULT.md`](manyforge/docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md) | Shipped (result) | Phase 3 | OpenClaw native `tool_search`/`describe`/`call` discovery-surface result. |
 | [`PHASE-4-HERMES-LONGITUDINAL.md`](manyforge/docs/PHASE-4-HERMES-LONGITUDINAL.md) | Landed (opt-in) | Phase 4 | Hermes lane implemented + unit-verified, gated `HERMES_LANE_PHASE4_ENABLED`; live longitudinal numbers operator-driven, TBD. Impl: `manyforge/lanes/hermes/`. |
 | [`PHASE-5-PRODUCTION-DECISION.md`](manyforge/docs/PHASE-5-PRODUCTION-DECISION.md) | Interim | Phase 5 | Records the current production-default call; not final until full bake-off lands. |
@@ -107,7 +109,7 @@ archive path.
 
 Per-lane dev/analysis docs and implementations (operational bring-up +
 live-monitoring is in the deployment repo's
-[`LANE_BRINGUP.md`](/home/tndlux/workspaces/dev_ws/src/manyforge/docs/operations/LANE_BRINGUP.md)):
+[`LANE_BRINGUP.md`](../manyforge/docs/operations/LANE_BRINGUP.md)):
 
 | Lane | Dev doc | Implementation | Routing default today |
 |---|---|---|---|

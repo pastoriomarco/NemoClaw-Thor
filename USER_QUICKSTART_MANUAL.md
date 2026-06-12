@@ -17,6 +17,18 @@ for build details).
   Composer's assistant-provider bridge (`:8200` OpenClaw or `:8100`
   direct); muxed `:8888` mode is legacy diagnostics only.
 
+**The three ManyForge assistant lanes (where this manual fits):** this
+manual covers the NemoClaw/OpenClaw foundation — the `openclaw` lane's
+sandbox (`nemoclaw onboard`) and the local model serving every lane uses.
+The other two lanes need no `nemoclaw onboard`: `direct` runs a host-venv
+bridge with no sandbox (`manyforge/scripts/setup-direct.sh`), and `hermes`
+provisions its own born-with-MCP sandbox
+(`manyforge/scripts/setup-hermes.sh`). Lane overview + per-lane
+provisioning matrix:
+[`INDEX.md` §"The three assistant lanes"](INDEX.md) and the deployment
+repo's
+[`LANE_BRINGUP.md`](../manyforge/docs/operations/LANE_BRINGUP.md).
+
 **Reproducibility note:** local serving images are pinned by this repo's build
 files; NemoClaw and OpenShell install from their respective upstream release
 channels via the install script in NemoClaw's `scripts/` directory. To
