@@ -6,14 +6,13 @@ model profiles and launch scripts, the OpenShell sandbox onboarding
 workflow, and the OpenClaw-lane assistant bridge implementation.
 
 For per-component pinned versions, see [`VERSIONS.md`](VERSIONS.md). For
-what's actually shipped, see [`CHANGELOG.md`](CHANGELOG.md). For the
-authoritative spec and contract documents that this repo conforms to,
-see [`manyforge_specs/docs/`](../../../dev_ws/src/manyforge_specs/docs/)
-in the sibling workspace — particularly
-[`open-points.md`](../../../dev_ws/src/manyforge_specs/docs/open-points.md)
-for upstream pending decisions, and
-[`cross-workspace-conventions.md`](../../../dev_ws/src/manyforge_specs/docs/cross-workspace-conventions.md)
-for the authority/ownership map across the three workspaces.
+what's actually shipped, see [`CHANGELOG.md`](CHANGELOG.md). The
+authoritative spec and contract documents this repo conforms to live in the
+**private** `manyforge_specs` development repo (its `docs/open-points.md`
+holds upstream pending decisions and `docs/cross-workspace-conventions.md`
+the authority/ownership map); maintainers clone it as a sibling workspace,
+and the public deployment contracts are mirrored in the `manyforge` repo's
+`docs/reference/`.
 
 Items are organized by **concern lane**, not by release version.
 NemoClaw-Thor's SemVer is decoupled from image generation (the
@@ -83,7 +82,7 @@ See [`VERSIONS.md`](VERSIONS.md) for the authoritative pin set.
 OpenClaw-lane assistant-provider adapter at
 [`manyforge/openclaw_assistant_bridge/`](manyforge/openclaw_assistant_bridge/),
 the implementation owned by this repo per
-[`cross-workspace-conventions.md`](../../../dev_ws/src/manyforge_specs/docs/cross-workspace-conventions.md).
+`cross-workspace-conventions.md` in the private `manyforge_specs` repo.
 
 Recently-shipped bridge work (per-request thinking controls,
 single-reasoning-parser audit, Prometheus metrics, circuit breaker) is
@@ -294,14 +293,14 @@ Items the team is aware of but not committing to as roadmap deliverables.
 
 - **ManyForge kernel, ROS, planning, behavior runtime, composer UI.**
   These belong in
-  [`manyforge_specs/`](../../../dev_ws/src/manyforge_specs/) and
-  [`manyforge/`](../../../dev_ws/src/manyforge/). NemoClaw-Thor is the
+  the private `manyforge_specs` repo and
+  [`manyforge`](https://github.com/pastoriomarco/manyforge). NemoClaw-Thor is the
   deployment helper, not the platform.
 - **Wire-contract authority.** The assistant-provider HTTP contract
   envelope is owned by
-  [`manyforge_specs/docs/reference/ASSISTANT_BACKEND_CONTRACT.md`](../../../dev_ws/src/manyforge_specs/docs/reference/ASSISTANT_BACKEND_CONTRACT.md)
+  `docs/reference/ASSISTANT_BACKEND_CONTRACT.md` (private `manyforge_specs` repo)
   and
-  [`manyforge/manyforge_composer/backend/assistant_provider.py`](../../../dev_ws/src/manyforge/manyforge_composer/backend/assistant_provider.py).
+  [`manyforge/manyforge_composer/backend/assistant_provider.py`](https://github.com/pastoriomarco/manyforge/blob/main/manyforge_composer/backend/assistant_provider.py).
   Changes to the contract are coordinated through `manyforge_specs`
   and `manyforge`, not here.
 - **Non-Thor hardware support.** The repo name says "Thor"; non-Thor
@@ -324,10 +323,10 @@ Items the team is aware of but not committing to as roadmap deliverables.
 |---|---|
 | Pin set, image generations | [`VERSIONS.md`](VERSIONS.md) |
 | What's shipped | [`CHANGELOG.md`](CHANGELOG.md) |
-| Cross-workspace ownership map | [`cross-workspace-conventions.md`](../../../dev_ws/src/manyforge_specs/docs/cross-workspace-conventions.md) |
-| Upstream pending decisions | [`open-points.md`](../../../dev_ws/src/manyforge_specs/docs/open-points.md) |
-| Assistant-provider HTTP contract | [`manyforge_specs/docs/reference/ASSISTANT_BACKEND_CONTRACT.md`](../../../dev_ws/src/manyforge_specs/docs/reference/ASSISTANT_BACKEND_CONTRACT.md) |
-| Mode taxonomy + bridge architecture | [`manyforge_specs/docs/spec/480-...md`](../../../dev_ws/src/manyforge_specs/docs/spec/) and `485-...md` |
+| Cross-workspace ownership map | `cross-workspace-conventions.md` (private `manyforge_specs` repo) |
+| Upstream pending decisions | `open-points.md` (private `manyforge_specs` repo) |
+| Assistant-provider HTTP contract | `manyforge_specs/docs/reference/ASSISTANT_BACKEND_CONTRACT.md` (private `manyforge_specs` repo) |
+| Mode taxonomy + bridge architecture | `manyforge_specs/docs/spec/480-...md` (private `manyforge_specs` repo) and `485-...md` |
 | OpenClaw-lane bridge implementation (this repo) | [`manyforge/openclaw_assistant_bridge/`](manyforge/openclaw_assistant_bridge/) |
 | Setup workflow | [`setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`](setup/NEMOCLAW-OPENCLAW-WORKFLOW.md) |
 

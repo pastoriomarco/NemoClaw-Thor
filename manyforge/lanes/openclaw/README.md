@@ -44,7 +44,7 @@ container (in-sandbox), not in the bridge. The bridge's job is:
 ## What's NOT here
 
 - Provider registration: the `LANE_REGISTRY` in
-  [`assistant_provider.py`](../../../../manyforge/manyforge_composer/backend/assistant_provider.py)
+  [`assistant_provider.py`](https://github.com/pastoriomarco/manyforge/blob/main/manyforge_composer/backend/assistant_provider.py)
   carries the `openclaw` entry.
 - Sandbox onboarding: the `setup-manyforge-assistant.sh` script
   bootstraps the OpenClaw sandbox (skill, MCP server, agent profile,
@@ -64,7 +64,7 @@ container (in-sandbox), not in the bridge. The bridge's job is:
 ## Operational & related docs
 
 - **Bring-up + live-monitoring (operational):**
-  [`manyforge/docs/operations/LANE_BRINGUP.md`](../../../../manyforge/docs/operations/LANE_BRINGUP.md)
+  [`manyforge/docs/operations/LANE_BRINGUP.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/operations/LANE_BRINGUP.md)
   — the `openclaw` section (bridge on `:8200`; revives the gateway in the
   `my-assistant` sandbox; health `curl http://127.0.0.1:8200/healthz`).
 - **Phase 3 result:** [`../../docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md`](../../docs/PHASE-3-OPENCLAW-NATIVE-RESULT.md).

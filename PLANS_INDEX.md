@@ -16,7 +16,7 @@ this board first, then reconcile the plan body.
 
 Scope note: ManyForge **core** plans (kernel / collision / planner / scene)
 live in `manyforge_specs` —
-[`manyforge_specs/docs/plans/PLANS_INDEX.md`](../manyforge_specs/docs/plans/PLANS_INDEX.md).
+`docs/plans/PLANS_INDEX.md` in the private `manyforge_specs` repo (maintainers clone it as a sibling workspace).
 This board covers only the assistant-lane and serving work owned here.
 
 ## Status legend
@@ -73,7 +73,7 @@ This board covers only the assistant-lane and serving work owned here.
 | [`V9.1-IMAGE-NOTES.md`](serving/docs/V9.1-IMAGE-NOTES.md) | Reference | vLLM nightly with PR #42124 (LM-head ModelOpt). |
 | [`V9-35B-A3B-NVFP4-NVIDIA-RECIPE.md`](serving/docs/V9-35B-A3B-NVFP4-NVIDIA-RECIPE.md) | Reference (recipe) | Qwen3.6-35B-A3B-NVFP4 NVIDIA serving recipe; not in v0.22.0. |
 | [`V9-SMOKE-CORPUS-BASELINE.md`](serving/docs/V9-SMOKE-CORPUS-BASELINE.md) | Baseline (2026-05-30) | v9 image smoke-corpus baseline. |
-| [`COSMOS-REASON2-FINETUNE-PLAN.md`](serving/docs/COSMOS-REASON2-FINETUNE-PLAN.md) | Plan | Cosmos-Reason2 fine-tune + NVFP4 quantize on Thor. |
+| [`COSMOS-REASON2-FINETUNE-PLAN.md`](serving/docs/COSMOS-REASON2-FINETUNE-PLAN.md) | Deferred (2026-06-12) | Cosmos-Reason2 fine-tune + NVFP4 quantize on Thor. Deferred since the clean-start model default moved to gemma-QAT (2026-06-07 sweep + 06-09 head-to-head); revisit only if cosmos is re-anchored. |
 | [`COSMOS-REASON2-32B-QUANTIZATION.md`](serving/docs/COSMOS-REASON2-32B-QUANTIZATION.md) | Investigation (reference) | 2026-04-30 — 32B quantization on Thor. |
 | [`DFLASH-INVESTIGATION.md`](serving/docs/DFLASH-INVESTIGATION.md) | Investigation (reference) | 2026-04-15…17 — DFlash speculative decoding on SM110. |
 | [`DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md`](serving/docs/DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md) | Investigation (reference) | 2026-05-12 (upd 05-19) — DeepSeek-V4-Flash on Thor. |
@@ -109,7 +109,7 @@ archive path.
 
 Per-lane dev/analysis docs and implementations (operational bring-up +
 live-monitoring is in the deployment repo's
-[`LANE_BRINGUP.md`](../manyforge/docs/operations/LANE_BRINGUP.md)):
+[`LANE_BRINGUP.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/operations/LANE_BRINGUP.md)):
 
 | Lane | Dev doc | Implementation | Routing default today |
 |---|---|---|---|

@@ -6,9 +6,9 @@ Per [THREE-LANE-MIGRATION-PLAN.md §8 Phase 1 Specs Check](../THREE-LANE-MIGRATI
 
 ### Inside `dev_ws/manyforge/`
 
-1. [`scripts/manyforge-mcp-bridge.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/manyforge-mcp-bridge.py) — lane-neutralized.
-2. [`manyforge_composer/backend/assistant_provider.py`](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/assistant_provider.py) — added `LANE_REGISTRY` + reject-unknown-id behavior.
-3. [`scripts/lib/assistant.sh`](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/lib/assistant.sh) — added launcher-side `LANE_REGISTRY` case statement.
+1. [`scripts/manyforge-mcp-bridge.py`](https://github.com/pastoriomarco/manyforge/blob/main/scripts/manyforge-mcp-bridge.py) — lane-neutralized.
+2. [`manyforge_composer/backend/assistant_provider.py`](https://github.com/pastoriomarco/manyforge/blob/main/manyforge_composer/backend/assistant_provider.py) — added `LANE_REGISTRY` + reject-unknown-id behavior.
+3. [`scripts/lib/assistant.sh`](https://github.com/pastoriomarco/manyforge/blob/main/scripts/lib/assistant.sh) — added launcher-side `LANE_REGISTRY` case statement.
 
 ### Inside `NemoClaw-Thor/manyforge/`
 
@@ -19,7 +19,7 @@ Per [THREE-LANE-MIGRATION-PLAN.md §8 Phase 1 Specs Check](../THREE-LANE-MIGRATI
 
 ## Specs consulted
 
-### [`manyforge_specs/docs/cross-workspace-conventions.md`](/home/tndlux/workspaces/dev_ws/src/manyforge_specs/docs/cross-workspace-conventions.md)
+### `manyforge_specs/docs/cross-workspace-conventions.md` (private `manyforge_specs` repo)
 
 The load-bearing spec for Phase 1. It establishes:
 
@@ -30,11 +30,11 @@ The load-bearing spec for Phase 1. It establishes:
 | Mode-scoped MCP wrapper at `/api/assistant/bridge/tools/{toolId}` is the only sanctioned mutation surface. | **Respected.** `manyforge-mcp-bridge.py` continues to POST there exclusively. Lane-neutralization changes the `principal` and `conversationId` *prefixes* (now lane-derived) but not the bridge endpoint or its envelope fields. |
 | Direct-lane bridge on `127.0.0.1:8100` runs from `manyforge/manyforge_assistant_bridge/`. | **Respected.** The launcher's `LANE_REGISTRY` records 8100 as the direct lane's default port. The bridge code in `dev_ws/manyforge_assistant_bridge/` is unchanged in Phase 1. Phase 2 will revisit whether to move it (Open question Q1). |
 
-### [`manyforge_specs/docs/INDEX.md`](/home/tndlux/workspaces/dev_ws/src/manyforge_specs/docs/INDEX.md)
+### `manyforge_specs/docs/INDEX.md` (private `manyforge_specs` repo)
 
 Scanned for spec entries touching the bridge envelope, MCP wrapper, or skill prompt. No additional specs flagged for Phase 1 work.
 
-### [`manyforge_specs/docs/agent-playbook.md`](/home/tndlux/workspaces/dev_ws/src/manyforge_specs/docs/agent-playbook.md)
+### `manyforge_specs/docs/agent-playbook.md` (private `manyforge_specs` repo)
 
 Scanned for prompt/skill conventions that the Phase 3 OpenClaw skill rewrite would touch. Phase 1 does NOT modify the agent skill prompt (the rewrite is Phase 3) — `discovery_mode` parameter is plumbed through `common/prompt.py` but defaults to `"direct"` (the existing behavior). No agent-playbook entries violated.
 

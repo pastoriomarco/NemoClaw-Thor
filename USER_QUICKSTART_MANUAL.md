@@ -27,7 +27,7 @@ provisions its own born-with-MCP sandbox
 provisioning matrix:
 [`INDEX.md` §"The three assistant lanes"](INDEX.md) and the deployment
 repo's
-[`LANE_BRINGUP.md`](../manyforge/docs/operations/LANE_BRINGUP.md).
+[`LANE_BRINGUP.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/operations/LANE_BRINGUP.md).
 
 **Reproducibility note:** local serving images are pinned by this repo's build
 files; NemoClaw and OpenShell install from their respective upstream release

@@ -73,7 +73,7 @@ Per principle #1 ("each lane works as upstream intends"), the Hermes lane uses H
 ## Operational & related docs
 
 - **Bring-up + live-monitoring (operational):**
-  [`manyforge/docs/operations/LANE_BRINGUP.md`](../../../../manyforge/docs/operations/LANE_BRINGUP.md)
+  [`manyforge/docs/operations/LANE_BRINGUP.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/operations/LANE_BRINGUP.md)
   — the `hermes` section (bridge on `:8300`; forwards to the Hermes gateway
   sandbox; health `curl http://127.0.0.1:8300/healthz`). Requires
   `HERMES_LANE_PHASE4_ENABLED=true`.

@@ -141,7 +141,7 @@ This is consistent with cosmos-reason2-8b's training: it has a Python-style code
 
 OpenClaw receives the model's `tree_draft_wrap_node` call and dispatches via the in-sandbox MCP bridge (`manyforge-mcp-bridge.py`) to composer at `POST /api/assistant/bridge/tools/tree_draft_wrap_node`.
 
-Composer's validator rejects the call: missing required field `targetName`. Per the [routes_assistant.py:execute_bridge_tool fix](/home/tndlux/workspaces/dev_ws/src/manyforge/manyforge_composer/backend/routes_assistant.py#L648-L692), the response is HTTP 200 with `{success: false, error: "validation_error", result: {kind: validation_error, message: ..., detail: ...}}`. This is the OpenClaw drop-policy workaround — keeps the turn in chat history so the model can see the error.
+Composer's validator rejects the call: missing required field `targetName`. Per the [routes_assistant.py:execute_bridge_tool fix](https://github.com/pastoriomarco/manyforge/blob/main/manyforge_composer/backend/routes_assistant.py#L648-L692), the response is HTTP 200 with `{success: false, error: "validation_error", result: {kind: validation_error, message: ..., detail: ...}}`. This is the OpenClaw drop-policy workaround — keeps the turn in chat history so the model can see the error.
 
 ## Step 6 — Bridge → Composer (final response)
 

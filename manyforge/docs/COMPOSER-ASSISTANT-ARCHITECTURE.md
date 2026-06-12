@@ -942,7 +942,7 @@ re-baseline on each model when comparing recipes.
 ## G. Known-good production config (snapshot)
 
 The single source of truth is
-[`dev_ws/src/manyforge/scripts/lib/assistant.sh`](/home/tndlux/workspaces/dev_ws/src/manyforge/scripts/lib/assistant.sh).
+[`dev_ws/src/manyforge/scripts/lib/assistant.sh`](https://github.com/pastoriomarco/manyforge/blob/main/scripts/lib/assistant.sh).
 The block below mirrors it for documentation purposes; if the launcher
 changes, **the launcher wins**.
 

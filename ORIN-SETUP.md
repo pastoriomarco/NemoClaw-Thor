@@ -8,7 +8,7 @@ and [`AGENTS.md`](AGENTS.md) §A.
 
 > **Whole-stack master index** (host → serving → toolchain → onboard →
 > composer → run → smoke): see
-> [`manyforge/docs/operations/ORIN_STACK_SETUP.md`](../manyforge/docs/operations/ORIN_STACK_SETUP.md)
+> [`manyforge/docs/operations/ORIN_STACK_SETUP.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/operations/ORIN_STACK_SETUP.md)
 > in the **manyforge** repo. Start there if you're bringing up the full stack.
 
 **Platform:** Orin AGX = aarch64, CC **8.7** (Ampere), **64 GB** unified memory.

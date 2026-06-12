@@ -4,7 +4,7 @@ Dev/analysis pointer for the **Direct model** assistant lane.
 
 > **Implementation lives in the `manyforge` deployment repo, not here.**
 > The Direct-lane bridge is
-> [`manyforge_assistant_bridge/`](../../../../manyforge/manyforge_assistant_bridge/)
+> [`manyforge_assistant_bridge/`](https://github.com/pastoriomarco/manyforge/tree/main/manyforge_assistant_bridge/)
 > in the `manyforge` repo (host venv, serves `:8100`, started with
 > `ASSISTANT_PROVIDER=direct`). This directory carries only the lane's
 > dev/analysis cross-links — there are no lane-specific artifacts to ship
@@ -30,7 +30,7 @@ pace themselves. See the comparison doc for the numbers.
 ## Operational & related docs
 
 - **Bring-up + live-monitoring (operational):**
-  [`manyforge/docs/operations/LANE_BRINGUP.md`](../../../../manyforge/docs/operations/LANE_BRINGUP.md)
+  [`manyforge/docs/operations/LANE_BRINGUP.md`](https://github.com/pastoriomarco/manyforge/blob/main/docs/operations/LANE_BRINGUP.md)
   — the `direct` section (bridge on `:8100`, host venv, no sandbox; health
   `curl http://127.0.0.1:8100/healthz`).
 - **Benchmarks + scorer analysis:** [`../../docs/LANE-COMPARISON.md`](../../docs/LANE-COMPARISON.md).
@@ -43,4 +43,4 @@ pace themselves. See the comparison doc for the numbers.
   the `manyforge` repo (`manyforge_assistant_bridge/`,
   `scripts/lib/assistant.sh`).
 - Provider registration: the `LANE_REGISTRY` `direct` entry is in
-  [`assistant_provider.py`](../../../../manyforge/manyforge_composer/backend/assistant_provider.py).
+  [`assistant_provider.py`](https://github.com/pastoriomarco/manyforge/blob/main/manyforge_composer/backend/assistant_provider.py).
