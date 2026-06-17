@@ -58,18 +58,34 @@ Detailed onboarding workflow: [`setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`](setup/NEMO
 
 | Image generation | Status | Notes |
 |---|---|---|
-| **`v9`** | staged in source, not yet built | Major bump (vLLM 0.20.1 → 0.22.0 skipping v0.21 as waypoint) + FlashInfer / flash-attn-4 / transformers / cuDNN minor bumps. See per-pin table below. |
-| `v8.1` | last shipped (2026-05-06) | vLLM 0.20.1 + FlashInfer 0.6.10 + flash-attn-4 b12 + transformers 5.8.0 + cutlass-dsl 4.5.0 + cuDNN 9.21.1.3. Carries the v8 baseline (sm_110 build target, SM100+ spec-decode fix, TQ+FA prefill, MRv2 acceptance) plus PTX FP32→FP4 codegen and NVFP4 KV path. |
+| **`v9.1`** | **last shipped (2026-05-30)** | Same dependency stack as v9, but vLLM is pinned to `main @ 3fd9d2d35` (0.22.1rc1.dev22, 180 commits past the v0.22.0 tag) to pick up [PR #42124](https://github.com/vllm-project/vllm/pull/42124) "Add LM head quantization support for ModelOpt" (merged 2026-05-26). v9 (vLLM 0.22.0) crashes at 67% loading `nvidia/Qwen3.6-35B-A3B-NVFP4`; #42124 adds `quant_config` to `ParallelLMHead` for Qwen3.5/Qwen3.6 and Nemotron-H. Tagged `nemoclaw-thor/vllm:latest` (the `start-model.sh` default). See [`serving/docs/V9.1-IMAGE-NOTES.md`](serving/docs/V9.1-IMAGE-NOTES.md). |
+| `v9` | built, superseded by v9.1 | Major bump (vLLM 0.20.1 → 0.22.0 skipping v0.21 as waypoint) + FlashInfer / flash-attn-4 / transformers / cuDNN minor bumps. See per-pin table below. Superseded because vLLM 0.22.0 cannot load Qwen3.6-35B-A3B-NVFP4 (pre-#42124). |
+| `v8.1` | superseded (2026-05-06) | vLLM 0.20.1 + FlashInfer 0.6.10 + flash-attn-4 b12 + transformers 5.8.0 + cutlass-dsl 4.5.0 + cuDNN 9.21.1.3. Carries the v8 baseline (sm_110 build target, SM100+ spec-decode fix, TQ+FA prefill, MRv2 acceptance) plus PTX FP32→FP4 codegen and NVFP4 KV path. |
 | `v8` | superseded (2026-04-29) | hygiene release on top of v7 (apt cuDNN drop, audio deps, transformers 5.7.0) |
 | `v7` | superseded | full-rebuild generation; introduced TurboQuant + DFlash on SM110 |
 
-Build invocation for the canonical v9 image:
+Build invocation for the shipped v9.1 image (vLLM `main` snapshot for #42124,
+reusing the cached FlashInfer 0.6.12 wheel):
+
+```bash
+IMAGE_GEN=v9.1 ./serving/docker/build-vllm.sh \
+  --vllm-ref 3fd9d2d35714e80b4cb3fcd3c408a0398fa2525f --skip-flashinfer
+```
+
+The canonical v9 (tagged-release) invocation it derives from:
 
 ```bash
 ./serving/docker/build-vllm.sh --vllm-ref v0.22.0 --flashinfer-ref v0.6.12
 ```
 
-Per-pin status (v8.1 → v9 transitions):
+> **Pin-it-back-to-a-tag opportunity:** vLLM `v0.23.0` (stable, 2026-06-15)
+> includes #42124, so a future v10 could drop the `main`-commit pin and return
+> to a tagged release while keeping the Qwen3.6-35B-A3B-NVFP4 fix. Gate on the
+> smoke corpus before promotion (0.23.0 flips MRv2-default for Llama/Mistral
+> dense and carries DeepSeek-V4 churn).
+
+Per-pin status (v8.1 → v9 transitions; v9.1 changes only the vLLM ref, all
+other pins identical to v9):
 
 | Pin | v8.1 (shipped) | **v9 (staged)** | Notes |
 |---|---|---|---|
