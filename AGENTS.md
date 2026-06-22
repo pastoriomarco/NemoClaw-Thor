@@ -210,7 +210,7 @@ Concretely:
 ## Stack chain
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────────┐
 │ Host (Jetson AGX Thor, SM110, JetPack 7.x, Docker + sudo)        │
 │                                                                  │
 │  ┌─ nemoclaw CLI (npm, host)                                     │
@@ -219,7 +219,7 @@ Concretely:
 │  │                                (Docker, embeds k3s + gateway) │
 │  │                                       │                       │
 │  │                                       ▼                       │
-│  │                                   sandbox pods                 │
+│  │                                   sandbox pods                │
 │  │                                   ┌─ <sandbox-name> ───────┐  │
 │  │                                   │  Landlock + seccomp    │  │
 │  │                                   │  in-sandbox agent:     │  │
@@ -235,8 +235,8 @@ Concretely:
 │  │                                            ▼                  │
 │  └─ vLLM container (this repo)  ────►  /v1/chat/completions      │
 │        nemoclaw-thor/vllm:latest        served at 127.0.0.1:8000 │
-│        (this repo: serving/{docker,config.sh,launch.sh,start-*})│
-└─────────────────────────────────────────────────────────────────┘
+│        (this repo: serving/{docker,config.sh,launch.sh,start-*}) │
+└──────────────────────────────────────────────────────────────────┘
 
                                        ▲
                                        │ ManyForge composer (downstream)
