@@ -329,19 +329,6 @@ at `vllm/platforms/cuda.py:303`. The kernel-level fix didn't propagate
 to the backend wrapper. **DFlash + FP8 KV combo therefore remains blocked
 on v7, same as v6.** Worth a vLLM PR upstream.
 
-### `gemma4-31b-it-nvfp4` — **BLOCKED (config tuning needed, not v7-fundamental)**
-
-```
-ValueError: Chunked MM input disabled but max_tokens_per_mm_item (2496)
-is larger than max_num_batched_tokens (2048). Please increase
-max_num_batched_tokens.
-```
-
-vLLM v0.20.0 has stricter MM encoder budget validation. Gemma 4's vision
-encoder needs ≥2496 tokens/item but the profile defaults
-`--max-num-batched-tokens` to 2048. **Fix:** add `--max-num-batched-tokens 4096`
-(or higher) to the gemma4 profile in `../launch.sh`. Not retested today.
-
 ---
 
 ## Comparison vs v6 (where measurable)

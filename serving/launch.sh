@@ -738,40 +738,6 @@ prepare_thor_launch_profile() {
                 "--max-num-batched-tokens" "4096"
             )
             ;;
-        gemma4-31b-it-nvfp4)
-            # Gemma 4 31B IT NVFP4 — dense model, ~17 GB in VRAM.
-            # Vision enabled (SigLIP2 ~550M params), tool calling via gemma4 parser.
-            # Thinking mode via reasoning-parser deepseek_r1 (<|think|> tokens).
-            # --attention-backend triton_attn: FlashInfer kernels crash on head_dim=512
-            # (Gemma 4 global attention layers). FlashInfer JIT generates invalid MMA
-            # tiling for dim>256. triton_attn handles arbitrary head sizes.
-            # See vllm-project/vllm#38887. NVFP4 GEMM still uses flashinfer-cutlass.
-            # --mm-encoder-attn-backend TORCH_SDPA: workaround for #38411 — ViT FA2
-            # PTX crash on SM110 with CUDA 13.0 host driver.
-            THOR_LAUNCH_MODEL_SOURCE="nvidia/Gemma-4-31B-IT-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.80}"
-            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH=""
-            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH=""
-            THOR_DOCKER_ENV_ARGS+=(
-                "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
-            )
-            # --max-num-batched-tokens 4096: vLLM v0.20.0+ enforces that
-            # max_num_batched_tokens >= max_tokens_per_mm_item (2496 for SigLIP2 vision
-            # encoder). Default 2048 fails at boot with ValueError. 4096 is the
-            # nearest multiple of 1024 that clears it; bump higher if MM throughput
-            # becomes an issue.
-            THOR_VLLM_ARGS+=(
-                "--download-dir" "/data/models/huggingface/hub"
-                "--attention-backend" "triton_attn"
-                "--quantization" "modelopt"
-                "--reasoning-parser" "gemma4"
-                "--enable-auto-tool-choice"
-                "--tool-call-parser" "gemma4"
-                "--enable-prefix-caching"
-                "--mm-encoder-attn-backend" "TORCH_SDPA"
-                "--max-num-batched-tokens" "4096"
-            )
-            ;;
         gemma4-26b-a4b-it)
             # Gemma 4 26B-A4B IT — MoE (128 total, 8 active, 1 shared), ~52 GB BF16.
             # 3.8B active params per token — inference speed comparable to 4B dense.

@@ -61,7 +61,6 @@ Formula: global KV + SWA KV (fixed at window=1024)
 
 | Model | Global layers | Global KV heads | Global head_dim | SWA layers | SWA KV heads | SWA head_dim | KV/seq (fp8) |
 |-------|--------------|-----------------|-----------------|------------|--------------|--------------|--------------|
-| gemma4-31b | 10 / 60 | 4 | 512 | 50 | 16 | 256 | 10.4 GiB |
 | gemma4-26b-a4b | 5 / 30 | 2 | 512 | 25 | 8 | 256 | 2.6 GiB |
 
 Math for 31B:
@@ -98,7 +97,6 @@ measured from vLLM startup logs, not estimated.
 | Profile | Quant | Est weights | gpu_mem | Usable GiB | Est KV avail | KV/seq @256K | max_num_seqs |
 |---------|-------|-------------|---------|------------|--------------|--------------|--------------|
 | qwen3.5-9b-claude-distilled-nvfp4 | NVFP4 | ~7 GiB | 0.40 | 51.2 | ~35 GiB | — | 8 |
-| gemma4-31b-it-nvfp4 | NVFP4 | **31 GiB** | 0.80 | 102.4 | **64.2 GiB** | 10.4 GiB | 6 |
 | gemma4-26b-a4b-it | BF16 | ~48.5 GiB | 0.80 | 102.4 | ~45 GiB | 2.6 GiB | 17 |
 
 ## Throughput scaling — why concurrency matters
@@ -156,7 +154,6 @@ no single agent can hog all subagent slots.
 | Profile | Slots | Main agents | Subagent slots | Children/agent | Depth |
 |---------|-------|-------------|----------------|----------------|-------|
 | qwen3.5-9b-claude-distilled-nvfp4 | 8 | 2 | 6 | 3 | 1 |
-| gemma4-31b-nvfp4 | 6 | 2 | 4 | 2 | 1 |
 | gemma4-26b-a4b | 17 | 4 | 13 | 4 | 1 |
 
 Override main concurrency at launch:
@@ -199,13 +196,6 @@ Update max_num_seqs in config.sh if actuals differ significantly.
 #   Maximum concurrency for 131,072 tokens per request: 11.79x
 #   max_num_seqs = floor(21.43 / 3.0) = 7 (config set to 8 — safe, agentic
 #     sessions rarely hit full 262K context)
-
-# gemma4-31b-it-nvfp4 @ gpu_mem_util=0.80 (2026-04-07):
-#   Model loading took 31.04 GiB (includes ~10 GiB vision encoder)
-#   Available KV cache memory: 64.21 GiB
-#   max_num_seqs = floor(64.21 / 10.4) = 6 ✓ (matches config)
-#   Est weights was ~21 GiB — actual 31 GiB due to SigLIP vision encoder
-#   Throughput: 6.7 tok/s single request (triton_attn, no FlashInfer)
 
 # gemma4-26b-a4b-it @ gpu_mem_util=0.85 (old setting, pre-v4):
 #   Model loading took 48.5 GiB

@@ -258,7 +258,6 @@ All Qwen3.6 profiles use `--attention-backend flash_attn` (DFlash) or FlashInfer
 | Profile | Model | Seqs | Agents | Notes |
 |---------|-------|------|--------|-------|
 | `gemma4-e4b-it` | 8B MoE (4B active) | 12 | 3 | Vision+text+audio, BF16, 0.4 GPU mem |
-| `gemma4-31b-it-nvfp4` | 31B dense | 6 | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | 4 | Vision+text, BF16 |
 | `gemma4-12b-it-gguf` | 12B dense GGUF | 4 | 3 | **Default for ManyForge assistant on Thor**; llama.cpp + E2B speculative draft |
 

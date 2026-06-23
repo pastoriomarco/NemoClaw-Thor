@@ -529,7 +529,7 @@ report sweet spot — ~95% accuracy, ~half the latency of unbounded).
 | `nemotron3-nano-omni-30b-a3b-nvfp4` | `{"enable_thinking":false}` | _(none, dropped 2026-05-06)_ | Bridges consume `content`; reasoning parser would route output into `reasoning` and the lane would return empty. |
 | `nemotron3-nano-omni-30b-a3b-nvfp4-reasoning` | `{"enable_thinking":true}` | `nemotron_v3` | Reasoning variant; consumers must read `reasoning` not `content`. Today the bridges do not. |
 | `qwen3.6-35b-a3b-nvfp4-nvidia` | `{"enable_thinking":true}` | `qwen3` | Iter-32 production sampling recipe + MTP K=3. |
-| `gemma4-31b-it-nvfp4` / `gemma4-26b-a4b-it` / `gemma4-e4b-it` | _(template defaults)_ | `gemma4` | Tool-call parser `gemma4`. |
+| `gemma4-26b-a4b-it` / `gemma4-e4b-it` | _(template defaults)_ | `gemma4` | Tool-call parser `gemma4`. |
 | `qwen3.5-9b-claude-distilled-nvfp4` | _(unset)_ | _(none)_ | No-think variant of the template. |
 | `qwen3.6-27b-fp8-mtp-kvfp8` | _(template defaults)_ | _(none)_ | EXPERIMENTAL; MTP K=1. |
 
@@ -668,7 +668,6 @@ the same case-statement label.
 | `qwen3.5-9b-claude-distilled-nvfp4` | _(Claude 4.6-distilled VLM)_ | NVFP4 + FP8 KV | ~9 GB | 131 072 | _(profile default)_ | _(none)_ | off (no-think template) | _(internal eval)_ | Fast-control / no-think VLM; vision + text + tools. |
 | **`gemma4-12b-it-gguf`** | `unsloth/gemma-4-12b-it-GGUF` + E2B draft | GGUF Q4_K_XL | ~7 GB model + draft | 131 072 | `gemma4` | _(none)_ | off | 52/66 (2026-06-07), 51/66 OpenClaw in 2026-06-09 three-lane | **Current ManyForge assistant default on Thor.** Lightweight llama.cpp path, OpenAI-compatible `/v1` endpoint. |
 | `gemma4-e4b-it` | _(Gemma-4 E4B IT)_ | _(none)_ | ~4 GB | 131 072 | `gemma4` | `gemma4` | template default | _(not benched on assistant pipeline)_ | Small Gemma-4 edge profile. |
-| `gemma4-31b-it-nvfp4` | _(Gemma-4 31B IT NVFP4)_ | NVFP4 (modelopt) | ~16 GB | 262 144 | `gemma4` | `gemma4` | template default | _(not benched)_ | Medium Gemma-4 quantized. |
 | `gemma4-26b-a4b-it` | _(Gemma-4 26B A4B IT)_ | _(none)_ | ~26 GB | 262 144 | `gemma4` | `gemma4` | template default | _(not benched)_ | Gemma-4 MoE variant. |
 
 **Removed profiles** (kept as historical comments in `config.sh` / `launch.sh`

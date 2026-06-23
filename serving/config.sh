@@ -181,7 +181,6 @@ _MODEL_PROFILE_CATALOG=(
     "nemotron3-nano-omni-30b-a3b-nvfp4|thor|Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text)|tool-calling regime (think OFF, no reasoning parser)"
     "nemotron3-nano-omni-30b-a3b-nvfp4-reasoning|thor|Nemotron 3 Omni (NVIDIA multimodal reasoning — vision + audio + text)|reasoning regime (think ON + nemotron_v3 parser)"
     "gemma4-e4b-it|thor|Gemma 4 (Google, vision+text+tools)|BF16 MoE, 8B/4B-active"
-    "gemma4-31b-it-nvfp4|thor|Gemma 4 (Google, vision+text+tools)|NVFP4 quantized"
     "gemma4-26b-a4b-it|thor|Gemma 4 (Google, vision+text+tools)|BF16 MoE 128E/8A"
     "gemma4-12b-it-gguf|thor|Gemma 4 (Google, vision+text+tools)|DEFAULT for ManyForge assistant on Thor — GGUF Q4_K_XL via llama.cpp + E2B spec-decode (text-only), Jetson Thor image; 52/66 (78.8%) on 2026-06-07 OpenClaw sweep"
     "gemma4-12b-it-gguf-orin|orin|Gemma 4 (Google, vision+text+tools)|same model/recipe as above, Jetson Orin AGX image + NVMe-backed caches"
@@ -590,18 +589,6 @@ resolve_model_profile() {
             THOR_TARGET_MAX_TOKENS="16384"
             THOR_TARGET_TOOL_CALL_PARSER="gemma4"
             THOR_TARGET_QUANTIZATION=""
-            ;;
-        gemma4-31b-it-nvfp4)
-            THOR_MODEL_PROFILE="${requested}"
-            THOR_MODEL_ID_DEFAULT="gemma4-31b-it-nvfp4"
-            THOR_TARGET_MAX_MODEL_LEN="262144"
-            THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="6"
-            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="6"
-            THOR_TARGET_MODEL_REASONING="true"
-            THOR_TARGET_MAX_TOKENS="16384"
-            THOR_TARGET_TOOL_CALL_PARSER="gemma4"
-            THOR_TARGET_QUANTIZATION="modelopt"
             ;;
         gemma4-26b-a4b-it)
             THOR_MODEL_PROFILE="${requested}"

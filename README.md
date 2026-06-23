@@ -206,7 +206,6 @@ after a version bump.
 |---------|-------|------|-------|
 | `qwen3.5-9b-claude-distilled-nvfp4` | 9B VLM | 8 | Multimodal, Claude-distilled |
 | `gemma4-e4b-it` | 8B MoE | 12 | Vision+text+audio |
-| `gemma4-31b-it-nvfp4` | 31B dense | 6 | Vision+text, NVFP4 |
 | `gemma4-26b-a4b-it` | 26B MoE | 17 | Vision+text, BF16 |
 
 **Default profile**: `gemma4-12b-it-gguf` — what
