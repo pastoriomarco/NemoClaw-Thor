@@ -169,6 +169,7 @@ resolve_thor_sandbox_name() {
 _MODEL_PROFILE_CATALOG=(
     "qwen3.6-35b-a3b-nvfp4-nvidia|thor|Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration)|Historical Task 4 winner — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock"
     "qwen3.6-27b-fp8-mtp-kvfp8|thor|Other Qwen3.6|dense 27B FP8 + MTP + FP8 KV (TEB 84)"
+    "qwen3.6-27b-nvfp4|thor|Other Qwen3.6|dense 27B NVFP4 (unsloth) + vision + MTP — public nightly image (production)"
     "qwen3.5-9b-claude-distilled-nvfp4|thor|Distilled / specialized|DeltaNet hybrid, 9B Opus-distilled, fast control loop (TEB 42)"
     "cosmos-reason2-2b|thor|Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning)|Qwen3-VL-2B base, 32K ctx, 2-conc"
     "cosmos-reason2-8b|thor|Cosmos (NVIDIA physical-AI VLMs — for embodied/spatial reasoning)|Qwen3-VL-8B base, 64K ctx, 3-conc (TEB 81)"
@@ -339,6 +340,22 @@ resolve_model_profile() {
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
             THOR_TARGET_MAX_NUM_SEQS="9"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            ;;
+        qwen3.6-27b-nvfp4)
+            # Qwen3.6-27B NVFP4 (unsloth/Qwen3.6-27B-NVFP4) — production NVFP4
+            # successor to the FP8 recipe (FP8 weights removed from disk
+            # 2026-06-26). Dense hybrid GatedDeltaNet VLM, vision + MTP, served
+            # on the public vllm-openai nightly image. unsloth's NVFP4 preserves
+            # the MTP head (verified live: spec-decode acceptance ~70-90%,
+            # including on image requests).
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="qwen3.6-27b-nvfp4"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="8"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"

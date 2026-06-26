@@ -713,6 +713,45 @@ prepare_thor_launch_profile() {
                 "--speculative-config" '{"method":"qwen3_next_mtp","num_speculative_tokens":3}'
             )
             ;;
+        qwen3.6-27b-nvfp4)
+            # Qwen3.6-27B NVFP4 (unsloth/Qwen3.6-27B-NVFP4) — dense hybrid
+            # GatedDeltaNet VLM. PUBLIC-IMAGE recipe: stock vllm-openai nightly
+            # on sm110, no custom build. NVFP4 weight-only (Marlin on sm110);
+            # GDN/SSM + ViT + lm_head kept BF16. VISION enabled (multimodal):
+            # ViT via TORCH_SDPA (sm110 ViT PTX-crash workaround, upstream
+            # #38411). head_dim=256 -> FlashInfer attention (FA2 crashes sm110).
+            # MTP self-speculation (method:mtp — unsloth's NVFP4 keeps the MTP
+            # head, unlike llm-compressor variants that strip it). froggeric
+            # chat template (variant-agnostic, fixes Qwen3.6 agentic-loop abort
+            # bugs). Sampling = Qwen card "precise coding" thinking-mode values.
+            # Verified live 2026-06-26: text+vision+MTP functional, ~16-18 tok/s.
+            # Force the public nightly: the global default near the top of this
+            # file already sets THOR_VLLM_IMAGE, so a ${:-} fallback here is a
+            # no-op — assign unconditionally (this recipe requires the stock image).
+            THOR_VLLM_IMAGE="vllm/vllm-openai:nightly-aarch64"
+            THOR_VLLM_ENTRYPOINT=""   # blank: the nightly bakes `vllm serve` into its entrypoint
+            THOR_LAUNCH_MODEL_SOURCE="unsloth/Qwen3.6-27B-NVFP4"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen-fixed-froggeric.jinja"
+            THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen-fixed-froggeric.jinja"
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--trust-remote-code"
+                "--dtype" "bfloat16"
+                "--attention-backend" "flashinfer"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--limit-mm-per-prompt" '{"image":4}'
+                "--reasoning-parser" "qwen3"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
+                "--enable-prefix-caching"
+                "--enable-chunked-prefill"
+                "--async-scheduling"
+                "--max-num-batched-tokens" "8192"
+                "--override-generation-config" '{"temperature":0.6,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0}'
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":3}'
+            )
+            ;;
         gemma4-e4b-it)
             # Gemma 4 E4B IT — MoE (8B total, ~4B active per token), ~16 GB BF16.
             # Native function calling (gemma4 parser), vision, audio.
@@ -1029,14 +1068,14 @@ prepare_thor_launch_profile() {
     THOR_LAUNCH_KV_CACHE_DTYPE="${THOR_KV_CACHE_DTYPE:-${THOR_TARGET_KV_CACHE_DTYPE}}"
     THOR_LAUNCH_MAX_NUM_SEQS="${THOR_MAX_NUM_SEQS:-${THOR_TARGET_MAX_NUM_SEQS}}"
 
-    # 2026-05-31 model-bakeoff: alias every profile to "cosmos-reason2-8b"
-    # additionally so the composer (hardcoded to that model id) can target
-    # any profile without re-config. vLLM --served-model-name accepts
-    # multiple values; the first one is the canonical id, the rest are
-    # aliases routed to the same engine.
+    # Serve under the profile's real model id only. (Removed the legacy
+    # 2026-05-31 bakeoff alias to "cosmos-reason2-8b": the direct-lane bridge
+    # targets the explicit model id, so the alias is unneeded and it mislabels
+    # the served model — and any /v1/models consumer — as Cosmos even when
+    # Cosmos isn't the running model.)
     THOR_VLLM_ARGS=(
         "${THOR_VLLM_ARGS[@]}"
-        "--served-model-name" "${THOR_MODEL_ID}" "cosmos-reason2-8b"
+        "--served-model-name" "${THOR_MODEL_ID}"
         "--host" "${THOR_VLLM_BIND_HOST}"
         "--port" "${THOR_VLLM_PORT}"
         "--gpu-memory-utilization" "${THOR_LAUNCH_GPU_MEMORY_UTILIZATION}"
@@ -1241,7 +1280,18 @@ run_thor_vllm_container() {
         docker_rm_args=()
     fi
 
+    # Public stock images (e.g. vllm-openai nightly) bake `vllm serve` into their
+    # entrypoint, which doubles with the `vllm serve` command below and yields
+    # "unrecognized arguments: serve <model>". A recipe sets THOR_VLLM_ENTRYPOINT=""
+    # to blank the image entrypoint so the command runs verbatim. Set-but-empty is
+    # intentional (${VAR+x} fires on empty too); unset = leave the image default.
+    local entrypoint_args=()
+    if [[ -n "${THOR_VLLM_ENTRYPOINT+x}" ]]; then
+        entrypoint_args=(--entrypoint "${THOR_VLLM_ENTRYPOINT}")
+    fi
+
     docker run "${docker_rm_args[@]}" \
+        "${entrypoint_args[@]}" \
         "${docker_tty_args[@]}" \
         "${docker_name_args[@]}" \
         --runtime nvidia --gpus all \
