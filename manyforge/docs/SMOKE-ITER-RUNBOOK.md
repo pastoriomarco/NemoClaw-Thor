@@ -5,6 +5,76 @@ Captures the order of operations + namespace gotchas that are easy to
 miss because the old gateway typically lives long enough that they
 become invisible.
 
+## ⭐ Autonomous run — direct lane (recommended; no gateway/cluster needed)
+
+The fastest, most reliable way to run the corpus, and the path an LLM/agent
+should use. The **direct lane** is an in-process bridge → vLLM with **no
+OpenClaw gateway, sandbox, or K3s cluster** — it does NOT need
+`openshell-cluster-nemoclaw` or a provisioned sandbox. (The cold-start sections
+below are only for testing the gateway/openclaw lane itself.)
+
+### 0. Pre-flight
+- **Runner + corpus live in THIS repo** (`NemoClaw-Thor/manyforge`), NOT the
+  standalone `manyforge` checkout:
+  - `src/NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus_runner.py`
+  - `src/NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus.yaml`
+- Free ports/GPU: `ss -tlnp | grep -E ':8000|:8050|:8100|:9000'` and
+  `sudo docker ps --filter ancestor=vllm/vllm-openai:nightly-aarch64`. Stop any
+  stale model container / `vllm-proxy.py` first.
+- On the direct lane, **ignore** "OpenClaw gateway may not have started / sandbox
+  not found" — direct bypasses the gateway entirely.
+
+### 1. Bring up the whole stack — one command
+Brings up the model (vLLM `:8050` + vllm-proxy `:8000`), Composer (`:9000`,
+auto-loads the scenario's deployment + program), and the in-process bridge
+(`:8100`):
+```bash
+bash src/manyforge/scripts/launch.sh --lane manyforge-only --assistant on \
+  --provider direct --platform thor --model-profile <PROFILE> \
+  --scenario ur10e-scene-authoring --non-interactive --yes
+```
+`<PROFILE>` = a thor vLLM recipe (`qwen3.6-35b-a3b-nvfp4-nvidia`,
+`qwen3.6-27b-nvfp4`, …). Port map: **proxy `:8000` (what Composer/bridge call) →
+vLLM `:8050`**.
+
+### 2. Verify ready (gate before running)
+```bash
+curl -s 127.0.0.1:8000/v1/models | python3 -c 'import sys,json;print([m["id"] for m in json.load(sys.stdin)["data"]])'
+curl -s 127.0.0.1:9000/api/assistant/modes/composer-assistant | python3 -c 'import sys,json;print("tools:",len(json.load(sys.stdin)["tools"]))'  # expect 25
+curl -s 127.0.0.1:8100/healthz   # {"status":"ok","model":"<served>",...}
+```
+A fresh NVFP4 27B/35B boot (weights + ViT + CUDA-graph capture) takes ~3–6 min —
+wait for `:8000/v1/models` before running.
+
+### 3. Run the corpus (from THIS repo's manyforge dir)
+```bash
+cd src/NemoClaw-Thor/manyforge
+python3 scripts/debug/smoke_corpus_runner.py \
+  --corpus scripts/debug/smoke_corpus.yaml --enable-recovery-turn \
+  --report /tmp/smoke_<tag>.json > /tmp/smoke_<tag>.log 2>&1 &
+```
+Use the SAME `<tag>` in `.json` and `.log`. Verdicts stream line-buffered.
+
+### 4. Monitor + score
+```bash
+tail -f /tmp/smoke_<tag>.log     # ✅pass  🛟recovered-pass  🟡soft-pass  ❌fail  [SKIP]future
+```
+**Effective rate = (pass + recovered-pass + soft-pass) / scored** (skips not
+counted); pass gate ≥ 51% (iter-32 prod 77.3%; qwen3.6-35b-a3b 84.8%). The
+per-case JSON is written to `--report` on completion.
+
+### Public-image serving gotchas (when a recipe targets a stock image)
+- Stock `vllm/vllm-openai:*` bake `ENTRYPOINT=["vllm","serve"]`; the recipe must
+  set `THOR_VLLM_ENTRYPOINT=""` (blank) or the command doubles →
+  `unrecognized arguments: serve <model>`.
+- vLLM binds `THOR_VLLM_PORT` (default 8000); set `THOR_VLLM_PORT=8050` so the
+  proxy (8000) fronts it, else `Address already in use`.
+- `THOR_VLLM_IMAGE` is assigned near the top of `launch.sh` *before* the
+  per-recipe `case`; a per-recipe `${THOR_VLLM_IMAGE:-…}` fallback is a no-op —
+  assign it unconditionally (see the `qwen3.6-27b-nvfp4` recipe).
+
+---
+
 ## Stack components
 
 | Component | Where it runs | Port | Restart trigger |

@@ -602,7 +602,13 @@ prepare_thor_launch_profile() {
                 "--kv-cache-dtype" "fp8"
                 "--attention-backend" "flashinfer"
                 "--enforce-eager"
-                "--language-model-only"
+                # Vision ENABLED: load the Qwen3-VL DeepStack ViT (was
+                # --language-model-only). TORCH_SDPA is the sm110 ViT PTX-crash
+                # workaround (#38411); --enforce-eager already avoids the
+                # cudagraph-over-ViT issue. Checkpoint ships image + video
+                # processors; cap images per prompt to bound the MM budget.
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--limit-mm-per-prompt" '{"image":4}'
                 "--enable-prefix-caching"
                 "--enable-chunked-prefill"
                 "--async-scheduling"
