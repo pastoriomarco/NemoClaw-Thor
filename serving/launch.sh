@@ -496,62 +496,45 @@ prepare_thor_launch_profile() {
         # probe profile, mission accomplished. TEB 91 confirmed N=2 (TEB 93)
         # is the right pick for FP8 KV; this profile was empirically dominated.
         qwen3.6-35b-a3b-nvfp4-nvidia)
-            # EXPERIMENTAL (2026-05-30 v9 staging): NVIDIA-official NVFP4 quant
-            # of Qwen3.6-35B-A3B (MoE 3B active / 35B total). Combines NVIDIA's
-            # ModelOpt v0.44.0 quantization with the iter-32 production sampling
-            # recipe and the froggeric Qwen3.6 chat-template fix.
+            # Production recipe: NVIDIA's official NVFP4 quant of Qwen3.6-35B-A3B
+            # (MoE, ~3B active / 35B total), served on the public vllm-openai
+            # nightly. The small active-param count makes it markedly faster than
+            # a dense 27B at comparable quality (NVIDIA card: tau2-Telecom 94.7
+            # NVFP4 vs 95.5 BF16), and the froggeric template gives ~100%
+            # prefix-cache hits so agent-loop iterations stay cheap.
             #
-            # Rationale: the dense qwen3.6-27b-fp8-mtp-kvfp8 baseline run on
-            # cosmos-reason2-8b lineage was too slow for the composer-assistant
-            # workload (60-100s per simple case, several full timeouts). 35B-A3B
-            # MoE has only ~3B active parameters per token — should be
-            # substantially faster than the 27B dense path while gaining the
-            # quality benchmarks (τ²-Bench Telecom 94.7 NVFP4 vs 95.5 BF16 per
-            # NVIDIA's model card). MTP K=3 with moe_backend:triton is NVIDIA's
-            # explicit Spark/DGX recommendation; combined with froggeric's
-            # template (which guarantees 100% prefix-cache hit rate), agent loop
-            # iterations should be far cheaper than the 27B's were.
+            # NVFP4 on sm110: ModelOpt's W4A16 quant has 16-bit activations, which
+            # no FlashInfer NVFP4 MoE backend supports (they require 4-bit acts),
+            # so --moe-backend marlin (software weight-only dequant) is forced and
+            # the VLLM_*FLASHINFER_MOE_* env vars below keep the backend oracle off
+            # the unsupported paths.
             #
-            # SM110 / Thor compatibility env vars (mirroring the RedHat quant's
-            # working configuration):
-            #   VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass — picks the SM110-
-            #     compatible NVFP4 GEMM path.
-            #   VLLM_USE_FLASHINFER_MOE_FP4=1 — enables FlashInfer NVFP4 MoE.
-            #   VLLM_USE_FLASHINFER_MOE_FP16=0 — routes unquantized BF16 MoE
-            #     paths (drafter forward) through Triton to dodge the SM100-only
-            #     CUTLASS tile <128,64,64> crash that hit on SM110 in v7/v8.
+            # CUDA graphs are ON (no --enforce-eager) and are load-bearing: eager
+            # mode left the A3B MoE launch-overhead-bound (~23 tok/s); graph
+            # capture reaches ~58 tok/s with no quality change. Graph capture is
+            # stable for the NVFP4 MoE + MTP path on the public nightly (the
+            # custom-image-only sm110a-fp4-dsl-unlock mod is not needed here).
             #
-            # Tool-call parser: qwen3_coder. The froggeric template emits native
-            # XML tool calls; qwen3_coder parses that format. Do NOT use qwen3_xml
-            # (designed for the stock-template format) or hermes (designed for
-            # JSON-in-tags).
+            # Tool calls: the qwen3_coder parser pairs with the froggeric
+            # template's native-XML tool-call format. Do NOT use qwen3_xml
+            # (stock-template format) or hermes (JSON-in-tags) — the mismatch
+            # breaks tool calling.
             #
-            # MTP K=3 vs K=2: NVIDIA's Spark recipe specifies K=3; community
-            # forum tests on the dense 27B at K=3 hit 85-94% acceptance. The
-            # RedHat-quant siblings use K=2 (proven historically at TEB 93).
-            # Starting at K=3 to match NVIDIA's testing; drop to K=2 if MTP
-            # acceptance falls below ~70% in smoke runs.
+            # MTP K=3 with moe_backend:triton (NVIDIA's Spark recommendation);
+            # measured ~80% draft acceptance / ~3.4 accept length on the smoke.
             #
-            # Proxy caps (active automatically via launch.sh env, not profile):
-            #   OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048 — iter-21b proved this
-            #     is the sweet spot; bigger caps cause model wander → timeouts.
-            #   OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 — bounds <think> block
-            #     within the 2048 cap. Iter-21a proved this is neutral on cosmos
-            #     but load-bearing as a thinking-on safety net.
-            # V9.1 PHASE 4 TEST (2026-05-31): switched to nvidia/ weights + full
-            # NVIDIA Spark recipe to validate PR #42124 (LM head ModelOpt support).
-            # The v9 image lacked this fix — load crashed at 67% with
-            # lm_head.input_scale ValueError. v9.1 image (vLLM main @ 3fd9d2d35,
-            # post #42124) should load cleanly.
-            #
-            # NVIDIA Spark recipe (from model card, sm_121a → sm_110a for Thor):
-            #   env: VLLM_USE_FLASHINFER_MOE_FP4=0 (explicit 0)
-            #        VLLM_FP8_MOE_BACKEND=flashinfer_cutlass
-            #        FLASHINFER_DISABLE_VERSION_CHECK=1
-            #        CUTE_DSL_ARCH=sm_110a
-            #   vllm: --quantization modelopt --moe-backend marlin
-            #         (rest matches iter-3 RedHat recipe)
+            # Proxy caps (set via launch.sh env, not the profile):
+            #   OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS=2048 — bigger caps let the
+            #     model wander into timeouts.
+            #   OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 — bounds the <think>
+            #     block within the 2048 cap.
             THOR_LAUNCH_MODEL_SOURCE="nvidia/Qwen3.6-35B-A3B-NVFP4"
+            # Public vllm-openai nightly. THOR_VLLM_IMAGE is set globally before
+            # this case, so assign unconditionally. Blank the entrypoint: the
+            # nightly bakes ENTRYPOINT=["vllm","serve"], which would double with
+            # the serve command run_thor_vllm_container appends.
+            THOR_VLLM_IMAGE="vllm/vllm-openai:nightly-aarch64"
+            THOR_VLLM_ENTRYPOINT=""
             # 2026-06-03: dropped from 0.85 to 0.55. The 0.85 default was
             # carried over from the earlier max-concurrency-per-dollar
             # profile but oversubscribed Thor's 122 GiB unified memory
@@ -577,22 +560,22 @@ prepare_thor_launch_profile() {
                 # kNvfp4Dynamic). Setting =1 causes NotImplementedError at
                 # engine init because no backend matches. Marlin handles
                 # weight-only int4/NVFP4 correctly via software dequant — keep
-                # =0 so the oracle picks MARLIN. (Verified empirically by
-                # this Task 4 iteration.)
+                # =0 so the oracle picks MARLIN.
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP4=0"
                 "-e" "VLLM_FP8_MOE_BACKEND=flashinfer_cutlass"
                 "-e" "FLASHINFER_DISABLE_VERSION_CHECK=1"
                 "-e" "CUTE_DSL_ARCH=sm_110a"
                 "-e" "VLLM_NVFP4_GEMM_BACKEND=flashinfer-cutlass"
                 "-e" "VLLM_USE_FLASHINFER_MOE_FP16=0"
-                # Mod is INERT for NVIDIA's W4A16 path (no FlashInfer NVFP4
-                # backend matches the quant scheme regardless of patch). Kept
-                # here only to mirror the RedHat profile config — no harm.
-                "-e" "VLLM_MODS=sm110a-fp4-dsl-unlock"
             )
             THOR_VLLM_ARGS+=(
                 "--download-dir" "/data/models/huggingface/hub"
                 "--quantization" "modelopt"
+                # Parallel GPU-direct weight load (fastsafetensors lib ships in
+                # the nightly image). Boot-time only — no effect on inference.
+                # Speeds cold start, which matters now that CUDA-graph capture
+                # adds boot time. Falls back to the default loader if unavailable.
+                "--load-format" "fastsafetensors"
                 # --moe-backend marlin: NVIDIA Spark recipe. Re-added because
                 # the previous iteration removed it expecting the oracle to
                 # pick FLASHINFER_CUTEDSL with the patch — but cutedsl needs
@@ -601,12 +584,15 @@ prepare_thor_launch_profile() {
                 "--moe-backend" "marlin"
                 "--kv-cache-dtype" "fp8"
                 "--attention-backend" "flashinfer"
-                "--enforce-eager"
-                # Vision ENABLED: load the Qwen3-VL DeepStack ViT (was
-                # --language-model-only). TORCH_SDPA is the sm110 ViT PTX-crash
-                # workaround (#38411); --enforce-eager already avoids the
-                # cudagraph-over-ViT issue. Checkpoint ships image + video
-                # processors; cap images per prompt to bound the MM budget.
+                # No --enforce-eager: CUDA graphs are load-bearing. In eager mode
+                # the A3B MoE is launch-overhead-bound at batch-1 decode
+                # (~23 tok/s, ~13% of the 3B-active bandwidth bound); graph
+                # capture reaches ~58 tok/s with no quality change, and is stable
+                # for the NVFP4 MoE + MTP path on the public nightly.
+                # Vision: load the Qwen3-VL DeepStack ViT. TORCH_SDPA is the
+                # sm110 ViT PTX-crash workaround (#38411); the ViT is not graphed
+                # (mm encoder not compiled/cudagraphed), so graphs stay ViT-safe.
+                # Cap images per prompt to bound the MM budget.
                 "--mm-encoder-attn-backend" "TORCH_SDPA"
                 "--limit-mm-per-prompt" '{"image":4}'
                 "--enable-prefix-caching"
@@ -617,6 +603,15 @@ prepare_thor_launch_profile() {
                 "--enable-auto-tool-choice"
                 "--tool-call-parser" "qwen3_coder"
                 "--default-chat-template-kwargs" '{"enable_thinking":true}'
+                # Sampling pinned to the card's precise/coding preset (temp 0.6,
+                # its SciCode setting) rather than the generation_config default
+                # (temp 1.0, the card's general-eval value). Chosen for more
+                # deterministic tool construction: agentic-smoke quality is
+                # temp-insensitive (~77-79% at both 0.6 and 1.0, identical failure
+                # modes), so 0.6 buys reproducibility at no quality cost. Avoid
+                # greedy (temp 0) — the card warns it degrades thinking models.
+                # top_p/top_k/min_p track the thinking-mode preset; penalties neutral.
+                "--override-generation-config" '{"temperature":0.6,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0}'
                 # EAGLE-3.1 attempted with Dogacel/specdrift-qwen3.6-35b-a3b-eagle3
                 # but vLLM 0.22.1.dev0+g3fd9d2d35 doesn't support the drafter's
                 # architecture (EagleLlamaForCausalLMEagle3). vLLM has Eagle3
