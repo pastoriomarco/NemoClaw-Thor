@@ -732,7 +732,14 @@ prepare_thor_launch_profile() {
             THOR_VLLM_IMAGE="vllm/vllm-openai:nightly-aarch64"
             THOR_VLLM_ENTRYPOINT=""   # blank: the nightly bakes `vllm serve` into its entrypoint
             THOR_LAUNCH_MODEL_SOURCE="unsloth/Qwen3.6-27B-NVFP4"
-            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.8}"
+            # 0.6 (not 0.8): this recipe usually runs co-located with the manyforge
+            # composer + dev container + ROS on Thor's shared 128 GB unified memory.
+            # At 0.8 vLLM reserves ~98 GB, leaving only ~25 GB for the rest of the
+            # stack. unsloth's fixed footprint here is light (~34 GB: ~25 GB weights
+            # + ~9 GB overhead), so 0.6 (~74 GB budget) still yields ~39 GB KV /
+            # ~4x concurrency at 262K — ample for the max-num-seqs=4 lane — while
+            # leaving ~49 GB for the co-located stack. Override THOR_GPU_MEMORY_UTILIZATION for standalone.
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.6}"
             THOR_LAUNCH_CHAT_TEMPLATE_HOST_PATH="${THOR_CHAT_TEMPLATE_HOST_DIR}/qwen-fixed-froggeric.jinja"
             THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH="/opt/nemoclaw-thor/templates/qwen-fixed-froggeric.jinja"
             THOR_VLLM_ARGS+=(

@@ -355,7 +355,11 @@ resolve_model_profile() {
             THOR_MODEL_ID_DEFAULT="qwen3.6-27b-nvfp4"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="8"
+            # 4 (not 8): co-located lane at gpu-util 0.6 holds ~4x concurrency at
+            # 262K, and a single Cline assistant lane is 1-2 concurrent — cap at 4
+            # to match the KV pool (>= the openclaw main concurrent of 3) and trim
+            # profiling memory. Override with THOR_MAX_NUM_SEQS.
+            THOR_TARGET_MAX_NUM_SEQS="4"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"
