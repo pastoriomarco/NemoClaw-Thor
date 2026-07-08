@@ -93,22 +93,35 @@ surfaced three drifts that `manyforge/scripts/setup-hermes.sh` had to absorb:
   (`setup-manyforge-assistant.sh`); it never touches the Hermes Dockerfile
   derivation, so none of the messaging-staging / dashboard-port /
   `HERMES_API_TIMEOUT` issues apply.
-- **OpenClaw lane: onboards cleanly, but an in-sandbox agent turn is blocked by
-  an OpenShell 0.0.71 regression — needs its own re-baseline.** The re-onboard
-  itself is clean: `nemoclaw onboard` (managed flow, native token injection)
-  built `my-assistant` to **Ready/healthy** on the unchanged OpenClaw image, the
-  provider `compatible-endpoint`→`custom` rename was a non-issue (onboard reused
-  the provider and its inference smoke passed), and the sandbox reaches the host
-  model directly (`host.openshell.internal:8000` → 200 from inside). What is
-  broken: the agent routes model calls through `https://inference.local/v1`, and
-  that **`inference.local` indirection does not resolve under 0.0.71** (direct
-  host reachability works, the indirection fails) → `ECONNREFUSED`. Also new:
-  the in-sandbox OpenClaw gateway now requires **device pairing / role approval**
-  (`pairing required: device is not approved yet`) and its pairing-file write
-  fails (`PermissionError: /sandbox/.openclaw/devices/pending.json`). These are
-  OpenClaw-lane config issues, separate from this control-plane upgrade; the
-  correct smoke is the production `composer → openclaw bridge` path
-  (`scripts/debug/run-cell-openclaw.sh`), not a bare `openclaw agent` dispatch.
+- **OpenClaw lane: onboards cleanly, and now completes agent turns after a
+  `inference.local` fix.** The re-onboard is clean: `nemoclaw onboard` (managed
+  flow, native token injection) built `my-assistant` to **Ready/healthy** on the
+  unchanged OpenClaw image, the provider `compatible-endpoint`→`custom` rename
+  was a non-issue (onboard reused the provider and its inference smoke passed).
+  - **Root cause of the agent-turn failure — a LAN DNS hijack, not really an
+    OpenShell bug.** The agent routes model calls through `https://inference.local/v1`.
+    The sandbox `resolv.conf` inherits the host's search domain
+    (`homenet.telecomitalia.it`), and the home router answers the unqualified
+    name with `127.0.0.1`, so the agent dials its own loopback → `ECONNREFUSED`.
+    OpenShell's repair for this (`vm-dns-monkeypatch.ts`) is **macOS-only**
+    (`platform !== "darwin"` skips it unless `NEMOCLAW_FORCE_VM_DNS_MONKEYPATCH=1`),
+    so nothing corrects it on Linux/Thor. The model itself is reachable
+    (`host.openshell.internal:8000` → 200 from inside the sandbox).
+  - **Fix (persistent):** `configure-local-provider.sh` now pins the OpenClaw
+    agent's inference `baseUrl` to `http://host.openshell.internal:8000/v1` (the
+    same host-proxy endpoint the Hermes lane uses) and refreshes the OpenClaw
+    config-integrity hash — via `docker exec`, because `nemoclaw exec` is itself
+    broken in v0.0.73 (its post-command cleanup throws
+    `inspectMutableConfigPerms is not a function` and returns a bogus exit code).
+    After a `nemoclaw <sandbox> gateway restart`, a bare `openclaw agent` turn
+    returns `result:success` (model `qwen3.6-27b-nvfp4`, `stopReason:stop`).
+  - **Remaining (secondary):** the in-sandbox OpenClaw gateway now wants **device
+    pairing / role approval** (`pairing required`), and its pairing-file write
+    fails (`PermissionError: /sandbox/.openclaw/devices/pending.json`). Turns
+    still succeed because the agent runs via the **embedded** transport
+    (`fallbackFrom:gateway`). Resolving pairing is only needed for the
+    gateway-transport path and the production `composer → openclaw bridge` smoke
+    (`scripts/debug/run-cell-openclaw.sh`).
 
 ## Validated / deferred
 
@@ -117,11 +130,12 @@ surfaced three drifts that `manyforge/scripts/setup-hermes.sh` had to absorb:
   → `{"status":"ok","version":"0.17.0"}`; **authenticated Hermes round-trip**
   through the bridge (`/healthz` `apiKeyConfigured:true`; a real turn returned a
   model completion, HTTP 200); OpenClaw `my-assistant` onboards to Ready +
-  inference smoke passes.
-- Deferred (OpenClaw-lane re-baseline, separate task): fix `inference.local`
-  resolution under 0.0.71 (or point the agent at `host.openshell.internal:8000`),
-  the device-pairing/role-approval flow, and the pairing-file permission; then
-  run the `run-cell-openclaw.sh` production smoke.
+  inference smoke passes; **OpenClaw agent turn completes** (`result:success`)
+  after the `inference.local` baseUrl fix + gateway restart.
+- Deferred (secondary, OpenClaw gateway transport only): the device-pairing /
+  role-approval flow + pairing-file permission, needed for the gateway-transport
+  path and the `run-cell-openclaw.sh` production `composer → bridge` smoke. Turns
+  already succeed via the embedded transport, so this does not block the lane.
 
 ## Rollback
 

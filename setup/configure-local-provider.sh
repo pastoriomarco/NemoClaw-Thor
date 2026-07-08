@@ -109,6 +109,33 @@ if [[ -n "${sandbox_name}" ]]; then
     info "Syncing sandbox runtime config for ${sandbox_name}..."
     sync_sandbox_runtime_config "${sandbox_name}"
     pass "Sandbox runtime config synced to ${THOR_MODEL_ID}"
+
+    # The OpenClaw agent config (openclaw.json) defaults its inference provider
+    # to https://inference.local/v1. On Thor that unqualified name is DNS-hijacked
+    # — the LAN search domain (e.g. a home router's) resolves it to 127.0.0.1, so
+    # the in-sandbox agent dials its own loopback and gets ECONNREFUSED. OpenShell's
+    # repair for this (the VM-DNS monkeypatch) is macOS-only, so nothing corrects it
+    # on Linux/Thor. Point the agent straight at the host proxy instead — the same
+    # endpoint the Hermes lane uses — and refresh the OpenClaw config-integrity hash.
+    # Uses docker exec (not `nemoclaw exec`, whose v0.0.73 post-command cleanup
+    # throws inspectMutableConfigPerms and returns a bogus exit code). Guarded to
+    # OpenClaw sandboxes (skipped when there is no openclaw.json).
+    sb_container="$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^openshell-${sandbox_name}-" | head -1)"
+    if [[ -n "${sb_container}" ]] && docker exec "${sb_container}" test -f /sandbox/.openclaw/openclaw.json 2>/dev/null; then
+        info "Pinning OpenClaw inference baseUrl to ${THOR_LOCAL_VLLM_BASE_URL} (inference.local is DNS-hijacked on Thor)..."
+        if docker exec -u root -e OC_BASE_URL="${THOR_LOCAL_VLLM_BASE_URL}" "${sb_container}" python3 -c 'import json,hashlib,pathlib,os
+p=pathlib.Path("/sandbox/.openclaw/openclaw.json")
+d=json.loads(p.read_text())
+d.setdefault("models",{}).setdefault("providers",{}).setdefault("inference",{})["baseUrl"]=os.environ["OC_BASE_URL"]
+p.write_text(json.dumps(d,indent=2))
+pathlib.Path("/sandbox/.openclaw/.config-hash").write_text(hashlib.sha256(p.read_bytes()).hexdigest()+"  openclaw.json\n")' 2>/dev/null \
+           && docker exec -u root "${sb_container}" chown sandbox:sandbox /sandbox/.openclaw/openclaw.json /sandbox/.openclaw/.config-hash 2>/dev/null; then
+            pass "OpenClaw inference baseUrl pinned to the host proxy"
+            info "  Run 'nemoclaw ${sandbox_name} gateway restart' (or relaunch) for the agent to pick it up."
+        else
+            warn "Could not pin OpenClaw inference baseUrl; the agent may fail on inference.local (DNS hijack)"
+        fi
+    fi
 else
     warn "Could not resolve a sandbox name to sync internal NemoClaw config"
     fix "Set THOR_MANAGED_SANDBOX_NAME in ${THOR_CONFIG_FILE}, or rerun install/onboard."
