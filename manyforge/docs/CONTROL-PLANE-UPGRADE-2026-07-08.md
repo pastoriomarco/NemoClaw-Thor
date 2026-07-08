@@ -93,22 +93,35 @@ surfaced three drifts that `manyforge/scripts/setup-hermes.sh` had to absorb:
   (`setup-manyforge-assistant.sh`); it never touches the Hermes Dockerfile
   derivation, so none of the messaging-staging / dashboard-port /
   `HERMES_API_TIMEOUT` issues apply.
-- **OpenClaw lane status: not yet re-validated on this stack.** Structural risk
-  is low (image unchanged; it onboards via `nemoclaw onboard`, the managed flow
-  that injects the token natively), but it may hit its own v0.0.59→v0.0.73 CLI
-  surface (e.g. the provider `compatible-endpoint`→`custom` rename). Fail-closed:
-  re-onboard + smoke an OpenClaw sandbox before declaring it good.
+- **OpenClaw lane: onboards cleanly, but an in-sandbox agent turn is blocked by
+  an OpenShell 0.0.71 regression — needs its own re-baseline.** The re-onboard
+  itself is clean: `nemoclaw onboard` (managed flow, native token injection)
+  built `my-assistant` to **Ready/healthy** on the unchanged OpenClaw image, the
+  provider `compatible-endpoint`→`custom` rename was a non-issue (onboard reused
+  the provider and its inference smoke passed), and the sandbox reaches the host
+  model directly (`host.openshell.internal:8000` → 200 from inside). What is
+  broken: the agent routes model calls through `https://inference.local/v1`, and
+  that **`inference.local` indirection does not resolve under 0.0.71** (direct
+  host reachability works, the indirection fails) → `ECONNREFUSED`. Also new:
+  the in-sandbox OpenClaw gateway now requires **device pairing / role approval**
+  (`pairing required: device is not approved yet`) and its pairing-file write
+  fails (`PermissionError: /sandbox/.openclaw/devices/pending.json`). These are
+  OpenClaw-lane config issues, separate from this control-plane upgrade; the
+  correct smoke is the production `composer → openclaw bridge` path
+  (`scripts/debug/run-cell-openclaw.sh`), not a bare `openclaw agent` dispatch.
 
 ## Validated / deferred
 
 - Validated: `nemoclaw --version` v0.0.73; `openshell*` 0.0.71; gateway
   `runtime.json` 0.0.71; `hermes-assistant` phase **Ready**; Hermes `/health`
-  → `{"status":"ok","version":"0.17.0"}`; model routing seeded to the `:8000`
-  proxy; a model completion round-trips (vLLM warmup via
-  `configure-local-provider.sh`).
-- Deferred: the fully **authenticated** Hermes `/v1` round-trip through the
-  manyforge bridge (the component that holds `API_SERVER_KEY`), and the OpenClaw
-  lane re-onboard + smoke — both fold into the `launch.sh` per-lane bring-up.
+  → `{"status":"ok","version":"0.17.0"}`; **authenticated Hermes round-trip**
+  through the bridge (`/healthz` `apiKeyConfigured:true`; a real turn returned a
+  model completion, HTTP 200); OpenClaw `my-assistant` onboards to Ready +
+  inference smoke passes.
+- Deferred (OpenClaw-lane re-baseline, separate task): fix `inference.local`
+  resolution under 0.0.71 (or point the agent at `host.openshell.internal:8000`),
+  the device-pairing/role-approval flow, and the pairing-file permission; then
+  run the `run-cell-openclaw.sh` production smoke.
 
 ## Rollback
 
