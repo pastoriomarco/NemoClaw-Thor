@@ -79,9 +79,35 @@ ensure_openshell_gateway_running() {
         return 1
     fi
 
+    # Gateway runtime marker (docker driver): records the version + pid of the
+    # daemon actually running.
+    local gw_runtime="${NEMOCLAW_OPENSHELL_GATEWAY_STATE_DIR:-${HOME}/.local/state/nemoclaw/openshell-docker-gateway}/runtime.json"
+
     if openshell status -g "${gateway_name}" &>/dev/null; then
-        pass "OpenShell gateway '${gateway_name}' is running"
-        return 0
+        # The gateway responds — but an in-place OpenShell upgrade swaps the
+        # binary on disk WITHOUT restarting the running daemon, so a stale
+        # gateway keeps serving the old wire protocol. Newly-created sandboxes
+        # then fail (e.g. "no sandbox token source available" once the host
+        # moved to 0.0.71). Compare the running version (recorded in the gateway
+        # runtime marker) with the installed binary and force a restart on drift.
+        local installed_ver running_ver
+        installed_ver="$(openshell --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        running_ver="$(grep -oE '"openshellVersion"[[:space:]]*:[[:space:]]*"[0-9.]+"' "${gw_runtime}" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        if [[ -z "${installed_ver}" || -z "${running_ver}" || "${installed_ver}" == "${running_ver}" ]]; then
+            pass "OpenShell gateway '${gateway_name}' is running (${running_ver:-version n/a})"
+            return 0
+        fi
+        warn "OpenShell gateway is running ${running_ver} but ${installed_ver} is installed (stale after an in-place upgrade)"
+        info "Stopping the stale gateway so it relaunches on ${installed_ver}..."
+        local stale_pid w
+        stale_pid="$(grep -oE '"pid"[[:space:]]*:[[:space:]]*[0-9]+' "${gw_runtime}" 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+        if [[ -n "${stale_pid}" ]]; then
+            kill "${stale_pid}" 2>/dev/null || true
+            for w in $(seq 1 20); do kill -0 "${stale_pid}" 2>/dev/null || break; sleep 0.5; done
+            kill -0 "${stale_pid}" 2>/dev/null && kill -9 "${stale_pid}" 2>/dev/null || true
+        fi
+        # Fall through to the recover path below, which relaunches the
+        # docker-driver gateway on the installed binary.
     fi
 
     # OpenShell 0.0.44: the gateway runs as a host "docker-driver" process
