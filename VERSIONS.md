@@ -36,15 +36,19 @@ Verified by booting a clean profile end-to-end with these versions.
 
 | Component | Verified version | Audit date | Notes |
 |---|---|---|---|
-| NemoClaw CLI (host) | `lkg` (= `v0.0.55`) | 2026-06-02 | NVIDIA's last-known-good alias; what the public installer defaults to. `v0.0.56` is byte-equivalent for our stack (only [PR #4613](https://github.com/NVIDIA/NemoClaw/pull/4613) — default public installs to lkg). |
-| OpenShell CLI | `0.0.44` | 2026-06-02 | Host binary auto-installed by NemoClaw `install-openshell.sh`. |
-| OpenShell driver | `docker` (no k3s) | 2026-06-02 | v0.0.37+ replaced the in-cluster k3s with a host-side docker driver. New gateway endpoint is plaintext HTTP on `127.0.0.1:8080`. |
-| OpenClaw (in-sandbox) | `v2026.5.22` | 2026-06-02 | Baked into NemoClaw `lkg` sandbox image (digest `sha256:b3d832b596…`). 2026.4.24 was the prior pin; the version bump triggered the [Jun-02 stack rebuild](manyforge/docs/archive/REBUILD-2026-06-02.md). |
+| NemoClaw CLI (host) | `lkg` (= `v0.0.73`) | 2026-07-08 | NVIDIA's last-known-good alias moved `v0.0.55` → `v0.0.73` (upstream latest was `v0.0.76`; we track `lkg`). Bumped in-place on the `~/NemoClaw` checkout (`git checkout v0.0.73 && npm install`). Full delta + procedure: [Jul-08 control-plane upgrade](manyforge/docs/CONTROL-PLANE-UPGRADE-2026-07-08.md). |
+| OpenShell CLI / gateway / sandbox | `0.0.71` | 2026-07-08 | Blueprint pins `min == max == 0.0.71`; NemoClaw `v0.0.73` **refuses** 0.0.44 at sandbox-create time. Installed by `~/NemoClaw/scripts/install-openshell.sh` (fetches all three aarch64 binaries into `~/.local/bin`, no sudo). **After the binary swap you MUST restart the host gateway** (`nemoclaw <sandbox> recover`) — the in-place install leaves the old 0.0.44 daemon running in memory, and sandboxes created under it crash-loop on `no sandbox token source available`. See upgrade record. |
+| OpenShell driver | `docker` (no k3s) | 2026-07-08 | 0.0.71 adds a TLS-secured supervisor relay + per-sandbox auth token; a sandbox created under a stale/old gateway will not provision. Gateway endpoint is still plaintext HTTP on `127.0.0.1:8080`. |
+| OpenClaw (in-sandbox) | `v2026.5.22` | 2026-07-08 | **Unchanged** across `v0.0.55` → `v0.0.73`: sandbox image digest (`sha256:b3d832b596…`) and `min_openclaw_version` (`2026.3.11`) are byte-identical in both blueprints — this upgrade forces **no** OpenClaw sandbox rebuild. |
+| Hermes agent (Hermes lane) | `v0.17.0` (calver `v2026.6.19`) | 2026-07-08 | Derived from the NemoClaw pin (`agents/hermes/Dockerfile.base` `HERMES_SEMVER`); moved `v0.14.0` → `v0.17.0` with the CLI bump. Required three `setup-hermes.sh` re-baseline fixes (Dockerfile COPY-source staging, dashboard port, secret-boundary env) — see upgrade record. |
 
 Prior audit (kept for diff context):
 
 | Component | Verified version | Audit date |
 |---|---|---|
+| NemoClaw CLI (host) | `lkg` (= `v0.0.55`) | 2026-06-02 |
+| OpenShell CLI | `0.0.44` | 2026-06-02 |
+| OpenClaw (in-sandbox) | `v2026.5.22` | 2026-06-02 |
 | NemoClaw CLI (host) | `v0.0.31` | 2026-04-30 |
 | OpenShell CLI | `0.0.36` | 2026-04-30 |
 | OpenShell cluster image | `0.0.36` | 2026-04-30 |

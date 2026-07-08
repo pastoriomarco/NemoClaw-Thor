@@ -32,6 +32,10 @@ Cross-repo ownership detail lives in the private `manyforge_specs` repo (`docs/c
 - [`setup/NEMOCLAW-OPENCLAW-WORKFLOW.md`](setup/NEMOCLAW-OPENCLAW-WORKFLOW.md)
   — canonical end-to-end recipe (start model → wire OpenShell → dispatch
   agent), including scripted / non-interactive use.
+- [`manyforge/docs/CONTROL-PLANE-UPGRADE-2026-07-08.md`](manyforge/docs/CONTROL-PLANE-UPGRADE-2026-07-08.md)
+  — how to bump the NemoClaw / OpenShell / Hermes control plane, including the
+  mandatory **host-gateway restart** after an OpenShell upgrade and the
+  per-lane relevance. Pins live in [`VERSIONS.md`](VERSIONS.md).
 - [`setup/`](setup/) — `configure-local-provider.sh`, `status.sh`,
   `checks.sh`, `sandbox-runtime.sh`, `policies/`.
 - [`serving/start-model.sh`](serving/start-model.sh) /
