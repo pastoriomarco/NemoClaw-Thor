@@ -115,13 +115,22 @@ surfaced three drifts that `manyforge/scripts/setup-hermes.sh` had to absorb:
     `inspectMutableConfigPerms is not a function` and returns a bogus exit code).
     After a `nemoclaw <sandbox> gateway restart`, a bare `openclaw agent` turn
     returns `result:success` (model `qwen3.6-27b-nvfp4`, `stopReason:stop`).
-  - **Remaining (secondary):** the in-sandbox OpenClaw gateway now wants **device
-    pairing / role approval** (`pairing required`), and its pairing-file write
-    fails (`PermissionError: /sandbox/.openclaw/devices/pending.json`). Turns
-    still succeed because the agent runs via the **embedded** transport
-    (`fallbackFrom:gateway`). Resolving pairing is only needed for the
-    gateway-transport path and the production `composer → openclaw bridge` smoke
-    (`scripts/debug/run-cell-openclaw.sh`).
+  - **Dispatch transport — use the CLI/embedded path, not the persistent gateway.**
+    The bridge already defaults to `OPENCLAW_ASSISTANT_USE_GATEWAY=false`
+    (`cli_shell_out`: a fresh `openclaw agent` per turn). But `start_bridge_openclaw`
+    used to start the in-sandbox gateway unconditionally, forcing that fresh agent
+    onto the **gateway transport**, which OpenShell 0.0.71's egress engine (OPA)
+    **denies**: it resolves the calling binary from `/proc/<netns>/net/tcp`, and
+    for the long-lived gateway process it can't (`DENIED … failed to resolve peer
+    binary: No ESTABLISHED TCP connection found`), while it cleanly resolves the
+    fresh `openclaw agent` (`ALLOWED /usr/local/bin/node`). Fix: gate the
+    gateway-start on `USE_GATEWAY` (`scripts/lib/assistant.sh`), so the default
+    path runs embedded. **Verified 5/5** fresh-CLI turns on a clean sandbox +
+    live model (`result:success`). The in-sandbox gateway's separate
+    device-pairing quirk (root-owned `/sandbox/.openclaw/devices/*.json` vs a
+    `sandbox`-uid gateway; fixable with a chown) only matters if you deliberately
+    set `USE_GATEWAY=true`, which is not recommended on 0.0.71 until the OPA
+    peer-resolution is fixed upstream.
 
 ## Validated / deferred
 
@@ -130,12 +139,14 @@ surfaced three drifts that `manyforge/scripts/setup-hermes.sh` had to absorb:
   → `{"status":"ok","version":"0.17.0"}`; **authenticated Hermes round-trip**
   through the bridge (`/healthz` `apiKeyConfigured:true`; a real turn returned a
   model completion, HTTP 200); OpenClaw `my-assistant` onboards to Ready +
-  inference smoke passes; **OpenClaw agent turn completes** (`result:success`)
-  after the `inference.local` baseUrl fix + gateway restart.
-- Deferred (secondary, OpenClaw gateway transport only): the device-pairing /
-  role-approval flow + pairing-file permission, needed for the gateway-transport
-  path and the `run-cell-openclaw.sh` production `composer → bridge` smoke. Turns
-  already succeed via the embedded transport, so this does not block the lane.
+  inference smoke passes; **OpenClaw agent turns 5/5** on a clean sandbox + live
+  model via the default `cli_shell_out` (embedded) path with the gateway not
+  started.
+- Deferred (OpenClaw **gateway** transport only, `USE_GATEWAY=true`): blocked
+  upstream by the OpenShell 0.0.71 OPA egress peer-resolution bug (`failed to
+  resolve peer binary`) plus the device-pairing chown. Not needed — the default
+  embedded path works — so this does not block the lane; report upstream if the
+  gateway transport is ever wanted.
 
 ## Rollback
 
