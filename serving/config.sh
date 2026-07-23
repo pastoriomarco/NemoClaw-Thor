@@ -168,6 +168,7 @@ resolve_thor_sandbox_name() {
 # resolve case.
 _MODEL_PROFILE_CATALOG=(
     "qwen3.6-35b-a3b-nvfp4-nvidia|thor|Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration)|Historical Task 4 winner — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock"
+    "laguna-s-2.1-nvfp4-dflash|thor|poolside Laguna 2.1 (coding/agentic MoE)|EXPERIMENTAL assistant candidate — 118B-A8B NVFP4 + DFlash drafter (n=7) on pinned public v0.25.1 image; 38-44 tok/s short-ctx coding, ~15 tok/s @150K ctx; needs 0.81 util so cannot co-reside with Isaac; thinking OFF"
     "qwen3.6-27b-fp8-mtp-kvfp8|thor|Other Qwen3.6|dense 27B FP8 + MTP + FP8 KV (TEB 84)"
     "qwen3.6-27b-nvfp4|thor|Other Qwen3.6|dense 27B NVFP4 (unsloth) + vision + MTP — public nightly image (production)"
     "qwen3.5-9b-claude-distilled-nvfp4|thor|Distilled / specialized|DeltaNet hybrid, 9B Opus-distilled, fast control loop (TEB 42)"
@@ -437,6 +438,35 @@ resolve_model_profile() {
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
             THOR_TARGET_PROXY_LOOP_STOP_AT="8"
             THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"  # launch.sh: enable_thinking=true
+            ;;
+        laguna-s-2.1-nvfp4-dflash)
+            # EXPERIMENTAL (added 2026-07-23): poolside Laguna-S-2.1 NVFP4
+            # (MoE, ~8.5B active / 118B total) + precision-matched DFlash
+            # block-diffusion drafter. Assistant-capability candidate: stronger
+            # coder than the 35B at higher active-param cost, and its 67 GiB of
+            # weights force high GPU utilization — this profile CANNOT co-reside
+            # with Isaac or other GPU tenants. Composer smoke lane (direct,
+            # manyforge-only) is fine: everything outside vLLM is CPU-light.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="laguna-s-2.1-nvfp4-dflash"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            # KV pool at 0.81 util is ~285K tokens -> 1.09x concurrency at full
+            # 262K. max_num_seqs=2 keeps the scheduler honest; the composer
+            # workflow never runs >1 bridge invocation anyway.
+            THOR_TARGET_MAX_NUM_SEQS="2"
+            THOR_TARGET_GPU_MEMORY_UTILIZATION="0.81"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="1"
+            # Thinking OFF: with thinking on this model writes the full answer
+            # inside <think> and then EOS's early while re-transcribing it as
+            # content, which breaks agent loops; no-thinking runs measured both
+            # faster and more accurate on analysis/agentic tasks.
+            THOR_TARGET_MODEL_REASONING="false"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_QUANTIZATION=""
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="8"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="off"  # launch.sh: enable_thinking=false
             ;;
         cosmos-reason2-2b)
             # NVIDIA Cosmos Reason 2 (2B), Qwen3-VL-2B base, VLM physical-AI reasoner.

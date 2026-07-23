@@ -623,6 +623,72 @@ prepare_thor_launch_profile() {
                 "--trust-remote-code"
             )
             ;;
+        laguna-s-2.1-nvfp4-dflash)
+            # EXPERIMENTAL assistant candidate: poolside Laguna-S-2.1 NVFP4
+            # (118B-A8B MoE) + Laguna-S-2.1-DFlash-NVFP4 drafter (1B
+            # block-diffusion, quantization-matched to the NVFP4 target).
+            # Served on the pinned official multi-arch v0.25.1 image — the
+            # version poolside validated DFlash on; sm110 kernels ship in it.
+            #
+            # Deltas from poolside's published recipe, all load-bearing:
+            #   - --moe-backend marlin, NOT triton: v0.25.1 rejects triton for
+            #     NVFP4 MoE (the triton advice targets the FP8 variant's
+            #     DeepGEMM conflict). Marlin is the proven sm110 NVFP4 path.
+            #   - num_speculative_tokens 7, not 15: per-position acceptance
+            #     decays to ~0 past position ~6; n=7 measured fastest here
+            #     (n=5 starves per-pass yield, n=9 adds verify cost for no
+            #     acceptance gain).
+            #   - enable_thinking false: with thinking on the model writes the
+            #     answer in <think> then EOS's early re-transcribing it, which
+            #     breaks agent loops. Keep the poolside_v1 reasoning parser
+            #     anyway so any stray think tags are still stripped. NOTE the
+            #     DeepSeekV3-family parser only engages when the request (or
+            #     this server default) sets enable_thinking explicitly.
+            #   - No --quantization flag: compressed-tensors auto-detected.
+            #   - Model's own chat template (no --chat-template override).
+            # NVFP4 KV cache was tried and is impossible on sm110 (all
+            # attention backends reject it; trtllm-gen FP4 FMHA is
+            # sm100/103-only) — fp8 KV is the floor here.
+            # Measured: 38-44 tok/s @ 4.2-4.7 accepted/step on short-context
+            # coding; degrades to ~15 tok/s @ ~2 accepted/step at ~150K
+            # context (the 512-token SWA drafter loses acceptance at depth).
+            # Ops: unified memory is NOT released when the container stops —
+            # run the reclaim step (USER_QUICKSTART_MANUAL.md "Stop the model
+            # server") and wait for free memory to stabilize before relaunch,
+            # or the engine dies at its startup memory probe.
+            THOR_LAUNCH_MODEL_SOURCE="poolside/Laguna-S-2.1-NVFP4"
+            # Pinned release image (multi-arch, sm110 in the compiled arch
+            # list). Blank the entrypoint: the image bakes the serve command,
+            # which would double with the one run_thor_vllm_container appends.
+            THOR_VLLM_IMAGE="vllm/vllm-openai:v0.25.1"
+            THOR_VLLM_ENTRYPOINT=""
+            # Sizing on the 122 GiB unified board: ~67 GiB weights (target +
+            # drafter) + ~2 GiB graphs + activations; 0.81 (~99 GiB) yields a
+            # ~9.7 GiB fp8 KV pool = ~285K tokens. 0.80 misses the 262K
+            # single-request KV requirement by a hair on some boots.
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.81}"
+            THOR_DOCKER_ENV_ARGS+=(
+                "-e" "FLASHINFER_DISABLE_VERSION_CHECK=1"
+                "-e" "CUTE_DSL_ARCH=sm_110a"
+            )
+            THOR_VLLM_ARGS+=(
+                "--download-dir" "/data/models/huggingface/hub"
+                "--moe-backend" "marlin"
+                "--kv-cache-dtype" "fp8"
+                "--enable-prefix-caching"
+                "--enable-chunked-prefill"
+                "--max-num-batched-tokens" "8192"
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "poolside_v1"
+                "--reasoning-parser" "poolside_v1"
+                "--default-chat-template-kwargs" '{"enable_thinking": false}'
+                # Card-recommended sampling; temp 0 measurably worsens DFlash
+                # acceptance, so avoid greedy.
+                "--override-generation-config" '{"temperature":0.7,"top_p":0.95}'
+                "--speculative-config" '{"method":"dflash","model":"poolside/Laguna-S-2.1-DFlash-NVFP4","num_speculative_tokens":7}'
+                "--trust-remote-code"
+            )
+            ;;
         # qwen3.6-35b-a3b-nvfp4-tq-mtp-2 REMOVED 2026-04-28 — N=2 hypothesis-
         # test profile, dominated. TEB 87 (vs 90 for nvfp4-tq-mtp at same KV
         # with N=4). With TQ KV, N=4 wins; with FP8 KV, N=2 wins. See full
