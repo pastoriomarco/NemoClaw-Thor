@@ -134,12 +134,27 @@ RUN python3 -m venv ${TRT_VENV} && \
 
 RUN --mount=type=cache,target=/root/.cache/pip,id=trt-pip,sharing=locked \
     ${TRT_VENV}/bin/pip install -r requirements.txt && \
-    ${TRT_VENV}/bin/pip install -r experimental/llm_loader/requirements.txt && \
+    # Pinned copy of pyproject [project.optional-dependencies] "tools"
+    # (successor of 0.7.0's experimental/llm_loader/requirements.txt, removed
+    # upstream in 0.8.x). Installed explicitly because the package itself is
+    # installed --no-deps, which skips extras. Re-sync this list from
+    # pyproject.toml on every version bump.
+    ${TRT_VENV}/bin/pip install \
+        nvidia-modelopt==0.44.0 \
+        datasets==4.8.5 \
+        tqdm==4.67.3 \
+        einops==0.8.2 \
+        peft==0.19.1 \
+        soundfile==0.13.1 \
+        librosa==0.11.0 \
+        tiktoken==0.13.0 \
+        torchvision==0.27.0 \
+        backoff && \
     ${TRT_VENV}/bin/pip install --no-deps .
 
 RUN --mount=type=cache,target=/root/.cache/pip,id=trt-pip,sharing=locked \
     ${TRT_VENV}/bin/pip install --force-reinstall --upgrade \
-        torch==2.10.0+cu130 \
+        torch==2.12.0+cu130 \
         --index-url https://download.pytorch.org/whl/cu130 \
         --extra-index-url https://pypi.org/simple
 
@@ -148,7 +163,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=trt-pip,sharing=locked \
 # (the package can be used purely as a Python library). Bake them in so
 # `python -m experimental.server` works out-of-the-box.
 RUN --mount=type=cache,target=/root/.cache/pip,id=trt-pip,sharing=locked \
-    ${TRT_VENV}/bin/pip install fastapi uvicorn
+    ${TRT_VENV}/bin/pip install fastapi uvicorn pybind11==2.13.6
 
 # ── Build pybind via the patched setup_pybind.py ─────────────────────────
 # The patch makes setup_pybind.py forward ENABLE_CUTE_DSL=ALL when the env

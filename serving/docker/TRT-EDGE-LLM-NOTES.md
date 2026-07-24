@@ -221,3 +221,74 @@ The 35B-A3B is `qwen3_5_moe`. The export header reports `MTP capable: yes` (the 
 - **Verdict:** trt-edge-llm 0.8 cannot deliver its headline MTP speedup for either of our models on this build. The only speed reason to use it was MTP; vanilla dense-27B here is bandwidth-bound (~16–19 tok/s) and loses to vLLM, and **vLLM already runs MTP on the MoE 35B** (committed K=3 recipe). So **vLLM remains the serving + MTP path**; trt-edge-llm is shelved.
 - **Cleanup done (2026-06-30):** `tensorrt-edge-llm:experimental` image, scratch `~/trt-edge-mtp` (ONNX/engines), **and the clone `~/workspaces/trt-llm-edge`** all removed. **Kept** the `nvidia/Qwen3.6-27B-NVFP4` checkpoint (correct ModelOpt+dense+MTP-head model, ~21 GB) to avoid the slow re-download when revisiting. To revisit, re-clone the newer release; the `engine.py` patch (visual `model_config` fix + `EDGELLM_SKIP_VISUAL` guard) is documented in "Bug + patch" above for re-application.
 - **To revisit on a future release:** re-clone the newer tag, build the image (add `llm_build` to `build.sh:214` if still absent), re-run the MTP export — if `torch.export` no longer segfaults on the MTP-base graph **and/or** MoE-MTP is implemented, resume from the MTP build pipeline documented above. Until one of those lands upstream, there is no MTP path here.
+
+---
+
+## 0.9.1 DFlash/DDTree retest — 2026-07-24 (dense 27B: DDTree blocked by Myelin; vanilla loses to vLLM)
+
+Goal: DFlash+DDTree (new in 0.9.0/0.9.1) on Qwen3.6-27B NVFP4 with the
+`z-lab/Qwen3.6-27B-DFlash` drafter (now cached in `~/thor-hf-cache`).
+
+**Image**: `./build-trt.sh --trt-ref release/0.9.1` works after three
+`Dockerfile.trt` fixes: (1) upstream deleted `experimental/llm_loader/` —
+replaced by a pinned copy of the pyproject `[tools]` extra (nvidia-modelopt,
+torchvision, …; re-sync on every bump); (2) torch cu130 force-reinstall bumped
+2.10.0→2.12.0 to match upstream pins; (3) `pybind11==2.13.6` added (pyproject
+`server` extra, skipped by `--no-deps`). The v0.7.0 Thor patch is **still
+required** (upstream `ENABLE_CUTE_DSL` still defaults OFF; per-target
+`LIBRARY_OUTPUT_DIRECTORY` still present) and applies cleanly with `--3way`.
+Tagged `nemoclaw-thor/trt-edge-llm:0.9.1-thor-sm110`.
+
+**Export pipeline works** (dynamo, opset 24): `--dflash-base`,
+`--dflash-tree-base`, `--dflash-draft` all export for the (upstream-unvalidated)
+Qwen3.6 pairing; the ModelOpt checkpoint's visual tower also exports.
+
+**Checkpoint findings**:
+- unsloth 27B NVFP4: re-confirmed **unusable here** — compressed-tensors layout
+  (`weight_packed`/`*_global_scale`) is silently skipped (547/2111 tensors
+  loaded) → pipeline runs end-to-end and produces garbage. Loader is
+  ModelOpt-only; silent skip should be a hard-fail (upstream report #3).
+- nvidia 27B NVFP4: loads fully (1846/2194; 348 skipped = visual scope), but its
+  **quantized lm_head crashes the DFlash draft export**
+  (`_normalize_dflash_lm_head_tensor_shape`: weight_scale [248320,320] vs
+  [248320,5120] — upstream report #2). Workaround that works: modified
+  checkpoint copy `/ws/ckpt-nv-fp16head` (built by `/ws/fix_lmhead.py`) grafting
+  unsloth's BF16 `lm_head.weight` (the original Qwen head) + `lm_head` added to
+  quant ignore.
+
+**The blocker — spec engines do not compile on sm110** (upstream report #1):
+both `--dflash-base` and `--dflash-tree-base` graphs from the fixed checkpoint
+fail `llm_build` with Myelin `collective_codegen.cpp:1900 CHECK(false)
+unsupported shape` → `Could not find any implementation for node
+{ForeignNode[n1_385...node__to_copy_466]} [profile 1]` (~9 min into tactic
+search). The **plain (non-spec) graph compiles fine** (951 s) ⇒ the gap is
+specifically **NVFP4-dense GEMM × spec-verify profile**. DDTree runtime
+mechanics are fine — on the (garbage-weight) unsloth engines the branching-tree
+decoder initialized, captured CUDA graphs, and generated; only the engine build
+blocks the real model.
+
+**llm_inference spec flags** (undocumented constraints hit): DFlash requires
+`--specDraftStep 1`; `--specVerifySize` must be ≤ the engine's
+`maxVerifyTreeSize` (default 60 fails a 16-tree build); `--specDraftTopK 1` =
+linear block, `>1` = DDTree (needs the tree-base engine; a tree-base engine
+must not run with topK 1).
+
+**Vanilla measurement** (plain engine, coding prompt, 512 tok, single stream):
+coherent code, **11.6 tok/s** vs vLLM MTP-K3 ~16-18 ⇒ vanilla trt-edge-llm
+loses; dense NVFP4 GEMMs run on TRT-native kernels (the CuTe DSL groups cover
+MoE only). Concurrency (Finding #1) and 0.9.0 server tool-calling were NOT
+retested — moot while spec engines don't build.
+
+**Verdict: still shelved for the 27B.** No path beats vLLM until upstream fixes
+the spec-profile Myelin failure (or routes dense NVFP4 GEMMs to CuTe DSL).
+Build/run logs for the reports are in the session scratchpad
+(`build-nvidia-*.log`, `nvidia-{fp16head,linear,plain}.log`).
+
+**Assets kept**: the 0.9.1 image; the drafter in `~/thor-hf-cache`;
+`~/tensorrt-edgellm-workspace/` holds `ckpt-nv-fp16head` + `fix_lmhead.py`,
+the working nvidia plain engine, the garbage-weight unsloth engines (delete
+freely), and regenerable ONNX dirs (large).
+
+**Possible next**: (a) exercise DDTree mechanics on the upstream-validated
+Qwen3.5-4B pair (BF16 base → compiles); (b) MTP retest on the now-compiling
+dense checkpoint — likely hits the same spec-profile wall.
