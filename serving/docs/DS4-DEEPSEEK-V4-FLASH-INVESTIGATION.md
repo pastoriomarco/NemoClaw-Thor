@@ -1,12 +1,17 @@
 # DS4 / DeepSeek-V4-Flash on Jetson Thor — investigation notes
 
-**Date**: 2026-05-12 (updated 2026-05-19 with external Thor benchmarks)
-**Status**: Pre-our-execution feasibility study; **externally validated by two
-community Thor benchmarks** (antirez/ds4 PR #121 by amarrmb, antirez/ds4 #183
-by shahizat — see Expected throughput section).
-**Verdict**: **Buildable in a few hours, mostly download wait.** Single-stream
-only — useful as a personal coding-agent or RLM sub-LM backend, **not** a
-production serving stack and **not** a vLLM/TRT-Edge-LLM replacement.
+**Date**: 2026-05-12 (updated 2026-08-01)
+**Status**: Historical investigation of upstream `antirez/ds4`. The active
+Thor implementation is now the Dockerized Entrpi fork v0.5.1, documented in
+[`DS4-ON-THOR.md`](DS4-ON-THOR.md). Entrpi adds continuous batching,
+OpenAI-compatible serving, and DSpark speculation; the single-stream caveats
+below apply to the old upstream engine, not that fork.
+**Historical verdict**: Buildable in a few hours, mostly download wait.
+
+> The `sm_110a` spellings below preserve the original upstream/toolchain
+> investigation. The active Entrpi container is deliberately compiled with
+> `CUDA_ARCH=sm_110` exactly; do not reuse Spark's `sm_121` or the historical
+> build command below. Follow [`DS4-ON-THOR.md`](DS4-ON-THOR.md).
 
 ## Why we care
 

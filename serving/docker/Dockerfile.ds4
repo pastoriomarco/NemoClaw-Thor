@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1.7
+#
+# Entrpi DS4 on Jetson Thor (SM110)
+#
+# The source is built inside the image; no CUDA compiler or DS4 checkout is
+# installed on the host.  Model weights are deliberately excluded and mounted
+# at runtime by ds4-compose.yml.
+
+ARG CUDA_BASE_BUILD=nvcr.io/nvidia/cuda@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92
+ARG CUDA_BASE_RUNTIME=nvcr.io/nvidia/cuda@sha256:c3fde347d52d578c84fd644bc177bc7ec333feaf11550d990da4084d7612e4c7
+ARG DS4_REPO=https://github.com/Entrpi/ds4.git
+ARG DS4_REF=161b23609ab8a928246d268cec61101007f678b3
+ARG CUDA_ARCH=sm_110
+
+FROM ${CUDA_BASE_BUILD} AS builder
+
+ARG DS4_REPO
+ARG DS4_REF
+ARG CUDA_ARCH
+
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,id=apt-lib-thor,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+RUN git clone --depth 1 --branch v0.5.1 "${DS4_REPO}" ds4 \
+    && cd ds4 \
+    && test "$(git rev-parse HEAD)" = "${DS4_REF}" \
+    && make -j"$(nproc)" cuda CUDA_ARCH="${CUDA_ARCH}" \
+    && printf 'ds4_ref=%s\ncuda_arch=%s\n' "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
+
+FROM ${CUDA_BASE_RUNTIME} AS runtime
+
+RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,id=apt-lib-thor,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/ds4/ds4-server /usr/local/bin/ds4-server
+COPY --from=builder /opt/ds4/ds4-bench /usr/local/bin/ds4-bench
+COPY --from=builder /opt/ds4/LICENSE /usr/share/licenses/ds4/LICENSE
+COPY --from=builder /opt/ds4-build.txt /etc/ds4-build.txt
+COPY docker/ds4-entrypoint.sh /usr/local/bin/ds4-entrypoint
+COPY docker/ds4-download-weights.sh /usr/local/bin/ds4-download-weights
+
+RUN chmod 0755 /usr/local/bin/ds4-entrypoint /usr/local/bin/ds4-download-weights
+
+ENV DS4_MODEL_DIR=/data/models/ds4 \
+    DS4_BASE_FILE=DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf \
+    DS4_DSPARK_FILE=DSpark-drafter-Q2K-Q8-0731.gguf \
+    DS4_HOST=0.0.0.0 \
+    DS4_PORT=8050 \
+    DS4_CTX=262144 \
+    DS4_CUDA_NO_TOPK_STREAM=1 \
+    DS4_KV_DISK_DIR=/data/models/ds4/kv-cache \
+    DS4_KV_DISK_SPACE_MB=8192
+
+VOLUME ["/data/models/ds4"]
+EXPOSE 8050
+
+ENTRYPOINT ["/usr/local/bin/ds4-entrypoint"]

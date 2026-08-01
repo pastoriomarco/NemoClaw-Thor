@@ -41,6 +41,10 @@ Cross-repo ownership detail lives in the private `manyforge_specs` repo (`docs/c
 - [`serving/start-model.sh`](serving/start-model.sh) /
   [`serving/start-duo.sh`](serving/start-duo.sh) — start a served model
   (profiles in [`serving/config.sh`](serving/config.sh)).
+- [`serving/start-ds4.sh`](serving/start-ds4.sh) — isolated Dockerized
+  DeepSeek-V4-Flash-0731 + DSpark service on `127.0.0.1:8050`; see
+  [`serving/docs/DS4-ON-THOR.md`](serving/docs/DS4-ON-THOR.md). Run the
+  reproducible API/output probe with `./serving/start-ds4.sh test`.
 
 ## The three assistant lanes
 

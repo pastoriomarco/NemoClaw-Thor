@@ -1,0 +1,71 @@
+# Entrpi DS4 / DeepSeek-V4-Flash-0731 on Jetson Thor.
+#
+# Use ./start-ds4.sh so DS4_MODEL_DIR, DS4_UID, and DS4_GID are set safely.
+# The ds4 service waits for the downloader on a first run; later starts reuse
+# the persistent model mount without downloading again.
+
+services:
+  ds4-download:
+    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.1-sm110-cu130}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ds4
+      args:
+        CUDA_ARCH: sm_110
+    entrypoint: ["/usr/local/bin/ds4-download-weights"]
+    user: "${DS4_UID:?start-ds4.sh must set DS4_UID}:${DS4_GID:?start-ds4.sh must set DS4_GID}"
+    volumes:
+      - ${DS4_MODEL_DIR:?start-ds4.sh must set DS4_MODEL_DIR}:/data/models/ds4
+    restart: "no"
+
+  ds4:
+    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.1-sm110-cu130}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ds4
+      args:
+        CUDA_ARCH: sm_110
+    runtime: nvidia
+    init: true
+    user: "${DS4_UID:?start-ds4.sh must set DS4_UID}:${DS4_GID:?start-ds4.sh must set DS4_GID}"
+    cap_add:
+      - IPC_LOCK
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      DS4_PORT: 8050
+      DS4_WAIT_FOR_WEIGHTS: "1"
+      # A 262,144-token window is validated on Thor with the streaming top-K
+      # escape below; a 247,065-token depth needle passed end to end.
+      DS4_CTX: ${DS4_CTX:-262144}
+      DS4_KV_DISK_SPACE_MB: ${DS4_KV_DISK_SPACE_MB:-8192}
+      # v0.5.1 trims evicted deep-context VMM pages. Keep a finite ceiling.
+      DS4_BATCH_VMM_BUDGET_MB: ${DS4_BATCH_VMM_BUDGET_MB:-12288}
+      DS4_BATCH_FIT_HEADROOM_MB: ${DS4_BATCH_FIT_HEADROOM_MB:-8192}
+      DS4_SERVER_COALESCE_MAX: ${DS4_SERVER_COALESCE_MAX:-4}
+      # 4K measured 476 tok/s on Thor with no swap. Keep 8K for a future
+      # controlled test after more unified-memory headroom is reserved.
+      DS4_CONT_PREFILL_CHUNK: ${DS4_CONT_PREFILL_CHUNK:-4096}
+      DS4_CONT_CAPTURE: ${DS4_CONT_CAPTURE:-1}
+      # Thor deep-context fix: v0.5.1's >8192-row streaming top-512 path
+      # deterministically raises Xid 13 on sm_110. Entrpi retains this
+      # output-equivalent legacy chunked-tree path as its forensic escape.
+      DS4_CUDA_NO_TOPK_STREAM: "1"
+    ports:
+      - "${DS4_BIND_ADDRESS:-127.0.0.1}:${DS4_HOST_PORT:-8050}:8050"
+    volumes:
+      - ${DS4_MODEL_DIR:?start-ds4.sh must set DS4_MODEL_DIR}:/data/models/ds4
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8050/v1/models"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # The entrypoint deliberately waits for the first large GGUF download.
+      # Keep the container in "starting" during that expected preparation
+      # rather than marking the not-yet-listening API unhealthy.
+      start_period: 12h
