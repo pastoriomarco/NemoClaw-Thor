@@ -1,0 +1,115 @@
+diff --git a/ds4_cuda.cu b/ds4_cuda.cu
+--- a/ds4_cuda.cu
++++ b/ds4_cuda.cu
+@@ -15405,6 +15405,86 @@ __global__ static void __launch_bounds__(512) indexer_topk_stream512_kernel(
+     }
+ }
+ 
++/* Thor-safe exact streaming selector.  The upstream one-pass selector uses a
++ * shared atomic append whose variable write positions can exceed the 2048-key
++ * buffer on CC 11.0 before the compaction barrier runs.  This implementation
++ * has no atomics and no variable shared-memory writes: it keeps the exact
++ * top-512 of the processed prefix, merges those survivors with the next 1536
++ * candidates in a fixed 2048-key block sort, and repeats.  By induction the
++ * final survivors are the exact global top-512 in topk_pack_key order.
++ *
++ * The fixed 256-thread x 8-item geometry uses the same 2048-key sort capacity
++ * as upstream, remains scratch-free, and is compatible with graph replay: the
++ * captured row stride is n_comp while the live scan bound comes from ls. */
++#if defined(DS4_CUDA_THOR_TOPK_DETERMINISTIC256)
++__global__ static void __launch_bounds__(256)
++indexer_topk_stream512_thor_deterministic_kernel(
++        uint32_t *selected,
++        const float *scores,
++        uint32_t n_comp,
++        uint32_t n_tokens,
++        uint32_t top_k,
++        const struct ds4_layer_scalars *ls) {
++    constexpr uint32_t THREADS = 256u;
++    constexpr uint32_t ITEMS = 8u;
++    constexpr uint32_t CAP = THREADS * ITEMS;
++    constexpr uint32_t KEEP = 512u;
++    constexpr uint32_t FRESH = CAP - KEEP;
++    using Sort = cub::BlockRadixSort<uint64_t, THREADS, ITEMS>;
++
++    __shared__ uint64_t survivors[KEEP];
++    __shared__ typename Sort::TempStorage sort_tmp;
++
++    const uint32_t t = blockIdx.x;
++    const uint32_t tid = threadIdx.x;
++    if (t >= n_tokens) return;
++    const float *row = scores + (uint64_t)t * n_comp;
++    const uint32_t n = ls ? ls->n_index_comp : n_comp;
++    const uint32_t start =
++        (uint32_t)(((uint64_t)(t + 1u) * 0x9E3779B9u) % n);
++    bool have_survivors = false;
++
++    for (uint32_t base = 0; base < n; base += FRESH) {
++        uint64_t keys[ITEMS];
++        #pragma unroll
++        for (uint32_t k = 0; k < ITEMS; k++) {
++            const uint32_t slot = tid * ITEMS + k;
++            if (slot < KEEP) {
++                keys[k] = have_survivors ? survivors[slot] : 0;
++            } else {
++                const uint32_t i = base + slot - KEEP;
++                uint64_t key = 0;
++                if (i < n) {
++                    uint32_t c = start + i;
++                    if (c >= n) c -= n;
++                    key = topk_pack_key(row[c], c);
++                }
++                keys[k] = key;
++            }
++        }
++
++        Sort(sort_tmp).SortDescending(keys);
++        __syncthreads();
++        if (tid < KEEP / ITEMS) {
++            #pragma unroll
++            for (uint32_t k = 0; k < ITEMS; k++)
++                survivors[tid * ITEMS + k] = keys[k];
++        }
++        __syncthreads();
++        have_survivors = true;
++    }
++
++    if (tid < top_k / ITEMS) {
++        #pragma unroll
++        for (uint32_t k = 0; k < ITEMS; k++) {
++            const uint64_t key = survivors[tid * ITEMS + k];
++            selected[(uint64_t)t * top_k + tid * ITEMS + k] =
++                0xffffffffu - (uint32_t)(key & 0xffffffffu);
++        }
++    }
++}
++#endif
++
+ #ifdef DS4_CUDA_HAVE_MXF4
+ /* ================= v0.5 inc-13a: exact mxf4 score+select ==================
+  * Replaces the dense scores+topk pair on eager prefill chunks at ALL
+@@ -16394,14 +16474,23 @@ static int tensor_index_topk_cuda(struct ds4_tensor *selected,
+     if (top_k == 512u &&
+         getenv("DS4_CUDA_NO_TOPK2048") == NULL &&
+         getenv("DS4_CUDA_NO_TOPK_STREAM") == NULL) {
++#if defined(DS4_CUDA_THOR_TOPK_DETERMINISTIC256)
++        indexer_topk_stream512_thor_deterministic_kernel<<<n_tokens, 256, 0, ds4_current_stream()>>>(
++#else
+         indexer_topk_stream512_kernel<<<n_tokens, 512, 0, ds4_current_stream()>>>(
++#endif
+                 (uint32_t *)selected->ptr,
+                 (const float *)scores->ptr,
+                 n_comp, n_tokens, top_k, ls);
+         static int logged_topk_stream = 0;
+         if (!logged_topk_stream) {
+             logged_topk_stream = 1;
+-            fprintf(stderr, "ds4: indexer topk stream active (first n_comp=%u n_tokens=%u %s)\n",
++            fprintf(stderr,
++#if defined(DS4_CUDA_THOR_TOPK_DETERMINISTIC256)
++                    "ds4: indexer topk stream active (mode=thor-deterministic geometry=256x8 first n_comp=%u n_tokens=%u %s)\n",
++#else
++                    "ds4: indexer topk stream active (first n_comp=%u n_tokens=%u %s)\n",
++#endif
+                     n_comp, n_tokens, pc5_active ? "captured" : "eager");
+         }
+         /* 13d-1 adjudication instrument: with DS4_CUDA_TOPK_STREAM_VERIFY on

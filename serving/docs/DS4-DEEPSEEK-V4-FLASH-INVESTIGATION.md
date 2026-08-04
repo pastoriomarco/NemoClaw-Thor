@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-12 (updated 2026-08-01)
 **Status**: Historical investigation of upstream `antirez/ds4`. The active
-Thor implementation is now the Dockerized Entrpi fork v0.5.1, documented in
+Thor implementation is now the Dockerized Entrpi fork v0.5.4, documented in
 [`DS4-ON-THOR.md`](DS4-ON-THOR.md). Entrpi adds continuous batching,
 OpenAI-compatible serving, and DSpark speculation; the single-stream caveats
 below apply to the old upstream engine, not that fork.

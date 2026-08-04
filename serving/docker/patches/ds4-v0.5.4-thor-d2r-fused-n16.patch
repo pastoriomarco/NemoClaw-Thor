@@ -1,0 +1,22 @@
+diff --git a/cuda/mmq/ds4_mmq_d2r.cu b/cuda/mmq/ds4_mmq_d2r.cu
+index d36b4ac..e95c7bc 100644
+--- a/cuda/mmq/ds4_mmq_d2r.cu
++++ b/cuda/mmq/ds4_mmq_d2r.cu
+@@ -55,7 +55,7 @@ constexpr int kIQ2RawRowsPerWarp = 16;
+ constexpr int kIQ2RawPairsPerRow = 8;
+ constexpr int kIQ2RawQCodeChunks = kIQ2RawRowsPerWarp * kIQ2RawPairsPerRow;
+ constexpr int kIQ2RawQCodeTrips = (kIQ2RawQCodeChunks + 31) / 32;
+-constexpr int kFusedNTile = 32;
++constexpr int kFusedNTile = 16;
+ constexpr int kQ8PrefetchItems = kNFrag * 8 * 9;
+ constexpr int kQ8PrefetchTrips = (kQ8PrefetchItems + kThreads - 1) / kThreads;
+ constexpr int kRawCopyTrips = (kRawCopyChunks + 31) / 32;
+@@ -3010,7 +3010,7 @@ int ds4_mmq_iq2_xxs_moe_d2r_fused_launch(
+ 
+     const dim3 block(32, kWarps, 1);
+     const dim3 grid((unsigned)(M / kMTile), (unsigned)capacity32, 1);
+-    gateup_iq2_swiglu_q8_d2r_kernel<32, kFusedNTile><<<grid, block, 0, stream>>>(
++    gateup_iq2_swiglu_q8_d2r_kernel<kFusedNTile, kFusedNTile><<<grid, block, 0, stream>>>(
+         gate_soa, up_soa,
+         (const block_q8_1_mmq *)input_q8,
+         ids_src, ids_dst, expert_bounds, router_weights, work, n_items,

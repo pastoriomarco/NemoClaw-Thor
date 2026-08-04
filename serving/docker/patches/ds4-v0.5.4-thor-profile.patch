@@ -1,0 +1,44 @@
+diff --git a/ds4_cuda.cu b/ds4_cuda.cu
+--- a/ds4_cuda.cu
++++ b/ds4_cuda.cu
+@@ -2712,8 +2712,17 @@ extern "C" int ds4_gpu_init(void) {
+     if (!cuda_ok(cudaSetDevice(dev), "set device")) return 0;
+     cudaDeviceProp prop;
+     if (cudaGetDeviceProperties(&prop, dev) == cudaSuccess) {
++#if defined(DS4_CUDA_THOR)
++        fprintf(stderr,
++                "ds4: CUDA backend initialized on %s "
++                "(profile=thor sm_%d%d sm_count=%d threads_per_sm=%d unified_addressing=%s)\n",
++                prop.name, prop.major, prop.minor, prop.multiProcessorCount,
++                prop.maxThreadsPerMultiProcessor,
++                prop.unifiedAddressing ? "yes" : "no");
++#else
+         fprintf(stderr, "ds4: CUDA backend initialized on %s (sm_%d%d)\n",
+                 prop.name, prop.major, prop.minor);
++#endif
+     }
+     if (!g_cublas_ready) {
+         if (!cublas_ok(cublasCreate(&g_cublas), "create handle")) return 0;
+@@ -18640,16 +18649,22 @@ static ds4_q8_strategy ds4_cuda_q8_strategy(void) {
+     /* Log the choice with device context for diagnosis.  Bandwidth is purely
+      * informational - we no longer tier on it. */
+     cudaDeviceProp props;
+     if (cudaGetDeviceProperties(&props, 0) == cudaSuccess) {
++#if defined(DS4_CUDA_THOR)
++        fprintf(stderr,
++                "ds4: CUDA Q8_0 dispatch: %s (sm_%d%d, unified-memory bandwidth estimate suppressed) [%s]\n",
++                ds4_q8_strategy_name(chosen), props.major, props.minor, reason);
++#else
+         int mem_clock_khz = 0, bus_width_bits = 0;
+         (void)cudaDeviceGetAttribute(&mem_clock_khz,   cudaDevAttrMemoryClockRate,       0);
+         (void)cudaDeviceGetAttribute(&bus_width_bits,  cudaDevAttrGlobalMemoryBusWidth,  0);
+         const double bw_gbps = (mem_clock_khz > 0 && bus_width_bits > 0)
+             ? 2.0 * (double)mem_clock_khz * (double)bus_width_bits / 8.0 / 1.0e6
+             : 0.0;
+         fprintf(stderr,
+                 "ds4: CUDA Q8_0 dispatch: %s (sm_%d%d, %.0f GB/s memory bandwidth) [%s]\n",
+                 ds4_q8_strategy_name(chosen), props.major, props.minor, bw_gbps, reason);
++#endif
+     } else {
+         fprintf(stderr, "ds4: CUDA Q8_0 dispatch: %s [%s]\n", ds4_q8_strategy_name(chosen), reason);
+     }

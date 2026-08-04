@@ -1,0 +1,30 @@
+diff --git a/ds4_cuda.cu b/ds4_cuda.cu
+--- a/ds4_cuda.cu
++++ b/ds4_cuda.cu
+@@ -9094,8 +9094,26 @@ static uint32_t attention_decode_hg_n_split(uint32_t n_head) {
+     const uint32_t groups = n_head / DS4_ATTN_HG_HEADS;
+     const uint32_t sm = g_cuda_sm_count > 0 ? (uint32_t)g_cuda_sm_count : 48u;
+     uint32_t ns = (2u * sm + groups - 1u) / groups;
++    const char *override_value = getenv("DS4_CUDA_ATTN_HG_SPLIT_N");
+     if (ns < 4u) ns = 4u;
+     if (ns > 16u) ns = 16u;
++    if (override_value != NULL) {
++        const int requested = atoi(override_value);
++        if (requested >= 1 && requested <= 16) ns = (uint32_t)requested;
++    }
++    static int logged = 0;
++    if (!logged) {
++        logged = 1;
++        if (override_value != NULL) {
++            fprintf(stderr,
++                    "ds4: attention HG split=%u (override=%s sm=%u groups=%u)\n",
++                    ns, override_value, sm, groups);
++        } else {
++            fprintf(stderr,
++                    "ds4: attention HG split=%u (auto sm=%u groups=%u)\n",
++                    ns, sm, groups);
++        }
++    }
+     return ns;
+ }
+ 

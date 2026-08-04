@@ -1,0 +1,22 @@
+diff --git a/cuda/mmq/ds4_mmq_d2r.cu b/cuda/mmq/ds4_mmq_d2r.cu
+index d36b4ac..1f46912 100644
+--- a/cuda/mmq/ds4_mmq_d2r.cu
++++ b/cuda/mmq/ds4_mmq_d2r.cu
+@@ -2250,7 +2250,7 @@ __global__ __launch_bounds__(kThreads, 2)
+ }
+ 
+ template <int TileN, int BaseTileN>
+-__global__ __launch_bounds__(kThreads, 2)
++__global__ __launch_bounds__(kThreads, 3)
+ void down_q2k_d2r_kernel(const void * __restrict__ W_soa,
+                          const block_q8_1_mmq * __restrict__ q8,
+                          const int32_t * __restrict__ ids_dst,
+@@ -2514,7 +2514,7 @@ void gateup_iq2_d2r_pair_kernel(const void * __restrict__ gate_soa,
+ }
+ 
+ template <int TileN, int BaseTileN>
+-__global__ __launch_bounds__(kThreads, 2)
++__global__ __launch_bounds__(kThreads, 3)
+ void gateup_iq2_swiglu_q8_d2r_kernel(
+         const void * __restrict__ gate_soa,
+         const void * __restrict__ up_soa,

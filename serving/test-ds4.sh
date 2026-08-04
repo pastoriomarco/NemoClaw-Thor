@@ -69,7 +69,9 @@ quality_case() {
                 <<<"$content" >/dev/null; then passed=1; fi
             ;;
         logic)
-            if [[ "$(xargs <<<"$content")" == "C" ]]; then passed=1; fi
+            # Accept the requested letter with conventional multiple-choice
+            # punctuation; both "C" and "C)" express the same selected option.
+            if grep -Eq '^C[.)]?$' <<<"$(xargs <<<"$content")"; then passed=1; fi
             ;;
         *)
             die "unknown quality check: ${label}"

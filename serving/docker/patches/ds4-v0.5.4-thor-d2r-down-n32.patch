@@ -1,0 +1,66 @@
+diff --git a/cuda/mmq/ds4_mmq_d2r.cu b/cuda/mmq/ds4_mmq_d2r.cu
+index d36b4ac..03fa13c 100644
+--- a/cuda/mmq/ds4_mmq_d2r.cu
++++ b/cuda/mmq/ds4_mmq_d2r.cu
+@@ -37,7 +37,7 @@ static bool d2r_stats_enabled() {
+ }
+ 
+ constexpr int kMTile      = 128;
+-constexpr int kNTile      = 64;
++constexpr int kNTile      = 32;
+ constexpr int kWarps      = 8;
+ constexpr int kThreads    = 32 * kWarps;
+ constexpr int kStages     = 2;
+@@ -60,7 +60,7 @@ constexpr int kQ8PrefetchItems = kNFrag * 8 * 9;
+ constexpr int kQ8PrefetchTrips = (kQ8PrefetchItems + kThreads - 1) / kThreads;
+ constexpr int kRawCopyTrips = (kRawCopyChunks + 31) / 32;
+ 
+-static_assert(kNTile == 64, "D2R production path is CFG1 NT64 only");
++static_assert(kNTile == 32, "Thor D2R down-tile candidate is NT32");
+ 
+ static void d2r_print_fill_stats(const char *tag, const int32_t *expert_bounds_dev,
+                                  int n_experts, int64_t ne_get_rows,
+@@ -93,7 +93,7 @@ static void d2r_print_fill_stats(const char *tag, const int32_t *expert_bounds_dev,
+ }
+ static_assert(kStages == 2, "D2R raw-ring schedule expects exactly two q8 stages");
+ static_assert(kThreads == 256, "D2R CTA is fixed at 256 threads");
+-static_assert(kQ8PrefetchTrips == 3, "unexpected q8 issue trip count");
++static_assert(kQ8PrefetchTrips == 2, "unexpected q8 issue trip count");
+ static_assert(kRawCopyTrips == 5, "unexpected raw-ring issue trip count");
+ static_assert(kIQ2RawQCodeTrips == 4, "unexpected IQ2 raw-ring issue trip count");
+ 
+@@ -327,9 +327,9 @@ __device__ __forceinline__ void issue_q8_prefetch_one(
+         const char * __restrict__ q8_iter_base,
+         int col_count, int stage, int t) {
+     constexpr int cols = kNFrag * 8;
+-    static_assert(cols == 64, "NT64 q8 prefetch mapping expects 64 columns");
++    static_assert(cols == 32 || cols == 64, "unsupported Q8 prefetch column count");
+     const int col_local = t & (cols - 1);
+-    const int chunk = t >> 6;
++    const int chunk = t / cols;
+     const int nf = col_local >> 3;
+     const int c = col_local & 7;
+     const bool valid = FullTile ? true : (col_local < col_count);
+@@ -378,11 +378,11 @@ __device__ __forceinline__ void issue_q8_prefetch_one_fast(
+         const char * __restrict__ q8_iter_base,
+         int stage, int t) {
+     constexpr int cols = kNFrag * 8;
+-    static_assert(cols == 64, "NT64 q8 prefetch mapping expects 64 columns");
++    static_assert(cols == 32 || cols == 64, "unsupported Q8 prefetch column count");
+     const int col_local = t & (cols - 1);
+     const int c = col_local & 7;
+     const int nf = col_local >> 3;
+-    const int chunk = t >> 6;
++    const int chunk = t / cols;
+     void *dst = (char *)&s_q8[stage][nf][c] + chunk * 16;
+     const void *src = q8_iter_base + (uint64_t)col_local * sizeof(block_q8_1_mmq) + chunk * 16;
+     cp_async_16B(dst, src, true);
+@@ -2852,7 +2852,7 @@ int ds4_mmq_q2_K_moe_d2r_launch(const void *W_soa,
+     const dim3 block(32, kWarps, 1);
+     const unsigned row_tiles = (unsigned)((M + kMTile - 1) / kMTile);
+     const dim3 grid(row_tiles, (unsigned)capacity64, 1);
+-    down_q2k_d2r_kernel<64, kNTile><<<grid, block, 0, stream>>>(
++    down_q2k_d2r_kernel<kNTile, kNTile><<<grid, block, 0, stream>>>(
+         W_soa, (const block_q8_1_mmq *)q8, ids_dst, expert_bounds,
+         work, n_items, out,
+         M, K, (int)ne_get_rows, n_experts);

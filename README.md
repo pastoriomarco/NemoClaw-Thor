@@ -226,6 +226,29 @@ profile:
 If you can't use NVFP4 at all (no HF token, or prefer FP8 weights), run:
 `./serving/start-model.sh qwen3.6-35b-a3b-fp8-dflash`.
 
+### Containerized DeepSeek-V4-Flash-0731 / DS4
+
+DS4 is an alternative, isolated Docker service rather than a vLLM model
+profile. It preserves the active vLLM/ManyForge service on `:8000` and serves
+the matching 0731 base + DSpark drafter on `127.0.0.1:8050` by default:
+
+```bash
+./serving/start-ds4.sh start
+./serving/start-ds4.sh logs
+```
+
+For a LAN client, bind only Thor's intended LAN address:
+
+```bash
+DS4_BIND_ADDRESS=192.168.1.136 ./serving/start-ds4.sh start
+```
+
+The first start builds the `sm_110` image inside Docker and resumes the model
+download into `~/thor-hf-cache/ds4/`; later starts reuse the persistent weights
+and KV cache. The current tested settings, container files, operations, and
+Thor-specific safety limits are in
+[`serving/docs/DS4-ON-THOR.md`](serving/docs/DS4-ON-THOR.md).
+
 ## Architecture
 
 ```
@@ -276,6 +299,7 @@ a production bundle of the vLLM image with baked-in JIT caches.
 | Build/rebuild TRT-Edge-LLM | `cd serving/docker && ./build-trt.sh` | `Dockerfile.trt` | `nemoclaw-thor/trt-edge-llm:<tag>` + `:latest` |
 | Build vLLM production bundle | `cd serving/docker && ./bundle.sh` | `Dockerfile.bundle` | `nemoclaw-thor/vllm:<tag>-bundled` |
 | Add a package without full rebuild | `cd serving/docker && docker build -f Dockerfile.overlay -t nemoclaw-thor/vllm:latest .` | `Dockerfile.overlay` | overrides `:latest` |
+| Build DS4 alternative service | `./serving/start-ds4.sh build` | `serving/docker/Dockerfile.ds4` | `nemoclaw-thor/ds4:v0.5.4-sm110-thor` |
 
 Each `build-*.sh` accepts `--help` for arg reference. Both vLLM and TRT
 builds share apt cache (`id=apt-cache-thor`) and pip cache mounts so package

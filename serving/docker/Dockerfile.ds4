@@ -9,7 +9,7 @@
 ARG CUDA_BASE_BUILD=nvcr.io/nvidia/cuda@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92
 ARG CUDA_BASE_RUNTIME=nvcr.io/nvidia/cuda@sha256:c3fde347d52d578c84fd644bc177bc7ec333feaf11550d990da4084d7612e4c7
 ARG DS4_REPO=https://github.com/Entrpi/ds4.git
-ARG DS4_REF=161b23609ab8a928246d268cec61101007f678b3
+ARG DS4_REF=215af2f1245324bcebf9a69a498eff79275aac8e
 ARG CUDA_ARCH=sm_110
 
 FROM ${CUDA_BASE_BUILD} AS builder
@@ -27,11 +27,79 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt
-RUN git clone --depth 1 --branch v0.5.1 "${DS4_REPO}" ds4 \
+RUN git clone --depth 1 --branch v0.5.4 "${DS4_REPO}" ds4 \
     && cd ds4 \
     && test "$(git rev-parse HEAD)" = "${DS4_REF}" \
     && make -j"$(nproc)" cuda CUDA_ARCH="${CUDA_ARCH}" \
     && printf 'ds4_ref=%s\ncuda_arch=%s\n' "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
+
+# Accepted Thor profile. It starts from the pinned, already built source stage
+# so the `runtime` rollback remains byte-for-byte upstream v0.5.4. The Compose
+# recipe selects this target by default and always uses a distinct image tag.
+FROM builder AS thor-topk-builder
+
+ARG CUDA_ARCH
+COPY docker/patches/ds4-v0.5.4-thor-topk-deterministic256.patch /tmp/ds4-thor.patch
+COPY docker/patches/ds4-v0.5.4-thor-attn-hg-split.patch /tmp/ds4-thor-attn.patch
+COPY docker/patches/ds4-v0.5.4-thor-profile.patch /tmp/ds4-thor-profile.patch
+RUN cd /opt/ds4 \
+    && git apply --check /tmp/ds4-thor.patch \
+    && git apply /tmp/ds4-thor.patch \
+    && git apply --check /tmp/ds4-thor-attn.patch \
+    && git apply /tmp/ds4-thor-attn.patch \
+    && git apply --check /tmp/ds4-thor-profile.patch \
+    && git apply /tmp/ds4-thor-profile.patch \
+    && make -j"$(nproc)" cuda CUDA_ARCH="${CUDA_ARCH}" \
+         NVCC_EXTRA_FLAGS="-DDS4_CUDA_THOR=1 -DDS4_CUDA_THOR_TOPK_DETERMINISTIC256=1" \
+    && printf 'ds4_ref=%s\ncuda_arch=%s\nprofile=thor-topkdet256-attnhg\n' \
+         "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
+
+# Isolated D2R geometry candidate. This inherits the accepted deterministic
+# selector and attention diagnostic hook, then changes only the fused IQ2
+# gate/up column tile from 32 to 16. The upstream down-projection tile remains
+# 64 columns. Keeping it as a separate stage prevents the candidate from
+# leaking into the stable or accepted-selector image.
+FROM thor-topk-builder AS thor-d2r-fused16-builder
+
+ARG CUDA_ARCH
+COPY docker/patches/ds4-v0.5.4-thor-d2r-fused-n16.patch /tmp/ds4-thor-d2r.patch
+RUN cd /opt/ds4 \
+    && git apply --check /tmp/ds4-thor-d2r.patch \
+    && git apply /tmp/ds4-thor-d2r.patch \
+    && make -j"$(nproc)" cuda CUDA_ARCH="${CUDA_ARCH}" \
+         NVCC_EXTRA_FLAGS="-DDS4_CUDA_THOR=1 -DDS4_CUDA_THOR_TOPK_DETERMINISTIC256=1" \
+    && printf 'ds4_ref=%s\ncuda_arch=%s\nprofile=thor-topkdet256-attnhg-d2rfused16\n' \
+         "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
+
+# Independent D2R down-projection geometry candidate. This starts from the
+# accepted selector image, not the rejected fused-16 variant, so only the Q2_K
+# routed-expert down tile changes from 64 to 32 columns.
+FROM thor-topk-builder AS thor-d2r-down32-builder
+
+ARG CUDA_ARCH
+COPY docker/patches/ds4-v0.5.4-thor-d2r-down-n32.patch /tmp/ds4-thor-d2r.patch
+RUN cd /opt/ds4 \
+    && git apply --check /tmp/ds4-thor-d2r.patch \
+    && git apply /tmp/ds4-thor-d2r.patch \
+    && make -j"$(nproc)" cuda CUDA_ARCH="${CUDA_ARCH}" \
+         NVCC_EXTRA_FLAGS="-DDS4_CUDA_THOR=1 -DDS4_CUDA_THOR_TOPK_DETERMINISTIC256=1" \
+    && printf 'ds4_ref=%s\ncuda_arch=%s\nprofile=thor-topkdet256-attnhg-d2rdown32\n' \
+         "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
+
+# Independent occupancy candidate: keep the accepted 64/32 column geometry,
+# but ask ptxas to make three routed-expert CTAs resident per SM. Resource
+# usage is inspected before this target is allowed to load the model.
+FROM thor-topk-builder AS thor-d2r-occupancy3-builder
+
+ARG CUDA_ARCH
+COPY docker/patches/ds4-v0.5.4-thor-d2r-occupancy3.patch /tmp/ds4-thor-d2r.patch
+RUN cd /opt/ds4 \
+    && git apply --check /tmp/ds4-thor-d2r.patch \
+    && git apply /tmp/ds4-thor-d2r.patch \
+    && make -j"$(nproc)" cuda CUDA_ARCH="${CUDA_ARCH}" \
+         NVCC_EXTRA_FLAGS="-DDS4_CUDA_THOR=1 -DDS4_CUDA_THOR_TOPK_DETERMINISTIC256=1" \
+    && printf 'ds4_ref=%s\ncuda_arch=%s\nprofile=thor-topkdet256-attnhg-d2rocc3\n' \
+         "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
 
 FROM ${CUDA_BASE_RUNTIME} AS runtime
 
@@ -56,8 +124,9 @@ ENV DS4_MODEL_DIR=/data/models/ds4 \
     DS4_DSPARK_FILE=DSpark-drafter-Q2K-Q8-0731.gguf \
     DS4_HOST=0.0.0.0 \
     DS4_PORT=8050 \
-    DS4_CTX=262144 \
-    DS4_CUDA_NO_TOPK_STREAM=1 \
+    DS4_CTX=524288 \
+    DS4_MEM_FLOOR_GB=8 \
+    DS4_NO_UPDATE_CHECK=1 \
     DS4_KV_DISK_DIR=/data/models/ds4/kv-cache \
     DS4_KV_DISK_SPACE_MB=8192
 
@@ -65,3 +134,36 @@ VOLUME ["/data/models/ds4"]
 EXPOSE 8050
 
 ENTRYPOINT ["/usr/local/bin/ds4-entrypoint"]
+
+# This final target overwrites only the Entrpi artifacts. The unmodified
+# `runtime` target above remains available for rollback and never includes the
+# Thor patches.
+FROM runtime AS runtime-thor-topk
+COPY --from=thor-topk-builder /opt/ds4/ds4-server /usr/local/bin/ds4-server
+COPY --from=thor-topk-builder /opt/ds4/ds4-bench /usr/local/bin/ds4-bench
+COPY --from=thor-topk-builder /opt/ds4/LICENSE /usr/share/licenses/ds4/LICENSE
+COPY --from=thor-topk-builder /opt/ds4-build.txt /etc/ds4-build.txt
+
+# Experimental fused-gate/up TileN=16 image. Select it explicitly with
+# DS4_BUILD_TARGET=runtime-thor-d2r-fused16 and a distinct DS4_IMAGE tag.
+FROM runtime AS runtime-thor-d2r-fused16
+COPY --from=thor-d2r-fused16-builder /opt/ds4/ds4-server /usr/local/bin/ds4-server
+COPY --from=thor-d2r-fused16-builder /opt/ds4/ds4-bench /usr/local/bin/ds4-bench
+COPY --from=thor-d2r-fused16-builder /opt/ds4/LICENSE /usr/share/licenses/ds4/LICENSE
+COPY --from=thor-d2r-fused16-builder /opt/ds4-build.txt /etc/ds4-build.txt
+
+# Experimental Q2_K down TileN=32 image. Select it explicitly with
+# DS4_BUILD_TARGET=runtime-thor-d2r-down32 and a distinct DS4_IMAGE tag.
+FROM runtime AS runtime-thor-d2r-down32
+COPY --from=thor-d2r-down32-builder /opt/ds4/ds4-server /usr/local/bin/ds4-server
+COPY --from=thor-d2r-down32-builder /opt/ds4/ds4-bench /usr/local/bin/ds4-bench
+COPY --from=thor-d2r-down32-builder /opt/ds4/LICENSE /usr/share/licenses/ds4/LICENSE
+COPY --from=thor-d2r-down32-builder /opt/ds4-build.txt /etc/ds4-build.txt
+
+# Experimental three-CTA/SM D2R image. Select it explicitly with
+# DS4_BUILD_TARGET=runtime-thor-d2r-occupancy3 and a distinct image tag.
+FROM runtime AS runtime-thor-d2r-occupancy3
+COPY --from=thor-d2r-occupancy3-builder /opt/ds4/ds4-server /usr/local/bin/ds4-server
+COPY --from=thor-d2r-occupancy3-builder /opt/ds4/ds4-bench /usr/local/bin/ds4-bench
+COPY --from=thor-d2r-occupancy3-builder /opt/ds4/LICENSE /usr/share/licenses/ds4/LICENSE
+COPY --from=thor-d2r-occupancy3-builder /opt/ds4-build.txt /etc/ds4-build.txt

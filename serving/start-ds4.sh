@@ -7,7 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/ds4-compose.yml"
 COMPOSE=(docker compose --project-name nemoclaw-ds4 -f "${COMPOSE_FILE}")
 
-export DS4_IMAGE="${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.1-sm110-cu130}"
+export DS4_IMAGE="${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.4-sm110-thor}"
+export DS4_BUILD_TARGET="${DS4_BUILD_TARGET:-runtime-thor-topk}"
 export DS4_MODEL_DIR="${DS4_MODEL_DIR:-${HOME}/thor-hf-cache/ds4}"
 export DS4_HOST_PORT="${DS4_HOST_PORT:-8050}"
 export DS4_BIND_ADDRESS="${DS4_BIND_ADDRESS:-127.0.0.1}"
@@ -23,7 +24,7 @@ Usage: ./serving/start-ds4.sh [start|build|download|status|logs|smoke|test|stop]
 
   start     Build the image if needed, resume/download the model pair, then
             start DS4 on 127.0.0.1:8050 (default).
-  build     Build the pinned DS4 v0.5.1 image for sm_110 only.
+  build     Build the pinned Thor-tuned DS4 v0.5.4 image for sm_110 only.
   download  Start or resume the persistent 0731 base + DSpark downloads.
   status    Show Compose service state.
   logs      Follow DS4 server logs.
@@ -32,7 +33,11 @@ Usage: ./serving/start-ds4.sh [start|build|download|status|logs|smoke|test|stop]
   stop      Stop only the DS4 Compose project; model and KV files remain.
 
 Useful overrides: DS4_MODEL_DIR, DS4_HOST_PORT, DS4_BIND_ADDRESS, DS4_CTX,
-DS4_BATCH_VMM_BUDGET_MB, DS4_SERVER_COALESCE_MAX.
+DS4_BATCH_VMM_BUDGET_MB, DS4_MEM_FLOOR_GB, DS4_SERVER_COALESCE_MAX,
+DS4_SERVER_COALESCE_MAX_TOKENS, DS4_CONT_PREFILL_CHUNK. The upstream rollback
+uses DS4_BUILD_TARGET=runtime plus a distinct DS4_IMAGE tag. Diagnostics also
+use DS4_CUDA_NO_TOPK_STREAM, DS4_CUDA_TOPK_STREAM, and DS4_CUDA_TOPK_STREAM_VERIFY.
+Attention tuning candidates additionally use DS4_CUDA_ATTN_HG_SPLIT_N.
 EOF
 }
 
@@ -58,7 +63,7 @@ check_port() {
 }
 
 build() {
-    info "Building ${DS4_IMAGE} (Entrpi/ds4 v0.5.1, CUDA_ARCH=sm_110)."
+    info "Building ${DS4_IMAGE} target=${DS4_BUILD_TARGET} (Entrpi/ds4 v0.5.4, CUDA_ARCH=sm_110)."
     "${COMPOSE[@]}" build ds4
 }
 
@@ -83,7 +88,7 @@ smoke() {
     echo
     curl --fail --silent --show-error \
         -H 'Content-Type: application/json' \
-        -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"What is the capital of France? Answer in one word."}],"max_tokens":16,"temperature":0}' \
+        -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"What is the capital of France? Answer in one word."}],"max_tokens":16,"temperature":0}' \
         "${base_url}/v1/chat/completions"
     echo
 }

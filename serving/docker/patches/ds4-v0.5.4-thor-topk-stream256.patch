@@ -1,0 +1,76 @@
+diff --git a/ds4_cuda.cu b/ds4_cuda.cu
+index 7b355b0..0ecf063 100644
+--- a/ds4_cuda.cu
++++ b/ds4_cuda.cu
+@@ -15297,6 +15297,15 @@ __global__ static void indexer_topk_merge_groups_kernel(
+  * adjudicated as a tool artifact of the load-fed-predicate pattern —
+  * elimination dossier in brief-v05-arc.md 2026-07-28). */
+-__global__ static void __launch_bounds__(512) indexer_topk_stream512_kernel(
++#if defined(DS4_CUDA_THOR_TOPK_STREAM256)
++#define DS4_TOPK_STREAM_THREADS 256u
++#define DS4_TOPK_STREAM_ITEMS   8u
++#else
++#define DS4_TOPK_STREAM_THREADS 512u
++#define DS4_TOPK_STREAM_ITEMS   4u
++#endif
++
++__global__ static void __launch_bounds__(DS4_TOPK_STREAM_THREADS)
++indexer_topk_stream512_kernel(
+         uint32_t *selected,
+         const float *scores,
+         uint32_t n_comp,
+@@ -15310,7 +15319,7 @@ __global__ static void __launch_bounds__(512) indexer_topk_stream512_kernel(
+          * identical, so eager and captured selections are byte-identical. */
+         const struct ds4_layer_scalars *ls) {
+-    constexpr uint32_t STREAM_THREADS = 512u;
+-    constexpr uint32_t STREAM_ITEMS = 4u;
++    constexpr uint32_t STREAM_THREADS = DS4_TOPK_STREAM_THREADS;
++    constexpr uint32_t STREAM_ITEMS = DS4_TOPK_STREAM_ITEMS;
+     constexpr uint32_t STREAM_CAP = STREAM_THREADS * STREAM_ITEMS;   /* 2048 */
+     using StreamSort = cub::BlockRadixSort<uint64_t, STREAM_THREADS, STREAM_ITEMS>;
+     /* buf and the cub scratch are deliberately SEPARATE regions: an earlier
+@@ -15318,6 +15327,8 @@ __global__ static void __launch_bounds__(512) indexer_topk_stream512_kernel(
+      * violates the TempStorage reuse contract (racecheck-confirmed hazards,
+      * in-vivo illegal access).  Keys cross between the regions in registers
+-     * only.  ~33 KB static smem total, 3 blocks/SM. */
++     * only.  The upstream shape uses 512 threads x 4 items.  Thor's optional
++     * shape uses 256 x 8: the same 2048-key capacity and exact order with
++     * half as many CTA threads. */
+     __shared__ uint64_t buf[STREAM_CAP];
+     __shared__ typename StreamSort::TempStorage sort_tmp;
+     __shared__ uint32_t s_cnt;
+@@ -15334,6 +15345,6 @@ __global__ static void __launch_bounds__(512) indexer_topk_stream512_kernel(
+     const uint32_t start = (uint32_t)(((uint64_t)(t + 1u) * 0x9E3779B9u) % n);
+-    /* tile = one read per thread: STREAM_CAP - tile = 1536 leaves 1024 keys
+-     * of slack above the kept top_k, so a compact runs only when the buffer
++    /* tile = one read per thread. Both supported shapes leave at least 1024
++     * keys of slack above top_k, so compaction runs only when the buffer
+      * genuinely fills.  A wider tile with zero slack (CAP - tile == top_k)
+      * degenerates to a full sort per tile at depth — slack, not capacity,
+      * prices the compact cadence (proto receipt topk_diet_timing3 vs 4). */
+@@ -16388,6 +16399,6 @@ static int tensor_index_topk_cuda(struct ds4_tensor *selected,
+      * and rotation read n_index_comp at replay; the row stride stays the
+      * captured band the scorer wrote), eager callers keep the exact-n_comp
+-     * scan.  Grid <<<n_tokens, 512>>> + static smem + zero scratch = the
++     * scan.  A fixed compile-time CTA + static smem + zero scratch is the
+      * capture-stable shape that lifts the >8192-row cont-capture exclusion
+      * (ds4.c eligibility); the chunked tree below survives only as the
+      * DS4_CUDA_NO_TOPK_STREAM forensic escape. */
+@@ -16393,13 +16404,14 @@ static int tensor_index_topk_cuda(struct ds4_tensor *selected,
+     if (top_k == 512u &&
+         getenv("DS4_CUDA_NO_TOPK2048") == NULL &&
+         getenv("DS4_CUDA_NO_TOPK_STREAM") == NULL) {
+-        indexer_topk_stream512_kernel<<<n_tokens, 512, 0, ds4_current_stream()>>>(
++        indexer_topk_stream512_kernel<<<n_tokens, DS4_TOPK_STREAM_THREADS, 0, ds4_current_stream()>>>(
+                 (uint32_t *)selected->ptr,
+                 (const float *)scores->ptr,
+                 n_comp, n_tokens, top_k, ls);
+         static int logged_topk_stream = 0;
+         if (!logged_topk_stream) {
+             logged_topk_stream = 1;
+-            fprintf(stderr, "ds4: indexer topk stream active (first n_comp=%u n_tokens=%u %s)\n",
+-                    n_comp, n_tokens, pc5_active ? "captured" : "eager");
++            fprintf(stderr, "ds4: indexer topk stream active (geometry=%ux%u first n_comp=%u n_tokens=%u %s)\n",
++                    DS4_TOPK_STREAM_THREADS, DS4_TOPK_STREAM_ITEMS,
++                    n_comp, n_tokens, pc5_active ? "captured" : "eager");
+         }

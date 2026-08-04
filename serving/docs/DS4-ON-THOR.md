@@ -1,4 +1,4 @@
-# DeepSeek-V4-Flash-0731 / Entrpi DS4 on Thor
+# Serving recipe: DeepSeek-V4-Flash-0731 / Entrpi DS4 on Thor
 
 This is an isolated Dockerized serving option for Jetson Thor. It is not yet a
 `serving/config.sh` profile and does not change the existing ManyForge proxy
@@ -13,7 +13,8 @@ cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 ./serving/start-ds4.sh logs
 ```
 
-The first command builds `Entrpi/ds4` v0.5.1 inside Docker for `sm_110`, then
+The first command builds the pinned Entrpi/ds4 v0.5.4 source inside Docker for
+`sm_110`, including the validated Thor deterministic top-512 selector, then
 starts a resumable in-container download alongside a DS4 container that waits
 quietly for the complete pair. The weights persist outside the container in
 `~/thor-hf-cache/ds4/`:
@@ -58,30 +59,119 @@ the API contract; arithmetic and logic retain the API default. Set
 
 ## Invariants
 
-- Source is pinned to Entrpi DS4 `v0.5.1` commit
-  `161b23609ab8a928246d268cec61101007f678b3`.
+- Source is pinned to Entrpi DS4 `v0.5.4` commit
+  `215af2f1245324bcebf9a69a498eff79275aac8e`.
 - Build target is exactly `CUDA_ARCH=sm_110`; never use Spark's `sm_121` or
   `sm_121a` target.
+- The default image is `nemoclaw-thor/ds4:v0.5.4-sm110-thor`, built from the
+  `runtime-thor-topk` target. `/etc/ds4-build.txt` records the source, arch,
+  and Thor profile, and the entrypoint enables the replacement selector only
+  when this provenance marker is present.
 - The 0731 base uses only the matching DSpark drafter. The container passes
   `--no-mtp` so the legacy MTP GGUF cannot be paired with it.
-- v0.5.1 trims evicted deep-context VMM pages; we retain a 12 GiB
-  (`DS4_BATCH_VMM_BUDGET_MB`) ceiling and default to a 262,144-token context.
-  On `sm_110`, v0.5.1's streaming top-512 indexer reproducibly raised Xid 13
-  once the compressed index crossed 8,192 rows. The Compose profile sets
-  `DS4_CUDA_NO_TOPK_STREAM=1`, Entrpi's built-in forensic escape to its
-  output-equivalent legacy chunked-tree indexer. With that single change, the
-  same 84,797-token reproducer passed, followed by exact-needle passes at
-  126,215 and 247,065 prompt tokens. No new Xid was logged. The 512K allocation
-  boots, but 512K with this workaround has not been validated and remains
-  experimental.
-- The default continuous-prefill chunk is 4,096 tokens. A cold 4,100-token
-  Thor request measured 476 tok/s without extra swap use; defer the Spark-like
-  8,192-token chunk until the host has substantially more than its current
-  ~9 GiB unified-memory headroom.
+- v0.5.4 trims evicted deep-context VMM pages and adds a live admission floor.
+  We retain a 12 GiB (`DS4_BATCH_VMM_BUDGET_MB`) ceiling, an 8 GiB
+  (`DS4_MEM_FLOOR_GB`) live-free-memory floor, and default to a 524,288-token
+  context. `DS4_SERVER_COALESCE_MAX=2` keeps continuous DSpark serving armed
+  with two safe Thor banks. A four-bank, 2K-prompt concurrency probe reached a
+  CUDA workspace OOM, so the higher Spark-oriented setting is not safe at this
+  512K window. The live memory floor still protects against unsafe additional
+  or deep work.
+  `DS4_NO_UPDATE_CHECK=1` keeps this LAN service from making the upstream daily
+  update request.
+- Entrpi's original atomic streaming top-512 indexer reproducibly raised Xid
+  13 on `sm_110` once the compressed index crossed 8,192 rows. The Thor image
+  replaces it with a bounded 256-thread x 8-item, atomics-free exact merge.
+  Upstream's dual-run verifier matched the safe tree on 1,025 selector calls
+  through a 244K prompt, the needle passed, and the replacement improved a
+  controlled 105K prefill by 10.6% over the tree. Set
+  `DS4_CUDA_NO_TOPK_STREAM=1` only to force the slower tree for diagnosis.
+- The default continuous-prefill chunk and persistent scratch cap are both
+  4,096 tokens. They must move together. At 256K, setting both to 8,192
+  improves a controlled 21K prefill by 3.8%; at 512K the larger scratch leaves
+  only about 2 GiB available and the memory floor correctly forces slow serial
+  fallback. Therefore 512K/4K is the production profile.
+- The numeric 43 GB/s value previously printed by DS4 was an invalid estimate
+  derived from CUDA attributes on unified-memory Thor, and was never used for
+  dispatch. The Thor build suppresses it. Entrpi's bandwidth probe measured
+  roughly 241-245 GB/s read and 227-230 GB/s copy on this device.
 
-## Validated 256K profile
+## HTTP serving benchmark (Thor profile)
 
-The 2026-08-01 depth gate used the 0731 base and matching DSpark drafter with
+On 2026-08-04, the real OpenAI HTTP path was measured three times per leg after
+warmup using the accepted deterministic selector, two banks, a 512K allocation,
+and effective 4K prefill chunks. A fixed local corpus makes candidate
+comparisons reproducible. This does not start engine-side `ds4-bench` alongside
+the service, which would map a second copy of the 80+ GiB model.
+
+| Effective prompt | Output limit | Median prefill | Median decode |
+|---:|---:|---:|---:|
+| 2,414 | 128 | 488.4 tok/s | 23.3 tok/s |
+| 2,415 | 512 | 487.7 tok/s | 24.4 tok/s |
+| 21,052 | 128 | 465.0 tok/s | 23.1 tok/s |
+
+These decode numbers use an easily speculated integer-sequence output and show
+peak DSpark behavior; normal prose/JSON in the earlier comparable HTTP corpus
+measured about 11-12 tok/s. Five consecutive two-request waves at 512K/4K all
+passed (ten requests) with no allocation failure, fallback, Xid, restart, or
+swap growth; about 15 GiB remained available. Four requests previously caused
+a `cudaMallocAsync` workspace failure, so the Compose profile deliberately
+exposes only two banks. This is two-request admission capacity, not a claim
+that two near-512K active sequences can both fit simultaneously.
+
+## Validated near-limit 512K depth
+
+The accepted 512K/4K profile completed a cold exact-retrieval request at
+479,817 prompt tokens on 2026-08-04. Three unique values placed at the early,
+middle, and late eighths of a 1.32 MiB distractor archive were returned exactly:
+
+| Prompt | Output | TTFT | Prefill | Decode | Wall | Result |
+|---:|---:|---:|---:|---:|---:|---|
+| 479,817 | 55 | 1,920.5 s | 249.9 tok/s | 10.5 tok/s | 1,930.4 s | PASS |
+
+The request stayed on the continuous path and produced no fallback, Xid, OOM,
+restart, or swap growth. It also demonstrates the practical limit: 512K is
+real capacity, but a cold ~480K prompt takes about 32 minutes on this Thor.
+Normal coding sessions benefit from retained prefixes and the v0.5.4 warm
+checkpoint behavior, but clients still need timeouts long enough for the first
+deep prefill.
+
+## Optional 256K / 8K performance profile
+
+For a solo coding workload that needs no more than 256K, both effective chunk
+knobs may be increased together:
+
+```bash
+DS4_CTX=262144 \
+DS4_SERVER_COALESCE_MAX_TOKENS=8192 \
+DS4_CONT_PREFILL_CHUNK=8192 \
+./serving/start-ds4.sh start
+```
+
+This measured 483.0 tok/s at a 21K prompt versus 465.2 for 4K chunks (+3.8%)
+and passed three two-request waves without fallback or memory errors. Do not
+combine 8K chunks with the 512K allocation on this 128 GB Thor.
+
+## Rollback
+
+The unmodified Entrpi binary remains buildable as a distinct image. It keeps
+the safe-tree selector by default:
+
+```bash
+DS4_BUILD_TARGET=runtime \
+DS4_IMAGE=nemoclaw-thor/ds4:v0.5.4-sm110-upstream \
+./serving/start-ds4.sh start
+```
+
+For a selector-only diagnostic on the normal Thor image, use
+`DS4_CUDA_NO_TOPK_STREAM=1`. Never reuse the normal Thor image tag for the
+upstream target, because Docker tags—not target names—identify the resulting
+runtime image.
+
+## Historical 256K safe-tree depth gate
+
+Before the replacement selector was implemented, the 2026-08-01 depth gate
+used the 0731 base and matching DSpark drafter with
 `DS4_CTX=262144`, 4,096-token prefill chunks, capture enabled, and only
 `DS4_CUDA_NO_TOPK_STREAM=1` changed from the failing baseline:
 
@@ -91,18 +181,20 @@ The 2026-08-01 depth gate used the 0731 base and matching DSpark drafter with
 | 126,215 | exact needle | 382.9 s | 329.7 tok/s | 13.0 tok/s | 100.0% |
 | 247,065 | exact needle | 962.1 s | 257.2 tok/s | 9.2 tok/s | 83.3% |
 
-The last row validates practical use of a 256K window while retaining about
+The last row validated practical use of a 256K window while retaining about
 15K tokens for output and protocol overhead. The two deeper requests used
 retained-prefix cuts of 47,283 and 69,793 tokens even though the API reported
 `cached_tokens=0`; their rates are DS4's total-prompt accounting for an
 iterative-context workload, not independent cold-prefill benchmarks. The
-247K request still took about 16 minutes to return on one Thor.
+247K request still took about 16 minutes to return on one Thor. The current
+atomics-free selector later matched the tree on 1,025 dual-run calls through a
+244K prompt, retrieved the needles, and became the default described above.
 
 For Cline on the laptop, use:
 
 - Base URL: `http://192.168.1.136:8050/v1`
-- Model ID: `deepseek-chat`
-- Context Window Size: `262144`
+- Model ID: `deepseek-v4-flash` (the ID advertised by `/v1/models`)
+- Context Window Size: `524288`
 - API key: any non-empty placeholder (DS4 itself does not authenticate)
 
 Keep Cline's maximum output tokens within the remaining context budget; 8,192
