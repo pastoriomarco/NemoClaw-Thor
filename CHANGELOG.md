@@ -48,6 +48,13 @@ for direction.
 
 ### Changed
 
+- **Dockerized DS4 alternative upgraded to Entrpi v0.5.5** at a pinned commit,
+  still compiled only for Thor `sm_110`. The default now uses Entrpi's repaired
+  streaming top-512 selector and v0.5.5 admission accounting; the verified
+  v0.5.4 atomics-free image remains reproducible as a rollback target. A small
+  container patch preserves `finish_reason=length` when the continuous OpenAI
+  path exhausts `max_tokens` inside a tool call. New gates cover selector
+  parity, 244K retrieval, queued concurrency, and buffered/SSE tool cutoffs.
 - **NemoClaw / OpenShell / OpenClaw pinning bumped** in
   [`VERSIONS.md`](VERSIONS.md): NemoClaw `lkg` (v0.0.55), OpenShell
   CLI 0.0.44, OpenClaw 2026.5.22, OpenShell driver `docker` (no k3s).

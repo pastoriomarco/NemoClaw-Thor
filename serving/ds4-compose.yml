@@ -6,12 +6,14 @@
 
 services:
   ds4-download:
-    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.4-sm110-thor}
+    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.5-sm110-thor}
     build:
       context: .
       dockerfile: docker/Dockerfile.ds4
-      target: ${DS4_BUILD_TARGET:-runtime-thor-topk}
+      target: ${DS4_BUILD_TARGET:-runtime-thor-v055}
       args:
+        DS4_TAG: ${DS4_TAG:-v0.5.5}
+        DS4_REF: ${DS4_REF:-2e9799073e08ea8f89eb1e72c47328ee6d90c6e8}
         CUDA_ARCH: sm_110
     entrypoint: ["/usr/local/bin/ds4-download-weights"]
     user: "${DS4_UID:?start-ds4.sh must set DS4_UID}:${DS4_GID:?start-ds4.sh must set DS4_GID}"
@@ -20,12 +22,14 @@ services:
     restart: "no"
 
   ds4:
-    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.4-sm110-thor}
+    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.5-sm110-thor}
     build:
       context: .
       dockerfile: docker/Dockerfile.ds4
-      target: ${DS4_BUILD_TARGET:-runtime-thor-topk}
+      target: ${DS4_BUILD_TARGET:-runtime-thor-v055}
       args:
+        DS4_TAG: ${DS4_TAG:-v0.5.5}
+        DS4_REF: ${DS4_REF:-2e9799073e08ea8f89eb1e72c47328ee6d90c6e8}
         CUDA_ARCH: sm_110
     runtime: nvidia
     init: true
@@ -41,21 +45,22 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       DS4_PORT: 8050
       DS4_WAIT_FOR_WEIGHTS: "1"
-      # Expose DS4's 524,288-token window. The Thor image supplies the verified
-      # deterministic deep selector; 4K chunks preserve memory headroom.
+      # Expose DS4's 524,288-token window. Entrpi v0.5.5 supplies the repaired,
+      # verified deep selector; 4K chunks preserve memory headroom.
       DS4_CTX: ${DS4_CTX:-524288}
       DS4_KV_DISK_SPACE_MB: ${DS4_KV_DISK_SPACE_MB:-8192}
-      # v0.5.4 trims evicted deep-context VMM pages. Keep a finite ceiling.
+      # Keep a finite demand-mapped VMM ceiling for the two-bank Thor plan.
       DS4_BATCH_VMM_BUDGET_MB: ${DS4_BATCH_VMM_BUDGET_MB:-12288}
-      # v0.5.4 additionally gates admissions against live free unified memory.
+      # Gate admissions against live free unified memory. v0.5.5 also charges
+      # other in-flight projections so queued work cannot double-book it.
       # Keep the runtime floor aligned with the boot-time 8 GiB fit headroom.
       DS4_MEM_FLOOR_GB: ${DS4_MEM_FLOOR_GB:-8}
       # Reproducible LAN service: do not perform the upstream daily update GET.
       DS4_NO_UPDATE_CHECK: "1"
       DS4_BATCH_FIT_HEADROOM_MB: ${DS4_BATCH_FIT_HEADROOM_MB:-8192}
-      # At a 512K window Thor can safely keep two continuous banks. Four 2K
-      # decode requests hit a CUDA workspace OOM (2026-08-03); do not expose
-      # Spark's higher-concurrency profile by default.
+      # At a 512K window Thor can safely keep two continuous banks. v0.5.5 can
+      # queue four callers without the old workspace OOM, but this does not
+      # make four full 512K banks fit; keep the physical bank plan at two.
       DS4_SERVER_COALESCE_MAX: ${DS4_SERVER_COALESCE_MAX:-2}
       # This separately sizes the persistent ragged-prefill scratch. It is not
       # the same knob as DS4_CONT_PREFILL_CHUNK, but both must be set to the
@@ -65,10 +70,9 @@ services:
       # little headroom for continuous serving when combined with 512K.
       DS4_CONT_PREFILL_CHUNK: ${DS4_CONT_PREFILL_CHUNK:-4096}
       DS4_CONT_CAPTURE: ${DS4_CONT_CAPTURE:-1}
-      # The default Thor build contains the bounded, atomics-free deterministic
-      # top-512 selector and enables it automatically from /etc/ds4-build.txt.
-      # Set NO_TOPK_STREAM=1 to force Entrpi's slower safe tree for diagnosis.
-      # The upstream rollback image also defaults to the safe tree.
+      # The default Thor build uses Entrpi v0.5.5's repaired streaming top-512
+      # selector and enables it from the pinned provenance marker. Set
+      # NO_TOPK_STREAM=1 to force the slower safe tree for diagnosis.
       DS4_CUDA_NO_TOPK_STREAM: ${DS4_CUDA_NO_TOPK_STREAM:-0}
       DS4_CUDA_TOPK_STREAM: ${DS4_CUDA_TOPK_STREAM:-}
       DS4_CUDA_TOPK_STREAM_VERIFY: ${DS4_CUDA_TOPK_STREAM_VERIFY:-0}

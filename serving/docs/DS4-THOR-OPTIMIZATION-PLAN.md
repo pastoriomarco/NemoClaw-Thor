@@ -2,8 +2,9 @@
 
 **Started:** 2026-08-04
 **Status:** Complete
-**Target:** Entrpi/ds4 v0.5.4, DeepSeek-V4-Flash-0731 plus the matching
-DSpark drafter, Jetson T5000 (`sm_110`, 128 GB unified memory)
+**Initial target:** Entrpi/ds4 v0.5.4; **current accepted target:** v0.5.5,
+DeepSeek-V4-Flash-0731 plus the matching DSpark drafter, Jetson T5000
+(`sm_110`, 128 GB unified memory)
 
 This plan turns the working Dockerized DS4 service into an explicitly
 Thor-tuned implementation. It does not change the ManyForge `:8000` serving
@@ -12,23 +13,24 @@ lane. Experiments use the existing external weights under
 
 ## Accepted Thor profile
 
-- Source: Entrpi/ds4 v0.5.4 at
-  `215af2f1245324bcebf9a69a498eff79275aac8e`.
+- Source: Entrpi/ds4 v0.5.5 at
+  `2e9799073e08ea8f89eb1e72c47328ee6d90c6e8`.
 - Build: CUDA 13, generic `sm_110` SASS. Spark `sm_121`/`sm_121a` is forbidden.
 - API: OpenAI-compatible service on port 8050.
 - Context allocation: 524,288 tokens.
 - Continuous banks: two.
 - Prefill chunk: 4,096 tokens.
-- Deep selector: bounded atomics-free deterministic 256 x 8 exact merge,
-  enabled automatically only by the Thor image provenance marker. Entrpi's
-  safe tree remains an explicit rollback.
-- Memory protection: 12 GiB batch VMM budget, 8 GiB live-memory floor, 8 GiB
-  fit headroom.
+- Deep selector: Entrpi v0.5.5's repaired streaming exact top-512 selector,
+  enabled automatically only by the Thor image provenance marker. The v0.5.4
+  atomics-free selector and Entrpi's safe tree remain explicit rollbacks.
+- Memory protection: deterministic two-bank plan, outstanding-projection
+  admission accounting, 12 GiB batch VMM budget, 8 GiB live-memory floor, and
+  8 GiB fit headroom.
 - Measured fixed HTTP path: 488 tok/s prefill at 2.4K, declining to 465 tok/s
   at 21K; peak easily-speculated DSpark decode is 23-24 tok/s while ordinary
   prose/JSON is about 11-12 tok/s.
-- Validated depth: exact needles through 247K at 256K allocation and at 479,817
-  prompt tokens with the accepted 512K profile.
+- Validated depth: exact needles at 244,518 tokens on v0.5.5 and at 479,817
+  tokens on the prior v0.5.4 512K profile.
 
 The DS4 startup log's 43 GB/s estimate is invalid on Thor. Entrpi's own
 `bench/bw_bench.cu`, compiled for `sm_110`, measured 241-245 GB/s read and
@@ -262,6 +264,38 @@ five consecutive two-request waves (ten requests) with no allocation failure,
 fallback, restart, Xid, or swap growth. About 15 GiB remained available after
 the run. Four-bank 512K operation remains explicitly unsupported.
 
+### Phase 8 — adopt Entrpi v0.5.5 and retire the replacement selector
+
+Entrpi v0.5.5 identifies the v0.5.4 Xid 13 root cause: sibling warps could
+observe different shared-counter values and disagree about whether to compact.
+The upstream fix freezes that verdict under a barrier. Rebuild the pinned tag
+for `sm_110`, compare it with the accepted v0.5.4 Thor selector, and promote it
+only after real-score parity, deep retrieval, admission, and tool-call gates.
+
+Exit gates:
+
+- upstream stream-vs-tree selections are byte-identical on Thor;
+- normal 105K prefill is no slower than the interim Thor selector;
+- exact retrieval passes at 244K without Xid, fallback, OOM, or restart;
+- two-bank serving survives repeated two- and four-caller waves;
+- a tool call cut by `max_tokens` reports `finish_reason=length` in both the
+  buffered and SSE OpenAI paths.
+
+**Result (2026-08-05): complete.** Entrpi v0.5.5 at
+`2e9799073e08ea8f89eb1e72c47328ee6d90c6e8` passed 513 byte-exact selector
+comparisons through 104,676 tokens. Normal 104,738-token prefill reached 411.6
+tok/s, 2.2% above the v0.5.4 deterministic selector and about 13% above the
+safe tree. The final image retrieved all needles at 46,533 tokens (447.1
+tok/s) and 244,518 tokens (348.2 tok/s), with no CUDA or serving failure.
+Five two-caller waves and two four-caller waves completed on the two-bank plan.
+
+The release's serial tool-budget fix was not ported to its continuous resolver:
+a 26-token cutoff still returned `error`. The image therefore carries a small
+server-only patch that preserves the engine's `length` verdict and partial
+assistant text. Buffered and SSE gates now pass and never invoke over-budget
+recovery. The default is `runtime-thor-v055`; the v0.5.4 atomics-free target
+remains available only as rollback evidence.
+
 ## Benchmark matrix
 
 The minimum decision matrix is:
@@ -310,6 +344,13 @@ same unsafe or unproductive experiment is not repeated.
 | 2026-08-04 | Accepted selector at 512K/8K | banks=2, coalesce scratch=8192, chunk=8192, floor=8 GiB | 379.5 tok/s @2.4K serial fallback | 19.9 @128 fallback | Only ~2 GiB available; every continuous admission correctly rejected by memory floor | Rejected: 8K scratch is incompatible with 512K continuous serving on 128 GB |
 | 2026-08-04 | Accepted selector at 512K/4K | banks=2, coalesce scratch=4096, chunk=4096, floor=8 GiB | 488.4 tok/s @2.4K; 465.0 tok/s @21K | 24.4 @512 structured output | Three-repeat matrix plus five two-request waves; ~15 GiB available; no fallback, allocation failure, Xid, restart, or swap | Adopt as 512K production profile |
 | 2026-08-04 | Accepted selector near 512K | 512K, 4K chunk, 1.32 MiB three-needle archive | 249.9 tok/s @479,817 prompt tokens | 10.5 tok/s on 55-token JSON | Exact retrieval; 1,920.5 s TTFT; continuous path; no fallback, Xid, OOM, restart, or swap growth | Near-limit depth gate passed; document cold-latency cost |
+| 2026-08-05 | Entrpi v0.5.5 upstream selector | 512K, 4K chunk, 104,738-token cold prompt | 411.6 tok/s | 18.7 tok/s on 58-token needle JSON | Exact retrieval; no Xid, restart, fallback, or swap | Promote over v0.5.4 selector (+2.2%) |
+| 2026-08-05 | Entrpi v0.5.5 selector verifier | 512K, capture=0, 104,676-token cold prompt | 355.2 tok/s diagnostic | 17.0 tok/s | 513 stream-vs-tree comparisons exact; retrieval passed; no bound trip or CUDA failure | Correctness gate passed |
+| 2026-08-05 | Entrpi v0.5.5 admission accounting | 512K, two banks, five c=2 waves then two c=4 waves | N/A | c=2 aggregate 12.25-13.05; c=4 aggregate 8.29-8.72 tok/s | All 18 requests completed; no fallback, OOM, Xid, restart, or swap growth | Four callers queue safely over two banks |
+| 2026-08-05 | Final v0.5.5 Thor image | 512K, 4K chunk, three-repeat fixed matrix | 488.5 tok/s @2.4K; 465.3 tok/s @21K | 23.4 @128; 24.4 @512 | Deterministic hashes; continuous path; no fallback or CUDA error | No shallow regression |
+| 2026-08-05 | Final v0.5.5 Thor image | 512K, 4K chunk, 46,533-token cold prompt | 447.1 tok/s | 19.5 tok/s on 53-token needle JSON | Exact retrieval; default marker engaged repaired selector; no failure | Intermediate depth gate passed |
+| 2026-08-05 | Final v0.5.5 Thor image | 512K, 4K chunk, 244,518-token cold prompt | 348.2 tok/s | 16.4 tok/s on 54-token needle JSON | Exact retrieval; 702.4 s TTFT; no fallback, Xid, OOM, restart, or swap growth | Deep stability gate passed; +6.2% vs prior selector |
+| 2026-08-05 | v0.5.5 continuous tool-budget patch | OpenAI buffered + SSE, tool emission cut at 26 tokens | N/A | N/A | Both return `finish_reason=length`, partial text, exactly 26 tokens; no recovery continuation | Patch required and accepted |
 
 The 2026-08-04 run followed removal of a 6.7 GiB private-anonymous leak in
 GNOME System Monitor. With the leak present, the same class of two-bank 256K

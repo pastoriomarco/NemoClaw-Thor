@@ -33,20 +33,21 @@ fi
 
 mkdir -p "${DS4_KV_DISK_DIR}"
 
-# These are the upstream v0.5.4 DSpark launch settings.  --no-mtp is
+# These are the upstream v0.5.5 DSpark launch settings.  --no-mtp is
 # deliberate: the legacy MTP GGUF must never be loaded with a 0731 base.
 export DS4_CONT_MTP_MODE="${DS4_CONT_MTP_MODE:-2}"
 export DS4_CONT_DSPARK="${DS4_CONT_DSPARK:-1}"
 export DS4_DSPARK_MODEL="${DS4_DSPARK_MODEL:-${drafter}}"
 
-# The accepted Thor build replaces the faulty atomic selector with a bounded,
-# atomics-free deterministic implementation. Enable it automatically only when
-# the image provenance marker proves that implementation is present. The
-# unmodified upstream image keeps Entrpi's safe tree, and an operator can force
-# that rollback path on either image with DS4_CUDA_NO_TOPK_STREAM=1.
+# The current Thor build uses Entrpi v0.5.5's repaired streaming selector. The
+# historical v0.5.4 Thor profile uses the atomics-free deterministic selector.
+# Enable streaming only when either pinned provenance marker proves a safe
+# implementation is present. A clean upstream image keeps the safe tree unless
+# explicitly enabled, and NO_TOPK_STREAM=1 forces that rollback on any image.
 build_profile="$(sed -n 's/^profile=//p' /etc/ds4-build.txt 2>/dev/null | head -n 1)"
 topk_stream_default=0
-if [[ "${build_profile}" == thor-topkdet256* ]]; then
+if [[ "${build_profile}" == thor-topkdet256* ||
+      "${build_profile}" == thor-upstream055* ]]; then
     topk_stream_default=1
 fi
 if [[ "${DS4_CUDA_NO_TOPK_STREAM:-0}" == "1" ]]; then

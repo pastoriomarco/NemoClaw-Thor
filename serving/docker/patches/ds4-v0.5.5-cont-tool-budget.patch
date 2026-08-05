@@ -1,0 +1,24 @@
+diff --git a/ds4_server.c b/ds4_server.c
+--- a/ds4_server.c
++++ b/ds4_server.c
+@@ -12793,7 +12793,19 @@ static void cont_resolve_chat(server *s, job *j, cont_stream *st,
+         } else {
+             buf_free(&repaired);
+         }
+-        if (!st->saw_tool_end) *fin_io = "error";
++        if (!st->saw_tool_end) {
++            /* v0.5.5 preserves an honest length stop in the serial path, but
++             * its continuous resolver still overwrites that verdict with
++             * error.  Coding harnesses then retry a normal max_tokens cutoff
++             * as a server failure.  Keep the engine's length verdict so the
++             * parser below returns the partial DSML as assistant text. */
++            if (fin_io && *fin_io && !strcmp(*fin_io, "length")) {
++                server_log(DS4_LOG_WARNING,
++                           "ds4-server: cont chat tool call cut by token budget; reporting finish=length");
++            } else {
++                *fin_io = "error";
++            }
++        }
+     }
+     char perr[160] = {0};
+     bool recovered = false;

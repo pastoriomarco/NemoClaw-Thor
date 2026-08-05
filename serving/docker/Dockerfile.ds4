@@ -9,14 +9,11 @@
 ARG CUDA_BASE_BUILD=nvcr.io/nvidia/cuda@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92
 ARG CUDA_BASE_RUNTIME=nvcr.io/nvidia/cuda@sha256:c3fde347d52d578c84fd644bc177bc7ec333feaf11550d990da4084d7612e4c7
 ARG DS4_REPO=https://github.com/Entrpi/ds4.git
-ARG DS4_REF=215af2f1245324bcebf9a69a498eff79275aac8e
+ARG DS4_TAG=v0.5.5
+ARG DS4_REF=2e9799073e08ea8f89eb1e72c47328ee6d90c6e8
 ARG CUDA_ARCH=sm_110
 
 FROM ${CUDA_BASE_BUILD} AS builder
-
-ARG DS4_REPO
-ARG DS4_REF
-ARG CUDA_ARCH
 
 RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,id=apt-lib-thor,sharing=locked \
@@ -26,23 +23,31 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt-cache-thor,sharing=locked \
         git \
     && rm -rf /var/lib/apt/lists/*
 
+ARG DS4_REPO
+ARG DS4_TAG
+ARG DS4_REF
+ARG CUDA_ARCH
+
 WORKDIR /opt
-RUN git clone --depth 1 --branch v0.5.4 "${DS4_REPO}" ds4 \
+RUN git clone --depth 1 --branch "${DS4_TAG}" "${DS4_REPO}" ds4 \
     && cd ds4 \
     && test "$(git rev-parse HEAD)" = "${DS4_REF}" \
     && make -j"$(nproc)" cuda CUDA_ARCH="${CUDA_ARCH}" \
-    && printf 'ds4_ref=%s\ncuda_arch=%s\n' "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
+    && printf 'ds4_tag=%s\nds4_ref=%s\ncuda_arch=%s\n' \
+         "${DS4_TAG}" "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
 
-# Accepted Thor profile. It starts from the pinned, already built source stage
-# so the `runtime` rollback remains byte-for-byte upstream v0.5.4. The Compose
-# recipe selects this target by default and always uses a distinct image tag.
+# Historical v0.5.4 Thor profile. It starts from the pinned, already built
+# source stage so `runtime` remains byte-for-byte upstream for the selected
+# tag. Reproducing this target requires the documented v0.5.4 tag/ref pair.
 FROM builder AS thor-topk-builder
 
+ARG DS4_TAG
 ARG CUDA_ARCH
 COPY docker/patches/ds4-v0.5.4-thor-topk-deterministic256.patch /tmp/ds4-thor.patch
 COPY docker/patches/ds4-v0.5.4-thor-attn-hg-split.patch /tmp/ds4-thor-attn.patch
 COPY docker/patches/ds4-v0.5.4-thor-profile.patch /tmp/ds4-thor-profile.patch
-RUN cd /opt/ds4 \
+RUN test "${DS4_TAG}" = "v0.5.4" \
+    && cd /opt/ds4 \
     && git apply --check /tmp/ds4-thor.patch \
     && git apply /tmp/ds4-thor.patch \
     && git apply --check /tmp/ds4-thor-attn.patch \
@@ -53,6 +58,30 @@ RUN cd /opt/ds4 \
          NVCC_EXTRA_FLAGS="-DDS4_CUDA_THOR=1 -DDS4_CUDA_THOR_TOPK_DETERMINISTIC256=1" \
     && printf 'ds4_ref=%s\ncuda_arch=%s\nprofile=thor-topkdet256-attnhg\n' \
          "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
+
+# Entrpi v0.5.5 repaired the upstream streaming selector. Keep that faster
+# selector, add only Thor diagnostics/attention observability, and close the
+# continuous-path tool-budget gap found by the Thor validation gate.
+FROM builder AS thor-v055-builder
+
+ARG DS4_TAG
+ARG DS4_REF
+ARG CUDA_ARCH
+COPY docker/patches/ds4-v0.5.4-thor-attn-hg-split.patch /tmp/ds4-thor-attn.patch
+COPY docker/patches/ds4-v0.5.4-thor-profile.patch /tmp/ds4-thor-profile.patch
+COPY docker/patches/ds4-v0.5.5-cont-tool-budget.patch /tmp/ds4-tool-budget.patch
+RUN test "${DS4_TAG}" = "v0.5.5" \
+    && cd /opt/ds4 \
+    && git apply --check /tmp/ds4-thor-attn.patch \
+    && git apply /tmp/ds4-thor-attn.patch \
+    && git apply --check /tmp/ds4-thor-profile.patch \
+    && git apply /tmp/ds4-thor-profile.patch \
+    && git apply --check /tmp/ds4-tool-budget.patch \
+    && git apply /tmp/ds4-tool-budget.patch \
+    && make -j"$(nproc)" cuda CUDA_ARCH="${CUDA_ARCH}" \
+         NVCC_EXTRA_FLAGS="-DDS4_CUDA_THOR=1" \
+    && printf 'ds4_tag=%s\nds4_ref=%s\ncuda_arch=%s\nprofile=thor-upstream055-attnhg-toolbudget\n' \
+         "${DS4_TAG}" "${DS4_REF}" "${CUDA_ARCH}" > /opt/ds4-build.txt
 
 # Isolated D2R geometry candidate. This inherits the accepted deterministic
 # selector and attention diagnostic hook, then changes only the fused IQ2
@@ -143,6 +172,14 @@ COPY --from=thor-topk-builder /opt/ds4/ds4-server /usr/local/bin/ds4-server
 COPY --from=thor-topk-builder /opt/ds4/ds4-bench /usr/local/bin/ds4-bench
 COPY --from=thor-topk-builder /opt/ds4/LICENSE /usr/share/licenses/ds4/LICENSE
 COPY --from=thor-topk-builder /opt/ds4-build.txt /etc/ds4-build.txt
+
+# Default v0.5.5 Thor profile: repaired upstream selector plus the bounded
+# Thor-only diagnostic and continuous tool-budget patches above.
+FROM runtime AS runtime-thor-v055
+COPY --from=thor-v055-builder /opt/ds4/ds4-server /usr/local/bin/ds4-server
+COPY --from=thor-v055-builder /opt/ds4/ds4-bench /usr/local/bin/ds4-bench
+COPY --from=thor-v055-builder /opt/ds4/LICENSE /usr/share/licenses/ds4/LICENSE
+COPY --from=thor-v055-builder /opt/ds4-build.txt /etc/ds4-build.txt
 
 # Experimental fused-gate/up TileN=16 image. Select it explicitly with
 # DS4_BUILD_TARGET=runtime-thor-d2r-fused16 and a distinct DS4_IMAGE tag.

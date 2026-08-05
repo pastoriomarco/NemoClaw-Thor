@@ -13,8 +13,8 @@ cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 ./serving/start-ds4.sh logs
 ```
 
-The first command builds the pinned Entrpi/ds4 v0.5.4 source inside Docker for
-`sm_110`, including the validated Thor deterministic top-512 selector, then
+The first command builds the pinned Entrpi/ds4 v0.5.5 source inside Docker for
+`sm_110`, including Entrpi's repaired streaming top-512 selector, then
 starts a resumable in-container download alongside a DS4 container that waits
 quietly for the complete pair. The weights persist outside the container in
 `~/thor-hf-cache/ds4/`:
@@ -46,6 +46,7 @@ Once healthy:
 ```bash
 ./serving/start-ds4.sh smoke
 ./serving/start-ds4.sh test
+./serving/benchmarks/bench-ds4-tool-budget.py
 curl http://127.0.0.1:8050/v1/models
 ```
 
@@ -56,36 +57,48 @@ substitute for the ManyForge tool/concurrency gate below.
 The throughput probe and JSON case use `reasoning_effort=none` so JSON follows
 the API contract; arithmetic and logic retain the API default. Set
 `DS4_TEST_REASONING_EFFORT=` to observe default-mode output throughput instead.
+The separate tool-budget gate deliberately cuts a generated tool call and
+verifies both buffered and SSE responses. It requires access to the local
+Compose container logs as well as the API.
 
 ## Invariants
 
-- Source is pinned to Entrpi DS4 `v0.5.4` commit
-  `215af2f1245324bcebf9a69a498eff79275aac8e`.
+- Source is pinned to Entrpi DS4 `v0.5.5` commit
+  `2e9799073e08ea8f89eb1e72c47328ee6d90c6e8`.
 - Build target is exactly `CUDA_ARCH=sm_110`; never use Spark's `sm_121` or
   `sm_121a` target.
-- The default image is `nemoclaw-thor/ds4:v0.5.4-sm110-thor`, built from the
-  `runtime-thor-topk` target. `/etc/ds4-build.txt` records the source, arch,
-  and Thor profile, and the entrypoint enables the replacement selector only
-  when this provenance marker is present.
+- The default image is `nemoclaw-thor/ds4:v0.5.5-sm110-thor`, built from the
+  `runtime-thor-v055` target. `/etc/ds4-build.txt` records the source, arch,
+  and Thor profile, and the entrypoint enables the repaired selector only when
+  this provenance marker is present.
 - The 0731 base uses only the matching DSpark drafter. The container passes
   `--no-mtp` so the legacy MTP GGUF cannot be paired with it.
-- v0.5.4 trims evicted deep-context VMM pages and adds a live admission floor.
-  We retain a 12 GiB (`DS4_BATCH_VMM_BUDGET_MB`) ceiling, an 8 GiB
+- v0.5.5 retains the live admission floor and makes the KV bank plan
+  deterministic instead of deriving it from noisy free memory at boot. It
+  also charges outstanding in-flight projections, preventing concurrent
+  admissions from double-booking memory. We retain a 12 GiB
+  (`DS4_BATCH_VMM_BUDGET_MB`) ceiling, an 8 GiB
   (`DS4_MEM_FLOOR_GB`) live-free-memory floor, and default to a 524,288-token
   context. `DS4_SERVER_COALESCE_MAX=2` keeps continuous DSpark serving armed
-  with two safe Thor banks. A four-bank, 2K-prompt concurrency probe reached a
-  CUDA workspace OOM, so the higher Spark-oriented setting is not safe at this
-  512K window. The live memory floor still protects against unsafe additional
-  or deep work.
+  with two safe Thor banks. Four simultaneous callers are now queued safely,
+  but that is not evidence that four full 512K banks fit. The live memory floor
+  still protects against unsafe additional or deep work.
   `DS4_NO_UPDATE_CHECK=1` keeps this LAN service from making the upstream daily
   update request.
-- Entrpi's original atomic streaming top-512 indexer reproducibly raised Xid
-  13 on `sm_110` once the compressed index crossed 8,192 rows. The Thor image
-  replaces it with a bounded 256-thread x 8-item, atomics-free exact merge.
-  Upstream's dual-run verifier matched the safe tree on 1,025 selector calls
-  through a 244K prompt, the needle passed, and the replacement improved a
-  controlled 105K prefill by 10.6% over the tree. Set
-  `DS4_CUDA_NO_TOPK_STREAM=1` only to force the slower tree for diagnosis.
+- Entrpi's v0.5.4 atomic streaming top-512 indexer reproducibly raised Xid 13
+  on `sm_110` once the compressed index crossed 8,192 rows. Our interim Thor
+  image replaced it with a bounded atomics-free selector. Entrpi v0.5.5 fixes
+  the actual race by freezing the shared compaction verdict under a barrier.
+  On Thor, 513 dual-run comparisons through a 104,676-token prompt matched the
+  safe tree exactly, retrieval passed, and normal prefill reached 411.6 tok/s.
+  That is 2.2% faster than the interim Thor selector and about 13% faster than
+  the old safe-tree control. The repaired upstream selector is now the
+  default; set `DS4_CUDA_NO_TOPK_STREAM=1` only for diagnosis.
+- v0.5.5 fixes token-budget honesty for incomplete tool calls in the serial
+  request path, but the same release still overwrites `length` with `error` in
+  the continuous path. The Thor image carries a minimal server-only patch that
+  preserves `length` and the partial assistant text. Both buffered and SSE
+  regression legs pass without decoding beyond `max_tokens`.
 - The default continuous-prefill chunk and persistent scratch cap are both
   4,096 tokens. They must move together. At 256K, setting both to 8,192
   improves a controlled 21K prefill by 3.8%; at 512K the larger scratch leaves
@@ -98,30 +111,48 @@ the API contract; arithmetic and logic retain the API default. Set
 
 ## HTTP serving benchmark (Thor profile)
 
-On 2026-08-04, the real OpenAI HTTP path was measured three times per leg after
-warmup using the accepted deterministic selector, two banks, a 512K allocation,
+On 2026-08-05, the real OpenAI HTTP path was measured three times per leg after
+warmup using Entrpi v0.5.5's repaired selector, two banks, a 512K allocation,
 and effective 4K prefill chunks. A fixed local corpus makes candidate
 comparisons reproducible. This does not start engine-side `ds4-bench` alongside
 the service, which would map a second copy of the 80+ GiB model.
 
 | Effective prompt | Output limit | Median prefill | Median decode |
 |---:|---:|---:|---:|
-| 2,414 | 128 | 488.4 tok/s | 23.3 tok/s |
-| 2,415 | 512 | 487.7 tok/s | 24.4 tok/s |
-| 21,052 | 128 | 465.0 tok/s | 23.1 tok/s |
+| 2,416 | 128 | 488.5 tok/s | 23.4 tok/s |
+| 2,414 | 512 | 488.5 tok/s | 24.4 tok/s |
+| 21,052 | 128 | 465.3 tok/s | 23.0 tok/s |
 
 These decode numbers use an easily speculated integer-sequence output and show
 peak DSpark behavior; normal prose/JSON in the earlier comparable HTTP corpus
 measured about 11-12 tok/s. Five consecutive two-request waves at 512K/4K all
-passed (ten requests) with no allocation failure, fallback, Xid, restart, or
-swap growth; about 15 GiB remained available. Four requests previously caused
-a `cudaMallocAsync` workspace failure, so the Compose profile deliberately
-exposes only two banks. This is two-request admission capacity, not a claim
-that two near-512K active sequences can both fit simultaneously.
+passed (ten requests), followed by two four-request waves (eight requests),
+with no allocation failure, fallback, Xid, restart, or swap growth. The
+four-request aggregate decode was 8.29-8.72 tok/s versus 12.25-13.05 tok/s for
+two callers because four jobs contend for two banks. This validates v0.5.5's
+queued admission accounting, not four-bank capacity.
+
+## v0.5.5 long-context gates
+
+Each row below is a cold, uniquely labelled three-needle retrieval request on
+the final 512K/two-bank/4K profile. The values are independent requests rather
+than retained-prefix extensions:
+
+| Prompt | Output | TTFT | Prefill | Decode | Result |
+|---:|---:|---:|---:|---:|---|
+| 46,533 | 53 | 104.1 s | 447.1 tok/s | 19.5 tok/s | PASS |
+| 104,738 | 58 | 254.5 s | 411.6 tok/s | 18.7 tok/s | PASS |
+| 244,518 | 54 | 702.4 s | 348.2 tok/s | 16.4 tok/s | PASS |
+
+The 105K diagnostic rerun also executed both the repaired selector and safe
+tree on every eligible row: all 513 comparisons were byte-identical and the
+needle passed. Its 355.2 tok/s prefill is verifier overhead, not production
+performance. The 244K normal run completed with no fallback, bound trip, Xid,
+OOM, restart, or swap growth.
 
 ## Validated near-limit 512K depth
 
-The accepted 512K/4K profile completed a cold exact-retrieval request at
+The earlier v0.5.4 512K/4K profile completed a cold exact-retrieval request at
 479,817 prompt tokens on 2026-08-04. Three unique values placed at the early,
 middle, and late eighths of a 1.32 MiB distractor archive were returned exactly:
 
@@ -132,7 +163,7 @@ middle, and late eighths of a 1.32 MiB distractor archive were returned exactly:
 The request stayed on the continuous path and produced no fallback, Xid, OOM,
 restart, or swap growth. It also demonstrates the practical limit: 512K is
 real capacity, but a cold ~480K prompt takes about 32 minutes on this Thor.
-Normal coding sessions benefit from retained prefixes and the v0.5.4 warm
+Normal coding sessions benefit from retained prefixes and the v0.5.5 warm
 checkpoint behavior, but clients still need timeouts long enough for the first
 deep prefill.
 
@@ -154,12 +185,22 @@ combine 8K chunks with the 512K allocation on this 128 GB Thor.
 
 ## Rollback
 
-The unmodified Entrpi binary remains buildable as a distinct image. It keeps
-the safe-tree selector by default:
+The unmodified v0.5.5 binary remains buildable as a distinct image. It keeps
+the safe-tree selector by default unless streaming is explicitly enabled:
 
 ```bash
 DS4_BUILD_TARGET=runtime \
-DS4_IMAGE=nemoclaw-thor/ds4:v0.5.4-sm110-upstream \
+DS4_IMAGE=nemoclaw-thor/ds4:v0.5.5-sm110-upstream \
+./serving/start-ds4.sh start
+```
+
+The previous validated atomics-free v0.5.4 Thor image remains reproducible:
+
+```bash
+DS4_TAG=v0.5.4 \
+DS4_REF=215af2f1245324bcebf9a69a498eff79275aac8e \
+DS4_BUILD_TARGET=runtime-thor-topk \
+DS4_IMAGE=nemoclaw-thor/ds4:v0.5.4-sm110-thor \
 ./serving/start-ds4.sh start
 ```
 
@@ -186,9 +227,10 @@ The last row validated practical use of a 256K window while retaining about
 retained-prefix cuts of 47,283 and 69,793 tokens even though the API reported
 `cached_tokens=0`; their rates are DS4's total-prompt accounting for an
 iterative-context workload, not independent cold-prefill benchmarks. The
-247K request still took about 16 minutes to return on one Thor. The current
+247K request still took about 16 minutes to return on one Thor. The interim
 atomics-free selector later matched the tree on 1,025 dual-run calls through a
-244K prompt, retrieved the needles, and became the default described above.
+244K prompt and retrieved the needles. It was the safe default until Entrpi
+v0.5.5 repaired and outperformed the upstream streaming path.
 
 For Cline on the laptop, use:
 
@@ -202,7 +244,7 @@ or 16,384 is reasonable for normal coding tasks.
 
 ## ManyForge integration gate
 
-Do not repoint `manyforge/scripts/proxy/vllm-proxy.py` at this service yet.
-First verify `/v1/chat/completions`, streaming, tool-call continuations, and
-concurrent requests against DS4. When it passes, the proxy can retain its
-public `:8000` contract while using DS4 at `:8050` as its upstream.
+The direct OpenAI chat, streaming, tool-budget, and queued-concurrency gates
+now pass. Do not repoint `manyforge/scripts/proxy/vllm-proxy.py` yet without a
+ManyForge-specific compatibility run: its public `:8000` contract can remain
+unchanged while DS4 at `:8050` is evaluated as the upstream.
