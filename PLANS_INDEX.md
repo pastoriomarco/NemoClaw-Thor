@@ -38,9 +38,8 @@ This board covers only the assistant-lane and serving work owned here.
 ## Active work focus
 
 - **DS4 Thor optimization** — [`serving/docs/DS4-THOR-OPTIMIZATION-PLAN.md`](serving/docs/DS4-THOR-OPTIMIZATION-PLAN.md)
-  is in progress (started 2026-08-04). It isolates Thor runtime tuning from
-  source/kernel changes, retains the validated deep-context gates, and records
-  each rejected or adopted candidate against the Entrpi v0.5.4 baseline.
+  completed its tuning phases on 2026-08-05. The runtime is now pinned to
+  v0.5.6.2 while retaining the fixed v0.5.5 performance/deep-context baseline.
 - **Three-lane assistant migration** — [`manyforge/docs/THREE-LANE-MIGRATION-PLAN.md`](manyforge/docs/THREE-LANE-MIGRATION-PLAN.md)
   is the hub (rev. 6, 2026-06-08). **AD INTERIM since 2026-06-12** (operator
   decision): phases 0/0.5/1/2/3 complete, Phase 4 landed opt-in with the
@@ -71,7 +70,7 @@ This board covers only the assistant-lane and serving work owned here.
 
 | Document | Status | Notes |
 |---|---|---|
-| [`DS4-THOR-OPTIMIZATION-PLAN.md`](serving/docs/DS4-THOR-OPTIMIZATION-PLAN.md) | Completed (2026-08-04) | Docker-only Entrpi DS4 v0.5.4 optimization for Thor `sm_110`: verified atomics-free exact top-512 selector, 512K/4K stable default, optional faster 256K/8K profile, and recorded rejected D2R/SM110a candidates. Exact retrieval passed at 479,817 prompt tokens and the final image passed API/quality smoke. |
+| [`DS4-THOR-OPTIMIZATION-PLAN.md`](serving/docs/DS4-THOR-OPTIMIZATION-PLAN.md) | Completed (2026-08-05); v0.5.6.2 adoption smoke (2026-08-10) | Docker-only Entrpi DS4 optimization for Thor `sm_110`: repaired upstream top-512 selector, 512K/4K stable default, optional faster 256K/8K profile, and recorded rejected D2R/SM110a candidates. The v0.5.6.2 runtime passes Chat/Responses smoke; fixed performance and deep-context evidence remains explicitly labelled v0.5.5. |
 | [`V9.1-EXECUTION.md`](serving/docs/V9.1-EXECUTION.md) | Completed (2026-05-30 → 31) | Consolidated V9.1 execution plan + results (Phases 0-4 ran; 5 deferred). Status markers point-in-time. |
 | [`V9.1-FOLLOWUP-TASKS.md`](serving/docs/V9.1-FOLLOWUP-TASKS.md) | Open | V9.1 follow-up tasks / findings. |
 | [`V9.1-TASK4-FP4-UNLOCK.md`](serving/docs/V9.1-TASK4-FP4-UNLOCK.md) | Done (2026-05-31) | Thor sm_110a FP4 kernel unlock. |
@@ -81,7 +80,7 @@ This board covers only the assistant-lane and serving work owned here.
 | [`COSMOS-REASON2-FINETUNE-PLAN.md`](serving/docs/COSMOS-REASON2-FINETUNE-PLAN.md) | Deferred (2026-06-12) | Cosmos-Reason2 fine-tune + NVFP4 quantize on Thor. Deferred since the clean-start model default moved to gemma-QAT (2026-06-07 sweep + 06-09 head-to-head); revisit only if cosmos is re-anchored. |
 | [`COSMOS-REASON2-32B-QUANTIZATION.md`](serving/docs/COSMOS-REASON2-32B-QUANTIZATION.md) | Investigation (reference) | 2026-04-30 — 32B quantization on Thor. |
 | [`DFLASH-INVESTIGATION.md`](serving/docs/DFLASH-INVESTIGATION.md) | Investigation (reference) | 2026-04-15…17 — DFlash speculative decoding on SM110. |
-| [`DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md`](serving/docs/DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md) | Landed (opt-in; Thor profile) | Dockerized Entrpi DS4 v0.5.4 with the 0731 base + matching DSpark drafter persists weights at `~/thor-hf-cache/ds4/`. The Thor `sm_110` image replaces Entrpi's faulty atomic selector with a verified atomics-free exact top-512 merge (+10.6% controlled deep prefill versus the safe tree). The default is 524,288 context, two banks, 4K effective chunks, and an 8 GiB live-memory floor; repeated two-request waves are stable. Exact retrieval passed at 479,817 prompt tokens, with a documented ~32-minute cold TTFT. Runbook: [`DS4-ON-THOR.md`](serving/docs/DS4-ON-THOR.md). |
+| [`DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md`](serving/docs/DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md) | Landed (opt-in; Thor profile) | Dockerized Entrpi DS4 v0.5.6.2 with the 0731 base + matching DSpark drafter persists weights at `~/thor-hf-cache/ds4/`. The `sm_110` image uses Entrpi's repaired streaming exact top-512 selector. The default is 524,288 context, two banks, 4K effective chunks, and an 8 GiB live-memory floor. The v0.5.5 baseline includes stable queued concurrency and exact 244,518-token retrieval; the earlier 479,817-token capacity proof is retained. Runbook: [`DS4-ON-THOR.md`](serving/docs/DS4-ON-THOR.md). |
 | [`MINIMAX-M27-INVESTIGATION.md`](serving/docs/MINIMAX-M27-INVESTIGATION.md) | Investigation (reference) | 2026-04-22 — MiniMax-M2.7 REAP on Thor. |
 | [`TOOL-EVAL-BENCH-THOR.md`](serving/docs/TOOL-EVAL-BENCH-THOR.md) | Bench report | Consolidated Thor tool-eval-bench report. |
 | [`PERFORMANCE-V7.md`](serving/docs/PERFORMANCE-V7.md) | Perf report (historical) | v7 image coverage report; point-in-time. |

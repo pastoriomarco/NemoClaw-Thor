@@ -2,7 +2,8 @@
 
 **Started:** 2026-08-04
 **Status:** Complete
-**Initial target:** Entrpi/ds4 v0.5.4; **current accepted target:** v0.5.5,
+**Initial target:** Entrpi/ds4 v0.5.4; **current runtime target:** v0.5.6.2
+(API/startup smoke accepted; performance baseline remains v0.5.5),
 DeepSeek-V4-Flash-0731 plus the matching DSpark drafter, Jetson T5000
 (`sm_110`, 128 GB unified memory)
 
@@ -13,14 +14,16 @@ lane. Experiments use the existing external weights under
 
 ## Accepted Thor profile
 
-- Source: Entrpi/ds4 v0.5.5 at
+- Source: Entrpi/ds4 v0.5.6.2 at
+  `027714a4c290a756ef3e6ca557426528745f2033`; the fixed performance and
+  long-context baseline below was measured on v0.5.5 at
   `2e9799073e08ea8f89eb1e72c47328ee6d90c6e8`.
 - Build: CUDA 13, generic `sm_110` SASS. Spark `sm_121`/`sm_121a` is forbidden.
 - API: OpenAI-compatible service on port 8050.
 - Context allocation: 524,288 tokens.
 - Continuous banks: two.
 - Prefill chunk: 4,096 tokens.
-- Deep selector: Entrpi v0.5.5's repaired streaming exact top-512 selector,
+- Deep selector: Entrpi v0.5.5+'s repaired streaming exact top-512 selector,
   enabled automatically only by the Thor image provenance marker. The v0.5.4
   atomics-free selector and Entrpi's safe tree remain explicit rollbacks.
 - Memory protection: deterministic two-bank plan, outstanding-projection

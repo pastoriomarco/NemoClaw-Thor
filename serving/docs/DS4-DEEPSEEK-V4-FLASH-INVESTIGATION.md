@@ -1,8 +1,8 @@
 # DS4 / DeepSeek-V4-Flash on Jetson Thor — investigation notes
 
-**Date**: 2026-05-12 (updated 2026-08-05)
+**Date**: 2026-05-12 (updated 2026-08-10)
 **Status**: Historical investigation of upstream `antirez/ds4`. The active
-Thor implementation is now the Dockerized Entrpi fork v0.5.5, documented in
+Thor implementation is now the Dockerized Entrpi fork v0.5.6.2, documented in
 [`DS4-ON-THOR.md`](DS4-ON-THOR.md). Entrpi adds continuous batching,
 OpenAI-compatible serving, and DSpark speculation; the single-stream caveats
 below apply to the old upstream engine, not that fork.

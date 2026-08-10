@@ -13,7 +13,7 @@ cd ~/workspaces/dev_ws/src/NemoClaw-Thor
 ./serving/start-ds4.sh logs
 ```
 
-The first command builds the pinned Entrpi/ds4 v0.5.5 source inside Docker for
+The first command builds the pinned Entrpi/ds4 v0.5.6.2 source inside Docker for
 `sm_110`, including Entrpi's repaired streaming top-512 selector, then
 starts a resumable in-container download alongside a DS4 container that waits
 quietly for the complete pair. The weights persist outside the container in
@@ -63,18 +63,18 @@ Compose container logs as well as the API.
 
 ## Invariants
 
-- Source is pinned to Entrpi DS4 `v0.5.5` commit
-  `2e9799073e08ea8f89eb1e72c47328ee6d90c6e8`.
+- Source is pinned to Entrpi DS4 `v0.5.6.2` commit
+  `027714a4c290a756ef3e6ca557426528745f2033`.
 - Build target is exactly `CUDA_ARCH=sm_110`; never use Spark's `sm_121` or
   `sm_121a` target.
-- The default image is `nemoclaw-thor/ds4:v0.5.5-sm110-thor`, built from the
-  `runtime-thor-v055` target. `/etc/ds4-build.txt` records the source, arch,
+- The default image is `nemoclaw-thor/ds4:v0.5.6.2-sm110-thor`, built from the
+  `runtime-thor-v056` target. `/etc/ds4-build.txt` records the source, arch,
   and Thor profile, and the entrypoint enables the repaired selector only when
   this provenance marker is present.
 - The 0731 base uses only the matching DSpark drafter. The container passes
   `--no-mtp` so the legacy MTP GGUF cannot be paired with it.
-- v0.5.5 retains the live admission floor and makes the KV bank plan
-  deterministic instead of deriving it from noisy free memory at boot. It
+- v0.5.6.2 retains the live admission floor and a deterministic KV bank plan
+  instead of deriving it from noisy free memory at boot. It
   also charges outstanding in-flight projections, preventing concurrent
   admissions from double-booking memory. We retain a 12 GiB
   (`DS4_BATCH_VMM_BUDGET_MB`) ceiling, an 8 GiB
@@ -94,11 +94,12 @@ Compose container logs as well as the API.
   That is 2.2% faster than the interim Thor selector and about 13% faster than
   the old safe-tree control. The repaired upstream selector is now the
   default; set `DS4_CUDA_NO_TOPK_STREAM=1` only for diagnosis.
-- v0.5.5 fixes token-budget honesty for incomplete tool calls in the serial
-  request path, but the same release still overwrites `length` with `error` in
-  the continuous path. The Thor image carries a minimal server-only patch that
-  preserves `length` and the partial assistant text. Both buffered and SSE
-  regression legs pass without decoding beyond `max_tokens`.
+- v0.5.6.2 contains the continuous tool-budget correction that the v0.5.5 Thor
+  image carried locally, so the current image no longer applies that patch.
+  It also promotes OpenAI Responses and Anthropic Messages to the continuous
+  engine and fixes long agent reconnect, no-tools transcript, and stream-idle
+  behavior. The only local source patches retained are the Thor profile and
+  attention diagnostic hooks.
 - The default continuous-prefill chunk and persistent scratch cap are both
   4,096 tokens. They must move together. At 256K, setting both to 8,192
   improves a controlled 21K prefill by 3.8%; at 512K the larger scratch leaves
@@ -108,6 +109,25 @@ Compose container logs as well as the API.
   derived from CUDA attributes on unified-memory Thor, and was never used for
   dispatch. The Thor build suppresses it. Entrpi's bandwidth probe measured
   roughly 241-245 GB/s read and 227-230 GB/s copy on this device.
+
+## v0.5.6.2 adoption smoke
+
+On 2026-08-10, the pinned `v0.5.6.2` image was built for `sm_110` and started
+with the existing 512K/two-bank/4K profile. Startup reported the matching
+0731 DSpark drafter, repaired streaming selector, 12 GiB batch VMM budget,
+8 GiB live-memory floor, and `max_seq=2`. Docker health passed on the LAN-bound
+service at `192.168.1.136:8050`.
+
+Both API surfaces were exercised: Chat Completions returned `Paris`, and a
+native `/v1/responses` request completed with `READY`. `/v1/models` advertised
+`deepseek-v4-flash` with `context_length=524288`. The small deterministic API
+gate passed arithmetic, JSON, and logic, and its three 292-token responses
+reported 26.6, 27.5, and 27.7 tok/s (27.27 average). The buffered and streaming
+tool-budget regression also passed with an honest `finish_reason=length` at
+the 26-token cutoff. No CUDA error, fallback, restart, or swap growth occurred
+during the adoption smoke. The detailed performance and long-context results
+below remain the fixed v0.5.5 baseline; they are not silently relabelled as
+v0.5.6.2 benchmark results.
 
 ## HTTP serving benchmark (Thor profile)
 
@@ -163,7 +183,7 @@ middle, and late eighths of a 1.32 MiB distractor archive were returned exactly:
 The request stayed on the continuous path and produced no fallback, Xid, OOM,
 restart, or swap growth. It also demonstrates the practical limit: 512K is
 real capacity, but a cold ~480K prompt takes about 32 minutes on this Thor.
-Normal coding sessions benefit from retained prefixes and the v0.5.5 warm
+Normal coding sessions benefit from retained prefixes and the v0.5.5+ warm
 checkpoint behavior, but clients still need timeouts long enough for the first
 deep prefill.
 
@@ -185,12 +205,14 @@ combine 8K chunks with the 512K allocation on this 128 GB Thor.
 
 ## Rollback
 
-The unmodified v0.5.5 binary remains buildable as a distinct image. It keeps
-the safe-tree selector by default unless streaming is explicitly enabled:
+The previously validated v0.5.5 Thor image remains buildable as a distinct
+rollback image:
 
 ```bash
-DS4_BUILD_TARGET=runtime \
-DS4_IMAGE=nemoclaw-thor/ds4:v0.5.5-sm110-upstream \
+DS4_TAG=v0.5.5 \
+DS4_REF=2e9799073e08ea8f89eb1e72c47328ee6d90c6e8 \
+DS4_BUILD_TARGET=runtime-thor-v055 \
+DS4_IMAGE=nemoclaw-thor/ds4:v0.5.5-sm110-thor \
 ./serving/start-ds4.sh start
 ```
 

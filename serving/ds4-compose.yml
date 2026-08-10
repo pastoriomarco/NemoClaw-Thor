@@ -6,14 +6,14 @@
 
 services:
   ds4-download:
-    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.5-sm110-thor}
+    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.6.2-sm110-thor}
     build:
       context: .
       dockerfile: docker/Dockerfile.ds4
-      target: ${DS4_BUILD_TARGET:-runtime-thor-v055}
+      target: ${DS4_BUILD_TARGET:-runtime-thor-v056}
       args:
-        DS4_TAG: ${DS4_TAG:-v0.5.5}
-        DS4_REF: ${DS4_REF:-2e9799073e08ea8f89eb1e72c47328ee6d90c6e8}
+        DS4_TAG: ${DS4_TAG:-v0.5.6.2}
+        DS4_REF: ${DS4_REF:-027714a4c290a756ef3e6ca557426528745f2033}
         CUDA_ARCH: sm_110
     entrypoint: ["/usr/local/bin/ds4-download-weights"]
     user: "${DS4_UID:?start-ds4.sh must set DS4_UID}:${DS4_GID:?start-ds4.sh must set DS4_GID}"
@@ -22,14 +22,14 @@ services:
     restart: "no"
 
   ds4:
-    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.5-sm110-thor}
+    image: ${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.6.2-sm110-thor}
     build:
       context: .
       dockerfile: docker/Dockerfile.ds4
-      target: ${DS4_BUILD_TARGET:-runtime-thor-v055}
+      target: ${DS4_BUILD_TARGET:-runtime-thor-v056}
       args:
-        DS4_TAG: ${DS4_TAG:-v0.5.5}
-        DS4_REF: ${DS4_REF:-2e9799073e08ea8f89eb1e72c47328ee6d90c6e8}
+        DS4_TAG: ${DS4_TAG:-v0.5.6.2}
+        DS4_REF: ${DS4_REF:-027714a4c290a756ef3e6ca557426528745f2033}
         CUDA_ARCH: sm_110
     runtime: nvidia
     init: true
@@ -45,20 +45,20 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       DS4_PORT: 8050
       DS4_WAIT_FOR_WEIGHTS: "1"
-      # Expose DS4's 524,288-token window. Entrpi v0.5.5 supplies the repaired,
+      # Expose DS4's 524,288-token window. Entrpi v0.5.6.2 retains the repaired,
       # verified deep selector; 4K chunks preserve memory headroom.
       DS4_CTX: ${DS4_CTX:-524288}
       DS4_KV_DISK_SPACE_MB: ${DS4_KV_DISK_SPACE_MB:-8192}
       # Keep a finite demand-mapped VMM ceiling for the two-bank Thor plan.
       DS4_BATCH_VMM_BUDGET_MB: ${DS4_BATCH_VMM_BUDGET_MB:-12288}
-      # Gate admissions against live free unified memory. v0.5.5 also charges
+      # Gate admissions against live free unified memory. v0.5.6.2 also charges
       # other in-flight projections so queued work cannot double-book it.
       # Keep the runtime floor aligned with the boot-time 8 GiB fit headroom.
       DS4_MEM_FLOOR_GB: ${DS4_MEM_FLOOR_GB:-8}
       # Reproducible LAN service: do not perform the upstream daily update GET.
       DS4_NO_UPDATE_CHECK: "1"
       DS4_BATCH_FIT_HEADROOM_MB: ${DS4_BATCH_FIT_HEADROOM_MB:-8192}
-      # At a 512K window Thor can safely keep two continuous banks. v0.5.5 can
+      # At a 512K window Thor can safely keep two continuous banks. v0.5.6.2 can
       # queue four callers without the old workspace OOM, but this does not
       # make four full 512K banks fit; keep the physical bank plan at two.
       DS4_SERVER_COALESCE_MAX: ${DS4_SERVER_COALESCE_MAX:-2}
@@ -70,7 +70,7 @@ services:
       # little headroom for continuous serving when combined with 512K.
       DS4_CONT_PREFILL_CHUNK: ${DS4_CONT_PREFILL_CHUNK:-4096}
       DS4_CONT_CAPTURE: ${DS4_CONT_CAPTURE:-1}
-      # The default Thor build uses Entrpi v0.5.5's repaired streaming top-512
+      # The default Thor build uses Entrpi v0.5.6.2's repaired streaming top-512
       # selector and enables it from the pinned provenance marker. Set
       # NO_TOPK_STREAM=1 to force the slower safe tree for diagnosis.
       DS4_CUDA_NO_TOPK_STREAM: ${DS4_CUDA_NO_TOPK_STREAM:-0}

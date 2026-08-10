@@ -299,7 +299,7 @@ a production bundle of the vLLM image with baked-in JIT caches.
 | Build/rebuild TRT-Edge-LLM | `cd serving/docker && ./build-trt.sh` | `Dockerfile.trt` | `nemoclaw-thor/trt-edge-llm:<tag>` + `:latest` |
 | Build vLLM production bundle | `cd serving/docker && ./bundle.sh` | `Dockerfile.bundle` | `nemoclaw-thor/vllm:<tag>-bundled` |
 | Add a package without full rebuild | `cd serving/docker && docker build -f Dockerfile.overlay -t nemoclaw-thor/vllm:latest .` | `Dockerfile.overlay` | overrides `:latest` |
-| Build DS4 alternative service | `./serving/start-ds4.sh build` | `serving/docker/Dockerfile.ds4` | `nemoclaw-thor/ds4:v0.5.5-sm110-thor` |
+| Build DS4 alternative service | `./serving/start-ds4.sh build` | `serving/docker/Dockerfile.ds4` | `nemoclaw-thor/ds4:v0.5.6.2-sm110-thor` |
 
 Each `build-*.sh` accepts `--help` for arg reference. Both vLLM and TRT
 builds share apt cache (`id=apt-cache-thor`) and pip cache mounts so package

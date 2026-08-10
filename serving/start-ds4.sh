@@ -7,10 +7,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/ds4-compose.yml"
 COMPOSE=(docker compose --project-name nemoclaw-ds4 -f "${COMPOSE_FILE}")
 
-export DS4_IMAGE="${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.5-sm110-thor}"
-export DS4_BUILD_TARGET="${DS4_BUILD_TARGET:-runtime-thor-v055}"
-export DS4_TAG="${DS4_TAG:-v0.5.5}"
-export DS4_REF="${DS4_REF:-2e9799073e08ea8f89eb1e72c47328ee6d90c6e8}"
+export DS4_IMAGE="${DS4_IMAGE:-nemoclaw-thor/ds4:v0.5.6.2-sm110-thor}"
+export DS4_BUILD_TARGET="${DS4_BUILD_TARGET:-runtime-thor-v056}"
+export DS4_TAG="${DS4_TAG:-v0.5.6.2}"
+export DS4_REF="${DS4_REF:-027714a4c290a756ef3e6ca557426528745f2033}"
 export DS4_MODEL_DIR="${DS4_MODEL_DIR:-${HOME}/thor-hf-cache/ds4}"
 export DS4_HOST_PORT="${DS4_HOST_PORT:-8050}"
 export DS4_BIND_ADDRESS="${DS4_BIND_ADDRESS:-127.0.0.1}"
@@ -26,7 +26,7 @@ Usage: ./serving/start-ds4.sh [start|build|download|status|logs|smoke|test|stop]
 
   start     Build the image if needed, resume/download the model pair, then
             start DS4 on 127.0.0.1:8050 (default).
-  build     Build the pinned Thor-tuned DS4 v0.5.5 image for sm_110 only.
+  build     Build the pinned Thor-tuned DS4 v0.5.6.2 image for sm_110 only.
   download  Start or resume the persistent 0731 base + DSpark downloads.
   status    Show Compose service state.
   logs      Follow DS4 server logs.
