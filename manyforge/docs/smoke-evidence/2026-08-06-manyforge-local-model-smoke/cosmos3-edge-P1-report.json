@@ -1,0 +1,26 @@
+{
+  "corpus": "/home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus.yaml",
+  "composer": "http://127.0.0.1:9000",
+  "runtime_flags": [],
+  "results": [
+    {
+      "case_id": "P1_wrap_root_specific",
+      "status": "fail",
+      "elapsed_s": 173.3,
+      "tool_calls": [],
+      "answer": "Assistant completed without a text response.",
+      "failures": [
+        "expected tool 'tree_draft_wrap_node' not observed (or never reached 2xx)",
+        "state_after[program.tree.id] expected 'repeat', got 'sequence'",
+        "state_after[program.tree.children[0].name] expected 'pick_and_place', got 'command_gripper'"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'repeat' not found",
+        "answer_must_contain: 'root' not found"
+      ],
+      "skip_reason": "",
+      "healed": false,
+      "heal_detail": ""
+    }
+  ]
+}

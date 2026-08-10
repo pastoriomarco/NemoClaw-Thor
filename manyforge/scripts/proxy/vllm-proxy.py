@@ -48,6 +48,7 @@ Environment variables (override flags):
   OPENCLAW_PROXY_UPSTREAM
   OPENCLAW_PROXY_LOG_PATH
   OPENCLAW_PROXY_OVERRIDE_MAX_TOKENS       cap output tokens (injected when caller omits)
+  OPENCLAW_PROXY_OVERRIDE_REASONING_EFFORT override the standard reasoning_effort field
   OPENCLAW_PROXY_THINKING_TOKEN_BUDGET     soft cap on internal CoT
   OPENCLAW_PROXY_FORCE_ENABLE_THINKING     on | off | alternating-…
                                             Load-bearing control for the chat
@@ -481,6 +482,7 @@ _SEEN_CONVERSATIONS: set[str] = set()        # tracks first-seen conversationIds
 _OVERRIDE_TEMPERATURE: float | None = None   # e.g. 0.0 to make recovery deterministic
 _OVERRIDE_MAX_TOKENS: int | None = None      # cap output tokens
 _OVERRIDE_TOP_P: float | None = None
+_OVERRIDE_REASONING_EFFORT: str | None = None  # e.g. "off" for tool-only lanes
 _THINKING_TOKEN_BUDGET: int | None = None    # if set, injects chat_template_kwargs.thinking_token_budget
                                              # = N on every chat-completions request. Caps the
                                              # `<think>...</think>` envelope so it doesn't eat the
@@ -524,6 +526,7 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
     # Skip if no mutation is configured at all.
     if (_FORCE_TOOL_CHOICE is None and _OVERRIDE_TEMPERATURE is None
             and _OVERRIDE_MAX_TOKENS is None and _OVERRIDE_TOP_P is None
+            and _OVERRIDE_REASONING_EFFORT is None
             and _USER_MESSAGE_SUFFIX is None and _FORCE_ENABLE_THINKING is None
             and _THINKING_TOKEN_BUDGET is None
             and not _GUIDED_TOOL_CALLS
@@ -605,6 +608,15 @@ def _maybe_mutate_request(path: str, body: bytes) -> tuple[bytes, dict | None]:
         if before != _OVERRIDE_TOP_P:
             changes["top_p"] = {"before": before, "after": _OVERRIDE_TOP_P}
             parsed["top_p"] = _OVERRIDE_TOP_P
+
+    if _OVERRIDE_REASONING_EFFORT is not None:
+        before = parsed.get("reasoning_effort")
+        if before != _OVERRIDE_REASONING_EFFORT:
+            changes["reasoning_effort"] = {
+                "before": before,
+                "after": _OVERRIDE_REASONING_EFFORT,
+            }
+            parsed["reasoning_effort"] = _OVERRIDE_REASONING_EFFORT
 
     # Always-on thinking_token_budget cap (no per-turn alternation).
     if _THINKING_TOKEN_BUDGET is not None:
@@ -2858,6 +2870,10 @@ def _resolve_config() -> argparse.Namespace:
     parser.add_argument("--override-top-p", type=str, default=os.environ.get(
         "OPENCLAW_PROXY_OVERRIDE_TOP_P", ""),
         help="If set (float): overwrite `top_p`.")
+    parser.add_argument("--override-reasoning-effort", type=str, default=os.environ.get(
+        "OPENCLAW_PROXY_OVERRIDE_REASONING_EFFORT", ""),
+        help="If set: overwrite the standard `reasoning_effort` request field. "
+             "Useful for endpoints such as DS4 that support low/high/max/off.")
     parser.add_argument("--user-message-suffix", type=str, default=os.environ.get(
         "OPENCLAW_PROXY_USER_MESSAGE_SUFFIX", ""),
         help="If set: appended to the LAST user message on every "
@@ -2911,7 +2927,7 @@ def main() -> None:
     global _UPSTREAM_HOST, _UPSTREAM_PORT, _UPSTREAM_SCHEME
     global _LISTEN_PORT, _LOG_PATH
     global _FORCE_TOOL_CHOICE, _OVERRIDE_TEMPERATURE
-    global _OVERRIDE_MAX_TOKENS, _OVERRIDE_TOP_P
+    global _OVERRIDE_MAX_TOKENS, _OVERRIDE_TOP_P, _OVERRIDE_REASONING_EFFORT
     global _USER_MESSAGE_SUFFIX, _USER_SUFFIX_FIRST_TURN_ONLY
     global _FORCE_ENABLE_THINKING, _THINKING_TOKEN_BUDGET
     global _TOOL_SURFACE_EXPECTED, _TOOL_SURFACE_WARN_ON_UNKNOWN
@@ -2930,6 +2946,8 @@ def main() -> None:
     _OVERRIDE_TEMPERATURE = _parse_optional_float(cfg.override_temperature)
     _OVERRIDE_MAX_TOKENS = _parse_optional_int(cfg.override_max_tokens)
     _OVERRIDE_TOP_P = _parse_optional_float(cfg.override_top_p)
+    reasoning_effort = (cfg.override_reasoning_effort or "").strip()
+    _OVERRIDE_REASONING_EFFORT = reasoning_effort if reasoning_effort else None
     sfx = (cfg.user_message_suffix or "").strip()
     _USER_MESSAGE_SUFFIX = sfx if sfx else None
     sfx_first = (cfg.user_suffix_first_turn_only or "").strip().lower()
@@ -2976,6 +2994,8 @@ def main() -> None:
         mutation_summary.append(f"max_tokens={_OVERRIDE_MAX_TOKENS}")
     if _OVERRIDE_TOP_P is not None:
         mutation_summary.append(f"top_p={_OVERRIDE_TOP_P}")
+    if _OVERRIDE_REASONING_EFFORT is not None:
+        mutation_summary.append(f"reasoning_effort={_OVERRIDE_REASONING_EFFORT}")
     if _USER_MESSAGE_SUFFIX is not None:
         preview = _USER_MESSAGE_SUFFIX[:40].replace("\n", " ")
         if len(_USER_MESSAGE_SUFFIX) > 40:

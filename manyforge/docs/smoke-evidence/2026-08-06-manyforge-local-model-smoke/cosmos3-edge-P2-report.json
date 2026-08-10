@@ -1,0 +1,25 @@
+{
+  "corpus": "/home/tndlux/workspaces/dev_ws/src/NemoClaw-Thor/manyforge/scripts/debug/smoke_corpus.yaml",
+  "composer": "http://127.0.0.1:9000",
+  "runtime_flags": [],
+  "results": [
+    {
+      "case_id": "P2_scene_add_specific",
+      "status": "fail",
+      "elapsed_s": 164.9,
+      "tool_calls": [],
+      "answer": "Assistant completed without a text response.",
+      "failures": [
+        "expected tool 'scene_draft_add_object' not observed (or never reached 2xx)",
+        "state_after[scene.objects[*].shape.box_dims] expected 'contains [1.0, 0.02, 0.25]', got ['<MISSING>', '<MISSING>', [1, 1, 0.2], [0.1, 0.01, 0.01]]"
+      ],
+      "soft_failures": [
+        "answer_must_contain: 'box' not found",
+        "answer_must_contain: 'added' not found"
+      ],
+      "skip_reason": "",
+      "healed": false,
+      "heal_detail": ""
+    }
+  ]
+}
