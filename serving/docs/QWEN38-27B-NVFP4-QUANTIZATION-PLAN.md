@@ -1,31 +1,68 @@
 # Qwen 27B quality-first NVFP4 quantization on Thor
 
-**Date**: 2026-08-13
-**Status**: Draft runbook; pre-release assets prepared, model-dependent gates pending.
-**Target**: the forthcoming Qwen 3.8-class dense 27B coding model, or its
-actual release name. Do not assume the final repository name or architecture.
+**Date**: 2026-08-14
+**Status**: Draft runbook; countdown model card inspected, checkpoint-dependent gates pending.
+**Target**: `Qwen/Qwen3.8-27B`, a dense 27B native vision-language hybrid
+Gated DeltaNet/full-attention model. The locked checkpoint files remain
+authoritative for exact module and tensor names.
 
 ## Objective
 
-Produce two local ModelOpt checkpoints on Jetson AGX Thor and select the best
-one for delegated coding, software architecture, repository exploration,
-testing, debugging, and review under a frontier Codex orchestrator:
+Produce a recommended production candidate on Jetson AGX Thor for delegated
+coding, software architecture, repository exploration, testing, debugging,
+and review under a frontier Codex orchestrator. A second, higher-risk speed
+experiment is retained only for an explicitly approved comparison:
 
-1. **Quality candidate** — local-Hessian NVFP4 W4A4 for eligible projections,
-   with QKV-like projections, MTP, vision, embeddings, norms, routers, and
-   `lm_head` retained in BF16.
-2. **Speed challenger** — local-Hessian NVFP4 W4A4 for every ModelOpt-eligible
-   linear projection, while still retaining MTP and vision in BF16.
+1. **Recommended quality/performance candidate** — use
+   `nvfp4_qkv_bf16_local_hessian-kv_fp8_cast.yaml`. Apply local-Hessian NVFP4
+   W4A4 to safe eligible projections while retaining full-attention Q/K/V
+   (including the fused `q_proj` output gate), Gated DeltaNet
+   `in_proj_qkv`/`in_proj_z`, MTP, vision, embeddings, norms, routers, and
+   `lm_head` in BF16. Serve with an FP8 KV cache. **Quantize and evaluate this
+   candidate first; it is the expected production default and the suggested
+   best performance/quality ratio.**
+2. **Experimental full-NVFP4 speed challenger** — use
+   `nvfp4_full_local_hessian-kv_fp8_cast.yaml` only after the recommended
+   candidate passes. It quantizes every ModelOpt-eligible linear projection,
+   including sensitive gated projections. It is not recommended for the
+   initial overnight run or production without a separately approved,
+   controlled quality experiment.
 
-Both candidates use the same complete 768-record coding calibration corpus,
-the same released tokenizer/chat template, the same source-weight revision,
-and FP8 KV-cache metadata. The speed candidate is promoted only if its coding
-and agent behavior is indistinguishable enough to justify its speed advantage.
+> **Recommended starting point:**
+> `nvfp4_qkv_bf16_local_hessian-kv_fp8_cast.yaml` is the suggested recipe for
+> the best performance/quality ratio. Do not start with the full-NVFP4 recipe.
+
+If the experimental challenger is run, both candidates use the same complete
+768-record coding calibration corpus, released tokenizer/chat template,
+source-weight revision, and FP8 KV-cache metadata. The challenger cannot be
+promoted merely because it is faster.
 
 Matching the existing Qwen3.6-27B result (~17 average decode tok/s, ~38 tok/s
 observed peak with MTP) is a useful reference, not a hard requirement. Coding
 reliability, non-looping behavior, valid tool calls, and successful tests are
 hard gates.
+
+### Why the recommended recipe preserves attention gates
+
+A documented ModelOpt tracker report localized severe Qwen3.5/3.6 NVFP4
+degradation to the gate half fused into full-attention `q_proj`. It reported
+teacher-forced perplexity of 65.13 for the existing
+`Qwen3.6-27B-Text-NVFP4-MTP` checkpoint and reproduced the divergence by
+rounding only that gate through NVFP4. The report used a third-party inference
+engine and is not yet an end-to-end vLLM repair validation, but the magnitude
+is too large to accept for an agent model. Preserving the entire `q_proj` is
+estimated to cost only about 552 MiB on the dense 27B model, roughly 4% of the
+quantized checkpoint. See
+[ModelOpt issue #2091](https://github.com/NVIDIA/Model-Optimizer/issues/2091).
+
+Separately, an open ModelOpt fix documents export failures when packed Gated
+DeltaNet `in_proj_qkv` and `in_proj_z` projections are quantized and then split
+by the Qwen weight mapper. The recommended recipe therefore keeps both BF16.
+See [ModelOpt PR #1936](https://github.com/NVIDIA/Model-Optimizer/pull/1936).
+
+Local-Hessian scale selection improves the quantized matrices that remain, but
+it does not justify quantizing a structurally sensitive sigmoid gate. These
+BF16 exclusions are mandatory for the first production candidate.
 
 ## Decisions already made
 
@@ -37,14 +74,19 @@ hard gates.
 - Use ModelOpt local-Hessian FP8-scale sweep for highest practical PTQ quality.
 - Do not wait for ModelOpt 0.46. ModelOpt 0.45 works; 0.46 is an optional
   runtime reduction if a stable image is ready before execution.
-- Keep MTP and vision in BF16 for both first-pass candidates.
+- Keep MTP and vision in BF16 for the recommended candidate and any later
+  challenger.
+- Keep full-attention Q/K/V, the fused `q_proj` output gate, and packed Gated
+  DeltaNet `in_proj_qkv`/`in_proj_z` in BF16 for the recommended candidate.
 - Keep `lm_head`, embeddings, norms, routers, convolution/state modules, and
   ModelOpt's standard unsupported/sensitive modules unquantized.
 - Use FP8 KV cache when serving. Do not attempt NVFP4 KV cache in this plan.
 - Calibrate with all 768 prepared records at their natural lengths. Do not
   apply a 2K cap. A cap is an OOM fallback, not the default.
-- Build and evaluate the quality candidate first, then the full-NVFP4 speed
-  challenger from the untouched original weights.
+- Build and evaluate only the recommended quality/performance candidate first.
+  The full-NVFP4 challenger is optional, requires an explicit decision after
+  reviewing the recommended candidate, and starts from untouched source
+  weights if approved.
 - Never overwrite one output with the other and do not delete the BF16 source
   until the final candidate has passed the full validation gate.
 
@@ -113,10 +155,17 @@ Two ModelOpt 0.45 recipes are prepared and loader-validated:
 - `serving/calibration/recipes/nvfp4_qkv_bf16_local_hessian-kv_fp8_cast.yaml`
 - `serving/calibration/recipes/nvfp4_full_local_hessian-kv_fp8_cast.yaml`
 
-The quality recipe protects conventional `self_attn.{q,k,v}_proj` and hybrid
-`linear_attn.in_proj_qkv` modules. The speed recipe quantizes those when they
-are otherwise eligible. Both import ModelOpt's standard exclusions and then
-explicitly disable MTP and vision quantizers.
+**Start with
+`serving/calibration/recipes/nvfp4_qkv_bf16_local_hessian-kv_fp8_cast.yaml`.**
+This is the recommended quality/performance recipe. It protects conventional
+`self_attn.{q,k,v}_proj`, including the sensitive gate fused into `q_proj`, and
+hybrid `linear_attn.{in_proj_qkv,in_proj_z}` modules. It also explicitly
+preserves MTP and vision. Safe MLP and output projections still use native
+NVFP4 W4A4, retaining most of the expected Thor speed and memory benefit.
+
+The full recipe quantizes these sensitive projections when otherwise eligible
+and is retained only as an experimental upper-speed bound. Do not select it
+for the initial run merely because its filename says `full`.
 
 **Architecture gate:** these patterns are provisional until the released
 checkpoint's module names are inspected. If Qwen changes its layer names, edit
@@ -129,7 +178,7 @@ Planning estimates for a dense 27B model:
 | Item | Estimate |
 |---|---:|
 | BF16 source checkpoint | 54–60 GB |
-| Quality candidate | approximately 23–30 GB, architecture-dependent |
+| Recommended quality/performance candidate | approximately 23–30 GB, architecture-dependent |
 | Full eligible NVFP4 candidate | approximately 19–22 GB |
 | Free disk before starting | at least 120 GB preferred |
 | ModelOpt 0.45 quality run, 768 natural-length records | approximately 4–8 hours |
@@ -191,7 +240,7 @@ explicit candidate names prevent accidental overwrite or confusion.
 
 ## Phase 0 — pre-release preparation
 
-Completed as of 2026-08-13:
+Completed as of 2026-08-14:
 
 - [x] ModelOpt 0.45 image built.
 - [x] Online small-model PTQ smoke passed.
@@ -203,13 +252,15 @@ Completed as of 2026-08-13:
 - [x] Current-Qwen tokenizer preview passed without truncation.
 - [x] Quality and speed local-Hessian recipes added and loader-validated on
   ModelOpt 0.45.
+- [x] Countdown model card confirms a dense 27B native vision-language model
+  with the Qwen3.5/3.6 hybrid Gated DeltaNet/full-attention dimensions.
 
 Pending until release:
 
 - [ ] Exact model repository and immutable revision.
 - [ ] Released tokenizer/chat template rendering.
 - [ ] Architecture/module-name inspection.
-- [ ] Decision whether the target includes a vision branch.
+- [ ] Exact vision and MTP tensor prefixes and inference-ready MTP packaging.
 - [ ] Multimodal calibration supplement if image/screenshot behavior is a
   required quality gate.
 
@@ -319,10 +370,13 @@ for path in sorted(glob.glob(os.path.join(root, "*.safetensors"))):
 PY
 ```
 
-Compare the resulting names to both recipe files. Required corrections must be
-made before PTQ and rechecked by loading the YAML through ModelOpt. Key rule:
-the quality candidate must leave every QKV-equivalent projection BF16, while
-the speed challenger quantizes it unless ModelOpt excludes it for safety.
+Compare the resulting names to the recommended recipe first. Required
+corrections must be made before PTQ and rechecked by loading the YAML through
+ModelOpt. Reconcile the experimental recipe only if that later run is
+explicitly approved. Key rule:
+the recommended candidate must leave every QKV-equivalent projection, fused
+attention gate, and packed Gated DeltaNet Z/gating projection BF16. Do not
+start PTQ unless the observed names are covered by the quality recipe.
 
 If the model is MoE rather than dense, stop and revise the plan: expert routing,
 active-parameter cost, calibration coverage, and serving performance differ
@@ -415,7 +469,7 @@ reuse a non-empty directory without inspecting it:
 test -z "$(find "$QUALITY_OUTPUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)"
 ```
 
-## Phase 5 — quantize the quality candidate
+## Phase 5 — quantize the recommended quality/performance candidate
 
 The container stays in the foreground and all output is duplicated to a
 persistent log. No model or dataset download is possible during the run.
@@ -491,7 +545,8 @@ find "$QUALITY_OUTPUT_DIR" -maxdepth 1 -name '*quant*summary*' -o -name 'hf_quan
 Tensor-level gate:
 
 - MLP and attention-output weights expected by the recipe are packed NVFP4.
-- Conventional Q/K/V and hybrid `in_proj_qkv` weights are BF16.
+- Conventional Q/K/V, the fused `q_proj` gate, and hybrid
+  `in_proj_qkv`/`in_proj_z` weights are BF16.
 - MTP weights remain BF16 and are present.
 - Vision weights/projector remain BF16 and are present if the source had them.
 - `lm_head`, embeddings, norms, routers, conv/state paths remain high precision.
@@ -501,7 +556,12 @@ Tensor-level gate:
 If any expected module is accidentally quantized or absent, reject the
 checkpoint and correct the recipe. Do not try to compensate at serving time.
 
-## Phase 7 — quantize the full-NVFP4 speed challenger
+## Optional Phase 7 — full-NVFP4 risk experiment
+
+**Do not run this phase as part of the initial quantization.** Stop after the
+recommended candidate has been served and evaluated. Run this experiment only
+after explicitly deciding that a possible decode-speed gain justifies testing
+the known gated-projection quality risk.
 
 Start from the untouched BF16 directory and use the identical rendered corpus,
 order, calibration length, batch size, and ModelOpt version. Confirm the full
@@ -523,11 +583,11 @@ tee "$QUANT_LOG_DIR/qwen27b-full-local-hessian.log"
 Do not reuse the already quantized quality candidate as input. PTQ candidates
 must be independently derived from the same frozen BF16 source.
 
-Validate the same preserved features. For the speed challenger, QKV-like
-linear weights should be packed NVFP4 unless a standard ModelOpt exclusion
-applies. “Full” in this plan means **full ModelOpt-eligible**, not embeddings,
-norms, MTP, vision, routers, unsupported conv/state modules, or every tensor in
-the file.
+Validate the same preserved native features. For this risk experiment,
+QKV-like and gating linear weights will be packed NVFP4 unless a standard
+ModelOpt exclusion applies. That behavior is precisely the quality risk under
+test. “Full” means **full ModelOpt-eligible**, not embeddings, norms, MTP,
+vision, routers, unsupported conv/state modules, or every tensor in the file.
 
 ## Optional Phase 8 — ModelOpt 0.46 / AutoQuantize
 
@@ -618,7 +678,7 @@ Hard rejection conditions:
 - recurring failure to finish patches or tests;
 - significant long-context regression.
 
-Promotion rule for full NVFP4:
+Exceptional promotion rule for the full-NVFP4 risk experiment:
 
 - no critical behavioral regression;
 - no more than one additional failure in a 50-task fixed coding suite relative
@@ -626,10 +686,13 @@ Promotion rule for full NVFP4:
 - tool-call validity and loop rate no worse;
 - a meaningful decode-speed gain, preferably at least 10–15%.
 
-If full NVFP4 is less than 10% faster, prefer the quality candidate. If the
-quality candidate is still unreliable relative to BF16, fall back to a stricter
-OMLP-only recipe or the optional AutoQuantize path rather than accepting a
-fragile agent.
+The reported gated-attention degradation means this challenger starts with a
+presumption of rejection. Even if it passes the short suite, inspect
+perplexity, long-context tool use, and loop behavior before considering it. If
+it is less than 10% faster, prefer the recommended candidate automatically. If
+the recommended candidate is still unreliable relative to BF16, fall back to
+a stricter OMLP-only recipe or the optional AutoQuantize path rather than
+accepting a fragile agent.
 
 ## Performance measurement and planning envelope
 
@@ -645,8 +708,8 @@ Pre-release theoretical ranges, anchored to the existing Qwen3.6 serving:
 
 | Candidate | Approximate average decode | Approximate observed peak |
 |---|---:|---:|
-| Full ModelOpt-eligible NVFP4 + MTP | 16–20 tok/s | 34–42 tok/s |
-| QKV-BF16 quality candidate + MTP | 13–17 tok/s | 28–37 tok/s |
+| Experimental full ModelOpt-eligible NVFP4 + MTP; not recommended | 16–20 tok/s | 34–42 tok/s |
+| **Recommended QKV/gates-BF16 NVFP4 + MTP** | **13–17 tok/s** | **28–37 tok/s** |
 | Stricter OMLP-only fallback | 10–15 tok/s | architecture-dependent |
 
 These are planning ranges, not promises. Qwen3.8 topology, hybrid-attention
@@ -679,15 +742,18 @@ and checksum review.
 - [ ] Immutable Hub revision recorded and downloaded locally.
 - [ ] Checkpoint complete; no pre-existing quantization.
 - [ ] Architecture, MTP, vision, QKV, hybrid, and `lm_head` names inspected.
-- [ ] Both recipe patterns reconciled with actual module names.
+- [ ] Recommended recipe patterns reconciled with actual module names,
+      including `q_proj` gate, `in_proj_qkv`, and `in_proj_z`.
 - [ ] 768 records rendered with actual tokenizer, no truncation.
 - [ ] Optional image-text supplement prepared if vision quality is required.
 - [ ] At least 120 GB disk free; output directories empty and separate.
 - [ ] Existing vLLM stopped; page cache dropped; tmux/logging active.
-- [ ] Quality candidate quantized from BF16 and tensor-level validated.
-- [ ] Full candidate quantized independently and tensor-level validated.
-- [ ] Both boot in vLLM without MTP.
-- [ ] Both boot with retained BF16 MTP, if supported.
+- [ ] Recommended candidate quantized from BF16 and tensor-level validated.
+- [ ] Recommended candidate boots in vLLM without MTP.
+- [ ] Recommended candidate boots with retained BF16 MTP, if supported.
+- [ ] Optional full-NVFP4 experiment separately approved before it is run.
+- [ ] If approved, full candidate independently derived from BF16 and
+      tensor-level validated.
 - [ ] Vision smoke passes when required.
 - [ ] Fixed held-out coding/agent suite completed.
 - [ ] Batch-one and concurrency performance captured.

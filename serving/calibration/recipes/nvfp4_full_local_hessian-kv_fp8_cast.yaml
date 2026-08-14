@@ -1,7 +1,10 @@
-# Speed-challenger recipe: local-Hessian NVFP4 W4A4 on every linear module
-# eligible under ModelOpt's standard safety exclusions. MTP and vision remain
-# high precision so the challenger retains the same features as the quality
-# candidate.
+# Experimental speed-challenger recipe: local-Hessian NVFP4 W4A4 on every
+# linear module eligible under ModelOpt's standard safety exclusions. It
+# quantizes the fused full-attention q_proj gate and packed Gated DeltaNet
+# projections implicated in severe Qwen3.5/3.6 degradation/export failures.
+# Do not use this as the first or production-default Qwen3.8 recipe. MTP and
+# vision remain high precision so a separately approved experiment retains
+# the same features as the quality candidate.
 
 imports:
   base_disable_all: configs/ptq/units/base_disable_all
@@ -13,8 +16,9 @@ imports:
 metadata:
   recipe_type: ptq
   description: >-
-    Full ModelOpt-eligible NVFP4 W4A4 recipe with local-Hessian weight-scale
-    search, BF16 MTP and vision branches, and FP8 KV cast.
+    Experimental full ModelOpt-eligible NVFP4 W4A4 recipe with local-Hessian
+    weight-scale search, BF16 MTP and vision branches, and FP8 KV cast; not
+    recommended as the initial or production candidate for gated Qwen models.
 
 quantize:
   algorithm:
