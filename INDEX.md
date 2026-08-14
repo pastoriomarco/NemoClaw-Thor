@@ -109,6 +109,8 @@ Production-decision status (interim): [`manyforge/docs/PHASE-5-PRODUCTION-DECISI
   - **Fine-tune** — [`COSMOS-REASON2-FINETUNE-PLAN.md`](serving/docs/COSMOS-REASON2-FINETUNE-PLAN.md).
   - **Qwen 27B NVFP4 plan** — [`QWEN38-27B-NVFP4-QUANTIZATION-PLAN.md`](serving/docs/QWEN38-27B-NVFP4-QUANTIZATION-PLAN.md)
     (quality-first and full-NVFP4 local ModelOpt workflow, prepared corpus and recipes).
+  - **Qwen3.8 27B NVFP4 Thor serving recipe** — [`QWEN38-27B-NVFP4-THOR.md`](serving/docs/QWEN38-27B-NVFP4-THOR.md)
+    (digest-pinned Qwen3.8/SM110 image overlay, profile launch, and ManyForge configuration).
   - **Investigations (durable references)** — [`DFLASH-INVESTIGATION.md`](serving/docs/DFLASH-INVESTIGATION.md),
     [`DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md`](serving/docs/DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md),
     [`MINIMAX-M27-INVESTIGATION.md`](serving/docs/MINIMAX-M27-INVESTIGATION.md),

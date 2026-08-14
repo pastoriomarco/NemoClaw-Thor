@@ -11,6 +11,7 @@ fi
 prepare_thor_launch_profile() {
     local profile="${1:-${THOR_MODEL_PROFILE:-}}"
     local _user_llamacpp_offline="${THOR_LLAMACPP_OFFLINE:-}"
+    local _user_nvidia_disable_require="${THOR_NVIDIA_DISABLE_REQUIRE:-}"
 
     # Snapshot any operator-supplied THOR_HF_CACHE_DIR *before* the generic
     # default below clobbers it, so platform profiles (e.g. the Orin AGX gemma
@@ -25,6 +26,7 @@ prepare_thor_launch_profile() {
     THOR_VLLM_CACHE_DIR="${THOR_VLLM_CACHE_DIR:-$HOME/thor-vllm-cache}"
     THOR_TORCH_CACHE_DIR="${THOR_TORCH_CACHE_DIR:-$HOME/thor-torch-cache}"
     THOR_FLASHINFER_CACHE_DIR="${THOR_FLASHINFER_CACHE_DIR:-$HOME/thor-flashinfer-cache}"
+    THOR_NVIDIA_DISABLE_REQUIRE="${_user_nvidia_disable_require:-1}"
 
     THOR_LAUNCH_HOST_MODEL_PATH=""
     THOR_LAUNCH_MODEL_SOURCE=""
@@ -50,6 +52,7 @@ prepare_thor_launch_profile() {
     # specific offline variables remain accepted as compatibility overrides.
     THOR_HF_MODE="${THOR_HF_MODE:-auto}"
     THOR_VLLM_HF_REPO=""
+    THOR_VLLM_HF_REVISION=""
     THOR_VLLM_HF_AUX_REPOS=()
     THOR_VLLM_HF_OFFLINE_ACTIVE=0
     THOR_VLLM_HF_OFFLINE="${THOR_VLLM_HF_OFFLINE:-}"
@@ -96,6 +99,9 @@ prepare_thor_launch_profile() {
 
     THOR_DOCKER_ENV_ARGS=()
     THOR_VLLM_ARGS=()
+    THOR_VLLM_COMPILATION_CONFIG='{"custom_ops":["-quant_fp8","-quant_fp8","-quant_fp8"]}'
+    THOR_VLLM_IMAGE_MUST_EXIST=0
+    THOR_VLLM_IMAGE_BUILD_HINT=""
 
     # SM110 (Thor): CUTLASS sm100 kernels are incompatible — disable them.
     # CutlassFp8BlockScaledMMKernel: uses enable_sm100f_only, crashes SM110 (Xid 43).
@@ -757,6 +763,59 @@ prepare_thor_launch_profile() {
         # qwen3.5-9b-bf16-dflash removed
         # qwen3.5-27b-claude-distilled-nvfp4 removed
         # qwen3.5-27b-claude-distilled-v2-nvfp4 removed 2026-04-24 — superseded by qwen3.6.
+        qwen3.8-27b-nvfp4)
+            # Qwen3.8 model support currently lives in the upstream preview
+            # image, while that preview's native vLLM extension omits SM110.
+            # The repo-owned overlay combines the preview Python stack with
+            # the SM110 extension from v0.27.1 and FlashInfer 0.6.17 cubins.
+            THOR_VLLM_IMAGE="${THOR_QWEN38_VLLM_IMAGE:-nemoclaw-thor/vllm-openai:qwen38-thor-sm110}"
+            THOR_VLLM_IMAGE_MUST_EXIST=1
+            THOR_VLLM_IMAGE_BUILD_HINT="./serving/docker/build-qwen38-thor-sm110.sh"
+            THOR_VLLM_ENTRYPOINT=""
+            # The pinned CUDA 13 image satisfies JetPack 7.x's runtime check;
+            # do not bypass NVIDIA_REQUIRE_CUDA for this verified profile.
+            THOR_NVIDIA_DISABLE_REQUIRE="${_user_nvidia_disable_require:-0}"
+
+            THOR_LAUNCH_MODEL_SOURCE="${THOR_QWEN38_MODEL_SOURCE:-unsloth/Qwen3.8-27B-NVFP4}"
+            # Cache-first/offline launches are reproducible at the verified
+            # model commit. THOR_HF_MODE=latest intentionally follows main;
+            # an explicit THOR_QWEN38_REVISION pins an alternate commit.
+            if [[ "${THOR_HF_MODE}" != "latest" ]]; then
+                if [[ "${THOR_LAUNCH_MODEL_SOURCE}" == "unsloth/Qwen3.8-27B-NVFP4" ]]; then
+                    THOR_VLLM_HF_REVISION="${THOR_QWEN38_REVISION:-9c73e2daee1d0fd494ffbd1d8753f2174a953796}"
+                elif [[ -n "${THOR_QWEN38_REVISION:-}" ]]; then
+                    THOR_VLLM_HF_REVISION="${THOR_QWEN38_REVISION}"
+                fi
+            fi
+
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.80}"
+            # Reproduce the live working environment exactly. The broader
+            # generic SM110 denylist also disables kernels this profile uses.
+            THOR_DOCKER_ENV_ARGS=(
+                -e "VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel"
+                -e "FLASHINFER_CUDA_ARCH_LIST=11.0"
+                -e "ENABLE_TRIATTENTION=0"
+            )
+            # The global legacy custom-op override is not part of the verified
+            # Qwen3.8 path and can change dispatch for its protected FP8 layers.
+            THOR_VLLM_COMPILATION_CONFIG=""
+            THOR_VLLM_ARGS+=(
+                "--dtype" "bfloat16"
+                "--linear-backend" "auto"
+                "--attention-backend" "flashinfer"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--limit-mm-per-prompt" '{"image":4,"video":0}'
+                "--enable-prefix-caching"
+                "--enable-chunked-prefill"
+                "--async-scheduling"
+                "--reasoning-parser" "qwen3"
+                "--default-chat-template-kwargs" '{"enable_thinking":true}'
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
+                "--max-num-batched-tokens" "8192"
+                "--speculative-config" '{"method":"mtp","num_speculative_tokens":3}'
+            )
+            ;;
         qwen3.6-27b-fp8-mtp-kvfp8)
             # EXPERIMENTAL: Qwen/Qwen3.6-27B-FP8 (official FP8) + MTP + FP8 KV.
             # Official FP8 release preserves the 22 MTP head tensors that all
@@ -1194,8 +1253,11 @@ prepare_thor_launch_profile() {
         "--max-model-len" "${THOR_LAUNCH_MAX_MODEL_LEN}"
         "--kv-cache-dtype" "${THOR_LAUNCH_KV_CACHE_DTYPE}"
         "--max-num-seqs" "${THOR_LAUNCH_MAX_NUM_SEQS}"
-        "--compilation-config" '{"custom_ops":["-quant_fp8","-quant_fp8","-quant_fp8"]}'
     )
+
+    if [[ -n "${THOR_VLLM_COMPILATION_CONFIG}" ]]; then
+        THOR_VLLM_ARGS+=("--compilation-config" "${THOR_VLLM_COMPILATION_CONFIG}")
+    fi
 
     if [[ -n "${THOR_LOCAL_VLLM_API_KEY}" && "${THOR_LOCAL_VLLM_API_KEY}" != "dummy" ]]; then
         THOR_VLLM_ARGS+=("--api-key" "${THOR_LOCAL_VLLM_API_KEY}")
@@ -1297,9 +1359,19 @@ PYEOF
 # latter matters for caches imported by snapshot path, which may legitimately
 # have no refs/main file (as on the current Thor Qwen3.6 cache).
 _thor_vllm_find_cached_snapshot() {
-    local repo="${1:-}" require_tokenizer="${2:-1}" repo_dir revision snapshot
+    local repo="${1:-}" require_tokenizer="${2:-1}" requested_revision="${3:-}"
+    local repo_dir revision snapshot
     repo_dir="${THOR_HF_CACHE_DIR}/hub/models--${repo//\//--}"
     [[ -d "${repo_dir}/snapshots" ]] || return 1
+
+    if [[ -n "${requested_revision}" ]]; then
+        snapshot="${repo_dir}/snapshots/${requested_revision}"
+        if _thor_vllm_hf_snapshot_is_complete "${snapshot}" "${require_tokenizer}"; then
+            printf '%s\n' "${snapshot}"
+            return 0
+        fi
+        return 1
+    fi
 
     revision="$(cat "${repo_dir}/refs/main" 2>/dev/null || true)"
     if [[ -n "${revision}" ]]; then
@@ -1356,6 +1428,7 @@ PYEOF
 # crash must remain visible and must never trigger a surprise upstream update.
 _thor_resolve_vllm_hf_source() {
     local mode="${THOR_HF_MODE:-auto}" snapshot="" relative="" revision="" aux=""
+    local requested_revision="${THOR_VLLM_HF_REVISION:-}"
     local aux_missing=0
 
     # Compatibility with the backend-specific control used by older commands.
@@ -1373,7 +1446,7 @@ _thor_resolve_vllm_hf_source() {
 
     case "${mode}" in
         auto)
-            snapshot="$(_thor_vllm_find_cached_snapshot "${THOR_VLLM_HF_REPO}" || true)"
+            snapshot="$(_thor_vllm_find_cached_snapshot "${THOR_VLLM_HF_REPO}" 1 "${requested_revision}" || true)"
             if [[ -n "${snapshot}" ]]; then
                 relative="${snapshot#"${THOR_HF_CACHE_DIR}"/}"
                 revision="$(basename "${snapshot}")"
@@ -1395,11 +1468,16 @@ _thor_resolve_vllm_hf_source() {
             else
                 THOR_LAUNCH_MODEL_SOURCE="${THOR_VLLM_HF_REPO}"
                 THOR_VLLM_HF_OFFLINE_ACTIVE=0
-                info "No complete HF snapshot staged → online first download from ${THOR_VLLM_HF_REPO}."
+                if [[ -n "${requested_revision}" ]]; then
+                    THOR_VLLM_ARGS+=("--revision" "${requested_revision}")
+                    info "Pinned HF snapshot ${requested_revision:0:12}… is not staged → downloading that revision from ${THOR_VLLM_HF_REPO}."
+                else
+                    info "No complete HF snapshot staged → online first download from ${THOR_VLLM_HF_REPO}."
+                fi
             fi
             ;;
         offline)
-            snapshot="$(_thor_vllm_find_cached_snapshot "${THOR_VLLM_HF_REPO}" || true)"
+            snapshot="$(_thor_vllm_find_cached_snapshot "${THOR_VLLM_HF_REPO}" 1 "${requested_revision}" || true)"
             if [[ -z "${snapshot}" ]]; then
                 fail "THOR_HF_MODE=${mode}, but no complete cached snapshot exists for ${THOR_VLLM_HF_REPO}."
                 fix "Allow the first download with THOR_HF_MODE=auto or force upstream with THOR_HF_MODE=latest."
@@ -1439,6 +1517,13 @@ check_thor_launch_prereqs() {
     if ! docker info &>/dev/null; then
         fail "Docker daemon is not running"
         fix "Run: sudo systemctl start docker"
+        return 1
+    fi
+
+    if [[ "${THOR_VLLM_IMAGE_MUST_EXIST:-0}" == "1" ]] \
+        && ! docker image inspect "${THOR_VLLM_IMAGE}" >/dev/null 2>&1; then
+        fail "Required local image not found: ${THOR_VLLM_IMAGE}"
+        fix "Build the verified image first: ${THOR_VLLM_IMAGE_BUILD_HINT}"
         return 1
     fi
 
@@ -1583,6 +1668,7 @@ run_thor_vllm_container() {
     local docker_mount_args=()
     local docker_name_args=()
     local hf_offline_env_args=()
+    local nvidia_require_env_args=()
 
     # THOR_DETACH=1: run container in background, return immediately.
     # THOR_CONTAINER_NAME=<name>: pin the container name (for duo-serve).
@@ -1638,13 +1724,18 @@ run_thor_vllm_container() {
         )
     fi
 
+    case "${THOR_NVIDIA_DISABLE_REQUIRE:-1}" in
+        0|false) ;;
+        *) nvidia_require_env_args=(-e NVIDIA_DISABLE_REQUIRE=true) ;;
+    esac
+
     docker run "${docker_rm_args[@]}" \
         "${entrypoint_args[@]}" \
         "${docker_tty_args[@]}" \
         "${docker_name_args[@]}" \
         --runtime nvidia --gpus all \
         --ipc=host --network host \
-        -e NVIDIA_DISABLE_REQUIRE=true \
+        "${nvidia_require_env_args[@]}" \
         -e HF_HOME=/data/models/huggingface \
         -e HF_HUB_CACHE=/data/models/huggingface/hub \
         -e TRANSFORMERS_CACHE=/data/models/huggingface/hub \

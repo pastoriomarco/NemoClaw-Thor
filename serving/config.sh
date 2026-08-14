@@ -167,6 +167,7 @@ resolve_thor_sandbox_name() {
 # cases below: a recipe is only usable if it has both a catalog row AND a
 # resolve case.
 _MODEL_PROFILE_CATALOG=(
+    "qwen3.8-27b-nvfp4|thor|Qwen3.8-27B (coding/agentic dense VLM)|Unsloth mixed NVFP4 W4A4 + FP8/BF16 protected layers + BF16 vision/MTP; FP8 KV, MTP K=3, 256K context; verified custom Qwen3.8/SM110 image"
     "qwen3.6-35b-a3b-nvfp4-nvidia|thor|Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration)|Historical Task 4 winner — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock"
     "laguna-s-2.1-nvfp4-dflash|thor|poolside Laguna 2.1 (coding/agentic MoE)|EXPERIMENTAL assistant candidate — 118B-A8B NVFP4 + DFlash drafter (n=7) on pinned public v0.25.1 image; 38-44 tok/s short-ctx coding, ~15 tok/s @150K ctx; needs 0.81 util so cannot co-reside with Isaac; thinking OFF"
     "qwen3.6-27b-fp8-mtp-kvfp8|thor|Other Qwen3.6|dense 27B FP8 + MTP + FP8 KV (TEB 84)"
@@ -320,6 +321,26 @@ resolve_model_profile() {
             THOR_TARGET_MAX_TOKENS="16384"
             ;;
         # qwen3.5-27b-claude-distilled-v2-nvfp4 profile removed 2026-04-24 — superseded by qwen3.6.
+        qwen3.8-27b-nvfp4)
+            # Verified 2026-08-14 with unsloth/Qwen3.8-27B-NVFP4 revision
+            # 9c73e2d. This is a mixed-precision compressed-tensors checkpoint:
+            # most MLP weights/activations use NVFP4 W4A4; attention/GDN,
+            # lm_head and the final MLP retain FP8; vision and MTP retain BF16.
+            # Runtime uses FP8 KV and MTP K=3.  Four scheduler slots reproduce
+            # the live recipe and leave one subagent slot with three OpenClaw
+            # main calls. The combined input+output budget is 262,144 tokens.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="qwen3.8-27b-nvfp4"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="8"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"  # launch.sh: enable_thinking=true
+            ;;
         qwen3.6-27b-fp8-mtp-kvfp8)
             # EXPERIMENTAL: Qwen/Qwen3.6-27B-FP8 (official FP8 release) +
             # MTP N=1 + FP8 KV cache.

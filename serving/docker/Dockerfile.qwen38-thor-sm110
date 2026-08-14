@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1.6
+#
+# Qwen3.8 preview vLLM image adapted for Jetson AGX Thor (SM110).
+#
+# Keep the two upstream images digest-pinned: the copied native extension is
+# only validated against this exact Qwen3.8 preview stack.  The build remains
+# a small overlay and does not compile vLLM or FlashInfer from source.
+ARG THOR_VLLM_IMAGE=vllm/vllm-openai:v0.27.1@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967
+ARG QWEN38_VLLM_IMAGE=vllm/vllm-openai:qwen38@sha256:4a2f33a884222f7049b983263ad9976f89452bb81affecf5b67d89ad35c1bc31
+
+FROM ${THOR_VLLM_IMAGE} AS thor_vllm
+
+FROM ${QWEN38_VLLM_IMAGE}
+
+# The Qwen3.8 preview carries FlashInfer and its JIT-cache package, but omits
+# the separately published precompiled cubin bundle.
+RUN python3 -m pip install --no-cache-dir \
+    'https://github.com/flashinfer-ai/flashinfer/releases/download/v0.6.17/flashinfer_cubin-0.6.17-py3-none-any.whl' \
+    && python3 -c "import flashinfer, flashinfer_cubin; assert flashinfer.__version__ == '0.6.17'"
+
+# The preview image's vLLM native extension omits SM110.  The matching
+# CUDA-13 / Torch-2.13 extension from the stable v0.27.1 arm64 image contains
+# native SM110 code and is ABI-compatible with this pinned preview image.
+COPY --from=thor_vllm \
+    /usr/local/lib/python3.12/dist-packages/vllm/_C_stable_libtorch.abi3.so \
+    /usr/local/lib/python3.12/dist-packages/vllm/_C_stable_libtorch.abi3.so
+
+LABEL org.opencontainers.image.title="NemoClaw-Thor Qwen3.8 vLLM SM110 overlay" \
+      org.opencontainers.image.description="Pinned Qwen3.8 preview with FlashInfer 0.6.17 cubins and the vLLM 0.27.1 SM110 native extension"
