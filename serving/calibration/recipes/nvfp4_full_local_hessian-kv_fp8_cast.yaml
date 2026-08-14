@@ -1,0 +1,42 @@
+# Speed-challenger recipe: local-Hessian NVFP4 W4A4 on every linear module
+# eligible under ModelOpt's standard safety exclusions. MTP and vision remain
+# high precision so the challenger retains the same features as the quality
+# candidate.
+
+imports:
+  base_disable_all: configs/ptq/units/base_disable_all
+  default_disabled_quantizers: configs/ptq/units/default_disabled_quantizers
+  nvfp4: configs/numerics/nvfp4
+  nvfp4_static: configs/numerics/nvfp4_static
+  kv_fp8_cast: configs/ptq/units/kv_fp8_cast
+
+metadata:
+  recipe_type: ptq
+  description: >-
+    Full ModelOpt-eligible NVFP4 W4A4 recipe with local-Hessian weight-scale
+    search, BF16 MTP and vision branches, and FP8 KV cast.
+
+quantize:
+  algorithm:
+    method: local_hessian
+    fp8_scale_sweep: true
+    block_size: 16
+    layerwise: false
+  quant_cfg:
+    - $import: base_disable_all
+    - quantizer_name: '*weight_quantizer'
+      cfg:
+        $import: nvfp4_static
+    - quantizer_name: '*input_quantizer'
+      cfg:
+        $import: nvfp4
+    - $import: kv_fp8_cast
+    - $import: default_disabled_quantizers
+    - quantizer_name: '*mtp*'
+      enable: false
+    - quantizer_name: '*visual*'
+      enable: false
+    - quantizer_name: '*vision*'
+      enable: false
+    - quantizer_name: '*multi_modal_projector*'
+      enable: false

@@ -2,15 +2,18 @@
 
 **Status:** exploratory proposal; not a production runbook
 
-**Last updated:** 2026-08-10
+**Last updated:** 2026-08-12
 
 **Scope:** development of ManyForge and related repositories using a frontier
 Codex supervisor plus sandboxed workers backed by local LAN models
 
-This document proposes an experiment. It records what to test, how to compare
-the candidates, and the safety boundary to preserve while testing. It does not
-declare a winning harness, authorize autonomous commits, or change the
-ManyForge Composer assistant stack.
+This document proposes an experiment. Its **primary target** is a hybrid Codex
+CLI workflow: native Codex subagents perform parallel read-only work, while
+separately launched Codex CLI workers make changes in isolated
+containers/worktrees. OMP, NOOA, OpenClaw, and other harnesses remain
+comparison or fallback candidates. This document does not declare a proven
+winner, authorize autonomous commits, or change the ManyForge Composer
+assistant stack.
 
 The existing production-facing OpenClaw workflow remains documented in
 [`NEMOCLAW-OPENCLAW-WORKFLOW.md`](NEMOCLAW-OPENCLAW-WORKFLOW.md). The workflow
@@ -23,20 +26,26 @@ Find a repeatable coding setup in which:
 
 1. a frontier model running through the operator's existing **Codex CLI** is
    the sole supervisor and integration authority;
-2. one or more local models perform bounded implementation work through
-   replaceable worker harnesses;
-3. every worker receives an isolated repository copy or worktree;
-4. workers return patches and evidence, never merge directly;
-5. only Codex runs authoritative builds, compiles the workspace, launches the
-   application, and decides whether a worker patch is acceptable; and
+2. local models perform bounded work through Codex CLI first, with other
+   harnesses retained for comparison;
+3. every write-capable worker receives an isolated repository copy or
+   worktree;
+4. workers return summaries, patches, and evidence, never merge directly;
+5. only the frontier supervisor runs authoritative builds, compiles the
+   workspace, launches the application, and decides whether a worker patch is
+   acceptable; and
 6. the experiment can demonstrate whether local workers improve correctness,
    wall-clock time, or frontier-token efficiency.
 
-The initial local inference candidates are:
+The initial local inference targets are:
 
-- **Thor:** DeepSeek-V4-Flash-0731 through Entrpi DS4 on `:8050`.
-- **Orin AGX 64 GB:** a smaller coding model such as a Qwen 3.6 27B/35B-class
-  profile, after that device receives its own measured serving recipe.
+- **Thor:** a Qwen 3.x 27B-class coding profile through an OpenAI-compatible
+  endpoint, using a measured context/concurrency profile.
+- **Orin AGX 64 GB:** a compatible Qwen 3.x 27B-class profile, after that
+  device receives its own measured serving recipe.
+- **Thor comparison:** DeepSeek-V4-Flash-0731 through Entrpi DS4 on `:8050`,
+  retained as a quality and long-context reference rather than the primary
+  worker target.
 
 The laptop should run the supervisor and worker harness containers. It should
 not need to host the large models.
@@ -63,23 +72,35 @@ Frontier Codex CLI supervisor
   - reviews every returned patch
   - alone builds, tests, runs, commits, and pushes
       |
-      +----------------------+----------------------+-------------------+
-      |                      |                      |                   |
-      v                      v                      v                   v
- OMP worker             NOOA worker          local Codex CLI     OpenClaw control
- sandbox A              sandbox B            worker sandbox C    sandbox D
-      |                      |                      |                   |
-      +----------------------+----------------------+-------------------+
-                             |
-                  OpenAI-compatible LAN inference
-                     /                         \
-        DS4 on Thor :8050             Qwen-class model on Orin
+      +-- Lane A: native Codex subagents
+      |      - visible in the same CLI session through /agent
+      |      - different model/instructions where supported
+      |      - read-only exploration, planning, and review
+      |      - no concurrent implementation writes in the baseline
+      |
+      +-- Lane B: externally launched Codex CLI workers
+             - one independent process per task
+             - one container and repository copy/worktree per process
+             - bounded implementation writes and patch export
+             - local Qwen endpoint on Thor or Orin
+                         |
+              OpenAI-compatible LAN inference
+                    /                 \
+             Qwen on Thor       Qwen on Orin
 ```
 
-Each worker sandbox gets a different copy of the repository. Comparative runs
-must never share a writable tree. The supervisor receives only a patch,
-manifest, report, transcript/metrics summary, and the worker's claimed
-verification evidence.
+In simple terms, Lane A is a group of assistants at the supervisor's desk: it
+can create, inspect, steer, and collect them directly, but they see the same
+working environment, so they are safest when reading. Lane B is a group of
+contractors in separate workshops: each is a separate Codex process with its
+own disposable tree, so it can edit without colliding with the supervisor or
+another worker. Lane B needs a launcher and artifact handoff, but supplies the
+stronger containment boundary required for implementation.
+
+Each external worker sandbox gets a different copy of the repository.
+Comparative runs must never share a writable tree. The supervisor receives
+only a patch, manifest, report, transcript/metrics summary, and the worker's
+claimed verification evidence.
 
 ## Roles and authority
 
@@ -102,32 +123,73 @@ This is the control plane and the only trusted integration actor. It should:
 The supervisor should not delegate final architectural judgment, cross-repo
 contract interpretation, destructive operations, or release decisions.
 
-### 2. Codex CLI with a local model — worker candidate
+### 2. Native Codex mixed-model subagents — read-only lane
 
-Codex CLI itself is worth testing as a local-model worker because it supplies a
-strong coding tool loop while keeping the harness constant between frontier and
-local-model runs. Current Codex configuration supports custom model providers,
-but the custom-provider wire protocol is the **Responses API**. Entrpi DS4
-v0.5.6.2 exposes a Responses-compatible endpoint, so the combination is
-plausible but still needs a live compatibility test.
+This is the first lane of the primary target. The frontier supervisor asks
+Codex to delegate independent exploration, planning, triage, and review to
+native subagents. Codex owns their lifecycle and exposes their threads through
+`/agent`, so the supervisor can inspect progress and collect concise results
+without filling its own context with raw searches and logs.
+
+Custom Codex agents may use different model configurations and instructions.
+The compatibility experiment must determine whether a native custom subagent
+can use each local Qwen endpoint reliably. Until this is proven, a hosted
+Codex subagent is the control and an external local-model worker is the
+fallback.
+
+Native subagents inherit the active sandbox/permission environment. They do
+not automatically provide one independent Git worktree per subagent. The
+baseline therefore restricts them to:
+
+- repository exploration and evidence gathering;
+- plan/spec interpretation;
+- proposed change lists and implementation plans;
+- independent review of a patch already produced elsewhere; and
+- test/log analysis where the supervisor supplies the evidence.
+
+Do not ask multiple native subagents to edit the shared checkout in the first
+experiment. If a later Codex release provides a verified one-worktree-per-
+subagent workflow, test that as a separate variant before changing this rule.
+
+### 3. External Codex CLI workers — isolated implementation lane
+
+This is the second lane of the primary target. The supervisor launches one
+independent non-interactive Codex CLI process per bounded coding task. Each
+process runs in its own container and clean repository copy/worktree, uses a
+local model endpoint, and returns artifacts rather than integrating changes.
+
+Unlike a native subagent, an external worker is not a child thread managed by
+the supervisor's `/agent` view. The supervisor or a small deterministic
+launcher must create the sandbox, start `codex exec`, enforce the timeout,
+capture the transcript, and collect `PATCH.diff` and `REPORT.md`. The extra
+plumbing is intentional: it lets implementation workers write without sharing
+the supervisor's checkout or another worker's filesystem.
+
+Codex CLI is the first implementation harness to test because it supplies a
+strong coding tool loop while keeping the harness family constant between the
+frontier supervisor and local-model workers. Current Codex configuration
+supports custom model providers, but the custom-provider wire protocol is the
+**Responses API**. Each Qwen serving endpoint must pass a live Responses and
+tool-loop compatibility smoke before use. Entrpi DS4 v0.5.6.2 exposes a
+Responses-compatible endpoint and remains a comparison target.
 
 Provider settings are machine-local and must not be placed in a repository's
 `.codex/config.toml`. For a containerized worker, create a disposable
 container-local Codex home and place an experimental profile there. An
-illustrative, unvalidated profile is:
+illustrative, unvalidated Thor profile is:
 
 ```toml
-model = "deepseek-v4-flash"
-model_provider = "thor_ds4"
-model_context_window = 524288
+model = "<served-qwen-model-id>"
+model_provider = "thor_qwen"
+model_context_window = 262144
 approval_policy = "never"
 sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 network_access = false
 
-[model_providers.thor_ds4]
-name = "Thor DS4"
+[model_providers.thor_qwen]
+name = "Thor Qwen"
 base_url = "http://192.168.1.136:8050/v1"
 wire_api = "responses"
 requires_openai_auth = false
@@ -135,14 +197,14 @@ stream_idle_timeout_ms = 1800000
 ```
 
 The outer OpenShell/container boundary, not the Codex CLI sandbox alone, is the
-security boundary. Network policy must still allow the DS4 endpoint even if
+security boundary. Network policy must still allow the model endpoint even if
 the inner Codex workspace sandbox denies general network access.
 
 Do not promote this candidate until it proves correct handling of streamed
 Responses events, tool calls, long idle periods, cancellation, and truncated
-outputs against DS4.
+outputs against the selected Qwen server and DS4 comparison server.
 
-### 3. OMP — established local-model baseline
+### 4. OMP — established local-model comparison
 
 OMP means the `can1357/oh-my-pi` terminal coding harness used in the earlier
 DS4 experiments. It is the first practical baseline because it already:
@@ -164,12 +226,12 @@ known risks are long tool loops, commands reported as skipped, context growth,
 and sessions that remain in a thinking state after the terminal action has
 finished.
 
-### 4. NOOA — high-upside programmatic worker candidate
+### 5. NOOA — optional programmatic dispatcher candidate
 
-NVIDIA Labs Object-Oriented Agents (NOOA) is the most interesting experimental
-candidate for repeatable, non-interactive workers. It represents an agent as a
-Python object: methods are capabilities, fields are state, docstrings are
-prompts, and type annotations are validated contracts.
+NVIDIA Labs Object-Oriented Agents (NOOA) is a high-upside comparison for
+repeatable, non-interactive workers. It represents an agent as a Python object:
+methods are capabilities, fields are state, docstrings are prompts, and type
+annotations are validated contracts.
 
 The properties worth testing on local models are:
 
@@ -207,7 +269,7 @@ Do not expose arbitrary host shell, Docker, SSH, ROS devices, Git credentials,
 or network clients. If Python execution can still reach the filesystem, the
 outer sandbox must make everything except the worker copy inaccessible.
 
-### 5. OpenClaw in NemoClaw — historical control
+### 6. OpenClaw in NemoClaw — historical control
 
 OpenClaw is not the preferred new coding harness, but it is an important
 control because the repository contains a previously successful
@@ -219,7 +281,7 @@ Use the current NemoClaw/OpenShell procedure, not commands copied from old Git
 history. The current control-plane workflow is
 [`NEMOCLAW-OPENCLAW-WORKFLOW.md`](NEMOCLAW-OPENCLAW-WORKFLOW.md).
 
-### 6. Optional second-wave candidates
+### 7. Optional second-wave candidates
 
 Do not put every harness into the first matrix. Add these only if the first
 wave leaves an unresolved question:
@@ -229,33 +291,54 @@ wave leaves an unresolved question:
 | OpenCode | Broad provider support, official container image, mature coding UI | Overlaps OMP; adds another variable before the core comparison is stable |
 | Hermes Agent | Already available through NemoClaw; memory and skills may help long projects | Less direct evidence for this exact local coding workload |
 | Prime-agent | Potentially useful lightweight Pi-family comparison | OMP is the better-established Pi-family baseline here |
-| OMP/NOOA subagents | May increase aggregate local throughput | Nested coordination hides single-worker failures and consumes DS4 banks quickly |
+| OMP/NOOA subagents | May increase aggregate local throughput | Nested coordination hides single-worker failures and consumes serving capacity quickly |
 
 ## Model allocation hypothesis
 
 This is the initial hypothesis, not a fixed routing policy:
 
-| Work | First-choice model | Reason |
-|---|---|---|
-| Task decomposition, spec interpretation, final review | Frontier Codex | Highest judgment and full integration context |
-| Difficult implementation and cross-file refactors | DS4 on Thor | Strongest currently served local coding model |
-| Focused implementation, tests, documentation, independent critique | Qwen-class model on Orin | Preserves Thor capacity and adds model diversity |
-| Deterministic validation, builds, app launch | No model decision; Codex executes | Evidence must come from the trusted integration environment |
+| Role | First-choice model | Reasoning | Responsibility |
+|---|---|---|---|
+| Main orchestrator and final integrator | GPT-5.6 Sol | Max | Decompose work, schedule concurrency, resolve architecture, review all results, and alone validate and integrate |
+| `architecture_analyst` | GPT-5.6 Sol | High | Interpret specs and architecture, identify invariants and cross-repository constraints, and return evidence to the orchestrator |
+| `code_explorer` | Local Qwen 3.x 27B | High | Trace implementation paths, symbols, state, and ownership without editing |
+| `implementer` | Local Qwen 3.x 27B | High | Make one bounded change within an explicit path allowlist |
+| `test_worker` | Local Qwen 3.x 27B | High | Analyze coverage and write focused tests within a separate test-path allowlist |
+| `local_reviewer` | Local Qwen 3.x 27B | High | Independently review worker patches for correctness, scope, regressions, and missing tests |
+| Long-context auditor, optional | DS4 on Thor | Low or reasoning off | Handle selected unusually large audits without making DS4 a normal worker dependency |
 
 Do not route solely by advertised context length. Most worker tasks should be
 small enough to fit well below 128K. The task packet should contain the
 necessary contract excerpts and file pointers instead of a dump of the whole
 repository.
 
-### DS4 concurrency starting point
+The role table records the requested first-test configuration, not installed
+agent files. For local Qwen, `High` means the worker profile requests high
+reasoning consistently; the compatibility test must verify how the selected
+server and model expose that setting and whether it improves the fixed task
+set. Do not silently substitute a lower effort during the comparison.
 
-The currently validated Thor profile is 512K context with two continuous
-banks. Start with **at most two active DS4 workers**. Additional requests may
-queue, but four queued callers are not four independent 512K banks.
+### Serving concurrency starting point
 
-The initial experiment should leave DS4 at the documented 512K recipe so that
+Start the primary Qwen experiment with **one active worker per device**. After
+single-worker quality and server stability pass, test two and then four total
+workers. Increase one device and one context/bank parameter at a time. A
+theoretical maximum such as sixteen request slots is a capacity hypothesis,
+not an initial orchestration target: active agents also consume KV cache,
+prefill bandwidth, tool-loop time, and supervisor review capacity.
+
+Keep no more than two external implementation workers active initially. Native
+read-only subagents can run in parallel when their work is independent, but
+their model requests still count against the same serving limits.
+
+For the retained DS4 comparison, the currently validated Thor profile is 512K
+context with two continuous banks. Start with **at most two active DS4
+workers**. Additional requests may queue, but four queued callers are not four
+independent 512K banks.
+
+The DS4 comparison should leave DS4 at the documented 512K recipe so that
 harness behavior is tested before serving parameters change. A later,
-separate experiment may compare:
+separate comparison may measure:
 
 - 512K allocation / two banks / 4K prefill chunks;
 - 256K allocation / candidate higher bank count / 8K chunks; and
@@ -268,16 +351,20 @@ gates in [`../serving/docs/DS4-ON-THOR.md`](../serving/docs/DS4-ON-THOR.md).
 
 ### Useful total worker count
 
-Begin with one supervisor and **two active local workers**. After the single
-worker gates pass, increase to three or four workers split across Thor and
-Orin. More than roughly five independently changing workers is unlikely to
-help until task decomposition, patch conflict handling, and review automation
-are proven.
+Begin with one supervisor, up to **two native read-only subagents**, and up to
+**two external implementation workers** split across Thor and Orin. After the
+single-worker gates pass, increase to three or four external workers only on
+non-overlapping tasks. Six to eight total active helpers may be useful for a
+large, cleanly partitioned plan, but more than roughly four simultaneous
+writers is unlikely to help until patch conflict handling and review
+automation are proven. Treat sixteen agents as a later serving-capacity test,
+not a recommended workflow size.
 
 Use only one orchestration level initially:
 
 ```text
-Codex supervisor -> worker
+Codex supervisor -> native read-only subagent
+Codex supervisor -> isolated external implementation worker
 ```
 
 Do not permit `Codex -> worker main agent -> worker subagents` during baseline
@@ -418,14 +505,75 @@ distinguish active prefill from an idle harness.
 
 ## Experimental comparison
 
-### Phase 0 — compatibility smoke
+### Architectural test A — five-role mixed-model workflow (run first)
 
-Run each first-wave harness against DS4 on four small tasks:
+This is the first workflow architecture to test before creating durable custom
+agent files or comparing additional harnesses. It tests whether one frontier
+Codex CLI conversation can supervise a Sol subagent and a local Qwen worker
+pool while preserving authority, evidence, and filesystem boundaries.
+
+Use this exact role/model assignment:
+
+| Role | Model | Reasoning | Initial execution lane |
+|---|---|---|---|
+| Main orchestrator | GPT-5.6 Sol | Max | Parent Codex CLI conversation |
+| `architecture_analyst` | GPT-5.6 Sol | High | Native read-only subagent |
+| `code_explorer` | Local Qwen 3.x 27B | High | Native read-only subagent if compatible; otherwise isolated `codex exec` |
+| `implementer` | Local Qwen 3.x 27B | High | Isolated write-capable `codex exec` worker |
+| `test_worker` | Local Qwen 3.x 27B | High | Isolated write-capable `codex exec` worker with test-only paths |
+| `local_reviewer` | Local Qwen 3.x 27B | High | Read-only worker, preferably on the other Jetson from the implementer |
+
+Run one small but representative ManyForge task from a frozen commit:
+
+1. The orchestrator freezes the objective, authoritative files, acceptance
+   criteria, dependency graph, and per-worker path ownership.
+2. `architecture_analyst` and `code_explorer` run concurrently. The former
+   returns architectural constraints; the latter returns the observed code
+   path and likely change surface.
+3. The orchestrator reconciles those reports and decides what may run at the
+   same time. It dispatches `implementer` and `test_worker` concurrently only
+   when their writable paths and shared state are disjoint; otherwise it
+   serializes them.
+4. `local_reviewer` receives the frozen requirements and resulting patches,
+   but not the workers' conclusions, and returns an independent findings-first
+   review.
+5. The Sol Max orchestrator inspects all diffs, runs the authoritative build
+   and tests, and decides whether anything is acceptable. No subagent commits,
+   pushes, merges, launches the application, or operates hardware.
+
+The architecture test passes only if:
+
+- the parent successfully selects the requested model and High reasoning for
+  every subagent/worker;
+- Qwen completes the Responses/tool-result loop without malformed tool calls,
+  stalls, or leaked tool syntax;
+- concurrent workers remain inside their path allowlists and produce patches
+  that apply cleanly;
+- the reviewer finds seeded defects or meaningful omissions without copying
+  the implementer's rationale;
+- only the orchestrator performs authoritative validation and integration;
+  and
+- the run records per-role model, effective reasoning setting, endpoint,
+  tokens, wall time, interventions, and serving metrics.
+
+Repeat the exact task once with all local roles on Thor, once with all local
+roles on Orin, and once split across both devices. Keep task, prompts, context,
+sampling, and concurrency fixed. Do not create permanent project-scoped agent
+files until this test establishes that the role boundaries and model routing
+are useful.
+
+### Phase 0 — primary-target compatibility smoke
+
+First test the two Codex lanes against one Qwen endpoint on four small tasks:
 
 1. read-only architecture question with exact file citations;
 2. one-file mechanical edit;
 3. two-file behavioral edit with an explicit invariant; and
 4. patch export after a simulated interrupted session.
+
+Use native subagents only for task 1 and an independent review of tasks 2–4.
+Use isolated external Codex CLI processes for all edits. Repeat the same smoke
+against the second Qwen endpoint, then against DS4 as a model comparison.
 
 Pass requirements:
 
@@ -455,23 +603,27 @@ only tasks whose answer appears verbatim in plans or Git history.
 Run the same task packet through:
 
 1. frontier Codex working alone — quality and token baseline;
-2. Codex supervising OMP+DS4;
-3. Codex supervising NOOA+DS4;
-4. Codex supervising local-Codex-CLI+DS4; and
-5. Codex supervising OpenClaw+DS4 as the historical control.
+2. frontier Codex using native read-only subagents;
+3. frontier Codex supervising isolated Codex CLI+Qwen workers;
+4. the hybrid primary target: native readers plus isolated Qwen writers;
+5. the same isolated Codex CLI lane with DS4 for a model comparison; and
+6. OMP, NOOA, or OpenClaw controls only where they answer a remaining harness
+   question.
 
 Run candidates sequentially at first so inference contention cannot distort
 the harness comparison. Add a concurrent-throughput phase only after the
 single-worker matrix is complete.
 
-### Phase 2 — multi-model routing
+### Phase 2 — multi-device and multi-model routing
 
-Take only the two best worker harnesses from Phase 1 and compare:
+Keep Codex CLI as the primary worker harness and compare:
 
-- DS4 alone;
-- the Orin Qwen-class model alone;
-- DS4 implementation plus Orin review; and
-- parallel non-overlapping tasks split across Thor and Orin.
+- Thor Qwen alone;
+- Orin Qwen alone;
+- one device implementing while the other performs an independent review;
+- parallel non-overlapping implementation tasks split across Thor and Orin;
+  and
+- DS4 only on selected long-context or difficult comparison cases.
 
 Do not let both workers edit the same files in the concurrency test. A
 same-task ensemble should return independent patches or reviews for Codex to
@@ -481,8 +633,11 @@ reconcile.
 
 Only after correctness is stable, measure:
 
-- one versus two DS4 workers on the current 512K/two-bank recipe;
-- the separately validated 256K and 128K serving candidates;
+- one, two, and four Qwen workers across Thor and Orin;
+- per-device 256K and 128K serving candidates;
+- the later six-, eight-, and sixteen-request capacity hypotheses without
+  assuming all requests should be implementation writers;
+- one versus two DS4 workers on the retained 512K/two-bank recipe;
 - retained-prefix effectiveness across iterative revisions;
 - queue latency and aggregate decode throughput; and
 - whether more workers reduce or increase supervisor review time.
@@ -528,44 +683,50 @@ No benchmark score overrides a security-boundary failure.
 
 The likely near-term sequence is:
 
-1. **OMP+DS4 baseline:** quantify the setup that already works interactively.
-2. **local Codex CLI+DS4 smoke:** determine whether DS4's Responses surface is
-   sufficiently compatible with Codex's coding loop.
-3. **minimal NOOA+DS4 worker:** test typed output, pass-by-reference, patch
-   generation, and cancellation without building a large framework first.
-4. **OpenClaw control rerun:** measure the historical approach on the same task
-   set and current software.
-5. **Select two harnesses:** stop broad exploration and deepen only the best
-   interactive and best programmatic candidate.
-6. **Add Orin:** evaluate model routing only after its serving recipe and
-   single-worker baseline are stable.
-7. **Test bounded concurrency:** two DS4 workers first; higher counts only with
-   a separately validated lower-context serving profile.
+1. **Five-role architectural test:** run the Sol Max orchestrator, Sol High
+   `architecture_analyst`, and four High-reasoning Qwen roles on one frozen
+   ManyForge task, including the Thor/Orin routing variants above.
+2. **Native subagent smoke:** deepen mixed-model configuration, read-only
+   delegation, `/agent` visibility, cancellation, and summary-quality checks.
+3. **Isolated Codex CLI+Qwen smoke:** verify the Responses/tool loop, patch
+   export, timeout handling, and the container/worktree boundary on Thor.
+4. **Hybrid workflow task:** native subagents explore and review while an
+   external Qwen worker implements; the frontier supervisor validates.
+5. **Add Orin:** repeat the same worker contract against Orin and test routing
+   between the two devices.
+6. **Run model/harness controls:** compare DS4 and, only where useful, OMP,
+   NOOA, and historical OpenClaw on the same frozen tasks.
+7. **Test bounded concurrency:** scale from two to four local workers; test
+   higher counts only after lower-context serving profiles and supervisor
+   review capacity are measured.
 
-Possible final outcome:
+Primary target to validate:
 
 - **Codex CLI frontier** remains the supervisor and validator.
-- **OMP** remains the human-facing exploratory local session tool.
-- **NOOA** becomes the deterministic programmatic worker/dispatcher if its DS4
-  compatibility and task results hold up.
-- **OpenShell/NemoClaw** remains the containment and local-inference routing
-  substrate.
-- **OpenClaw** remains available as a known control or fallback rather than the
-  default coding worker.
+- **Native Codex subagents** handle parallel read-only exploration, planning,
+  triage, and review.
+- **External Codex CLI workers** use local Qwen endpoints and isolated
+  containers/worktrees for implementation.
+- **OpenShell or an equivalent outer sandbox** remains the containment layer.
+- **OMP, NOOA, and OpenClaw** remain comparisons or fallbacks unless one shows
+  a measured advantage on the fixed task set.
 
 This is a hypothesis to test, not the conclusion of this document.
 
 ## Open questions
 
-- Does DS4 reliably produce NOOA CodeAct Python and typed terminal results?
-- Does Codex CLI's Responses loop interoperate fully with DS4 v0.5.6.2,
-  especially long SSE idle periods and tool-result continuation?
-- Does pass-by-reference materially lower DS4 prefill and retained-context
-  growth on real ManyForge work?
+- Can native custom Codex subagents reliably use both LAN Qwen endpoints, or
+  must local-model workers remain external processes?
+- Does each Qwen serving stack implement Codex's Responses and tool-result
+  continuation behavior completely enough for long coding sessions?
+- What is the smallest deterministic launcher that gives every external Codex
+  worker a clean container/worktree, timeout, transcript, and artifact bundle?
+- Does DS4 remain useful enough on difficult or long-context tasks to justify
+  a separate comparison lane?
 - Is OMP's occasional skipped/stuck terminal behavior eliminated by running
   one fresh process per task sandbox?
-- Which Qwen-class model and quantization give the best coding reliability on
-  Orin without starving Isaac ROS?
+- Which Qwen 3.x 27B profile and quantization give the best coding reliability
+  on Thor and Orin without starving Isaac ROS?
 - Does an independent second local model improve review quality enough to
   justify its latency?
 - At what worker count does Codex spend more effort reconciling patches than it
@@ -585,6 +746,9 @@ Repository-local:
 
 External primary sources:
 
+- [OpenAI Codex subagents](https://developers.openai.com/codex/multi-agent)
+- [OpenAI Codex non-interactive mode](https://learn.chatgpt.com/codex/non-interactive-mode)
+- [OpenAI Codex Git worktrees](https://learn.chatgpt.com/codex/environments/git-worktrees)
 - [OpenAI Codex configuration reference](https://developers.openai.com/codex/config-reference)
 - [NVIDIA NOOA repository](https://github.com/NVIDIA-NeMo/labs-OO-Agents)
 - [NVIDIA: Six Agent Harness Capabilities for Higher Model Performance](https://developer.nvidia.com/blog/six-agent-harness-capabilities-for-higher-model-performance/)

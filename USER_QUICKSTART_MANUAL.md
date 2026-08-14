@@ -277,6 +277,11 @@ The most relevant per-run overrides for `./serving/start-model.sh`:
 - `THOR_MAX_NUM_SEQS`
 - `THOR_GPU_MEMORY_UTILIZATION`
 - `THOR_MAX_NUM_BATCHED_TOKENS`
+- `THOR_HF_MODE=auto|offline|latest` — `auto` uses a verified local model and
+  downloads only when missing; `offline` requires local weights; `latest`
+  explicitly checks the Hub and fetches changed or missing blobs. This applies
+  to all Hugging Face-backed vLLM and llama.cpp profiles; explicit local model
+  paths are unaffected.
 
 Example:
 

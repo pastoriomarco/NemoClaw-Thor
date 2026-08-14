@@ -94,6 +94,9 @@ Production-decision status (interim): [`manyforge/docs/PHASE-5-PRODUCTION-DECISI
 ## Serving & model tuning (`serving/`)
 
 - [`serving/config.sh`](serving/config.sh) — model profiles.
+- [`serving/calibration/README.md`](serving/calibration/README.md) — offline,
+  deterministic coding-corpus builder and model-tokenizer renderer for
+  ModelOpt PTQ.
 - [`serving/docs/KV-CACHE-BUDGET.md`](serving/docs/KV-CACHE-BUDGET.md) — Thor
   128 GB unified-memory KV budget reference.
 - [`serving/docs/`](serving/docs/) — serving plans, recipes, performance
@@ -104,6 +107,8 @@ Production-decision status (interim): [`manyforge/docs/PHASE-5-PRODUCTION-DECISI
   - **Serving recipe** — [`V9-35B-A3B-NVFP4-NVIDIA-RECIPE.md`](serving/docs/V9-35B-A3B-NVFP4-NVIDIA-RECIPE.md),
     baseline [`V9-SMOKE-CORPUS-BASELINE.md`](serving/docs/V9-SMOKE-CORPUS-BASELINE.md).
   - **Fine-tune** — [`COSMOS-REASON2-FINETUNE-PLAN.md`](serving/docs/COSMOS-REASON2-FINETUNE-PLAN.md).
+  - **Qwen 27B NVFP4 plan** — [`QWEN38-27B-NVFP4-QUANTIZATION-PLAN.md`](serving/docs/QWEN38-27B-NVFP4-QUANTIZATION-PLAN.md)
+    (quality-first and full-NVFP4 local ModelOpt workflow, prepared corpus and recipes).
   - **Investigations (durable references)** — [`DFLASH-INVESTIGATION.md`](serving/docs/DFLASH-INVESTIGATION.md),
     [`DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md`](serving/docs/DS4-DEEPSEEK-V4-FLASH-INVESTIGATION.md),
     [`MINIMAX-M27-INVESTIGATION.md`](serving/docs/MINIMAX-M27-INVESTIGATION.md),

@@ -10,6 +10,7 @@ fi
 
 prepare_thor_launch_profile() {
     local profile="${1:-${THOR_MODEL_PROFILE:-}}"
+    local _user_llamacpp_offline="${THOR_LLAMACPP_OFFLINE:-}"
 
     # Snapshot any operator-supplied THOR_HF_CACHE_DIR *before* the generic
     # default below clobbers it, so platform profiles (e.g. the Orin AGX gemma
@@ -41,21 +42,42 @@ prepare_thor_launch_profile() {
     # Initialised here so the summary/run/prereq helpers stay defined under
     # `set -u` regardless of which backend a profile selects.
     THOR_LAUNCH_BACKEND="${THOR_LAUNCH_BACKEND:-vllm}"
+    # Unified Hugging Face policy for every Hub-backed profile:
+    #   auto    -> complete local snapshot first; online first-download fallback
+    #   offline -> require a complete local snapshot
+    #   latest  -> resolve upstream and fetch only changed/missing blobs
+    # Explicit filesystem model paths bypass Hub resolution. The old backend-
+    # specific offline variables remain accepted as compatibility overrides.
+    THOR_HF_MODE="${THOR_HF_MODE:-auto}"
+    THOR_VLLM_HF_REPO=""
+    THOR_VLLM_HF_AUX_REPOS=()
+    THOR_VLLM_HF_OFFLINE_ACTIVE=0
+    THOR_VLLM_HF_OFFLINE="${THOR_VLLM_HF_OFFLINE:-}"
     THOR_LLAMACPP_HF=""
     THOR_LLAMACPP_SPEC_DRAFT_HF=""
     THOR_LLAMACPP_EXTRA_ARGS=()
 
-    # Cache-first serving for the HF-download lane. llama.cpp's `-hf` resolves
-    # the repo's *latest* `main` revision on every launch and re-downloads when
-    # upstream moves — even if a complete copy is already staged. THOR_LLAMACPP_OFFLINE
-    # controls this:
-    #   auto (default) -> serve `--offline` (cached weights) when the repo is
-    #                     already staged; fetch online on first launch only.
-    #   1 / true       -> force `--offline` (never touch the network).
-    #   0 / false      -> force online (re-resolve latest; use to pull updates).
-    # Resolved in check_thor_launch_prereqs, which also warns when a newer
-    # upstream revision exists (without auto-updating).
-    THOR_LLAMACPP_OFFLINE="${THOR_LLAMACPP_OFFLINE:-auto}"
+    case "${THOR_HF_MODE}" in
+        auto|offline|latest) ;;
+        *)
+            fail "Invalid THOR_HF_MODE=${THOR_HF_MODE}; expected auto, offline, or latest."
+            return 1
+            ;;
+    esac
+
+    # Map the unified policy onto llama.cpp's existing --offline control. The
+    # backend-specific THOR_LLAMACPP_OFFLINE remains a compatibility override.
+    # Resolution happens in check_thor_launch_prereqs, which can also warn about
+    # a newer revision without automatically downloading it in auto mode.
+    if [[ -n "${_user_llamacpp_offline}" ]]; then
+        THOR_LLAMACPP_OFFLINE="${_user_llamacpp_offline}"
+    else
+        case "${THOR_HF_MODE}" in
+            auto) THOR_LLAMACPP_OFFLINE=auto ;;
+            offline) THOR_LLAMACPP_OFFLINE=1 ;;
+            latest) THOR_LLAMACPP_OFFLINE=0 ;;
+        esac
+    fi
 
     # llama.cpp HF-download lane cache wiring (host mounts + container env).
     # Default reproduces the Thor single-mount layout: exactly one persisted
@@ -797,7 +819,10 @@ prepare_thor_launch_profile() {
             # no-op — assign unconditionally (this recipe requires the stock image).
             THOR_VLLM_IMAGE="vllm/vllm-openai:nightly-aarch64"
             THOR_VLLM_ENTRYPOINT=""   # blank: the nightly bakes `vllm serve` into its entrypoint
-            THOR_LAUNCH_MODEL_SOURCE="unsloth/Qwen3.6-27B-NVFP4"
+            # The generic Hub resolver below applies the same cache-first
+            # policy used by every vLLM HF profile. A filesystem override is
+            # already local and therefore bypasses Hub resolution.
+            THOR_LAUNCH_MODEL_SOURCE="${THOR_QWEN36_27B_NVFP4_MODEL_SOURCE:-unsloth/Qwen3.6-27B-NVFP4}"
             # 0.6 (not 0.8): this recipe usually runs co-located with the manyforge
             # composer + dev container + ROS on Thor's shared 128 GB unified memory.
             # At 0.8 vLLM reserves ~98 GB, leaving only ~25 GB for the rest of the
@@ -1138,6 +1163,19 @@ prepare_thor_launch_profile() {
             ;;
     esac
 
+    # Every ordinary "owner/repository" vLLM source participates in the same
+    # cache policy. Absolute/relative filesystem paths and non-vLLM backends do
+    # not. Keep this structural rather than maintaining a per-profile list.
+    if [[ "${THOR_LAUNCH_BACKEND:-vllm}" == "vllm" \
+        && "${THOR_LAUNCH_MODEL_SOURCE}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+        THOR_VLLM_HF_REPO="${THOR_LAUNCH_MODEL_SOURCE}"
+        _thor_collect_vllm_hf_aux_repos
+    fi
+
+    if [[ -n "${THOR_VLLM_HF_REPO}" ]]; then
+        _thor_resolve_vllm_hf_source || return 1
+    fi
+
     THOR_LAUNCH_MAX_MODEL_LEN="${THOR_MAX_MODEL_LEN:-${THOR_TARGET_MAX_MODEL_LEN}}"
     THOR_LAUNCH_KV_CACHE_DTYPE="${THOR_KV_CACHE_DTYPE:-${THOR_TARGET_KV_CACHE_DTYPE}}"
     THOR_LAUNCH_MAX_NUM_SEQS="${THOR_MAX_NUM_SEQS:-${THOR_TARGET_MAX_NUM_SEQS}}"
@@ -1170,6 +1208,225 @@ prepare_thor_launch_profile() {
     if [[ -n "${THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH}" ]]; then
         THOR_VLLM_ARGS+=("--chat-template" "${THOR_LAUNCH_CHAT_TEMPLATE_CONTAINER_PATH}")
     fi
+}
+
+# True when a cached Hugging Face snapshot contains the minimum complete model
+# contract needed by the cache-first vLLM lane. This follows symlinks into the
+# Hub blob store and, for sharded checkpoints, verifies every indexed shard.
+_thor_vllm_hf_snapshot_is_complete() {
+    local snapshot="${1:-}"
+    local require_tokenizer="${2:-1}"
+    [[ -d "${snapshot}" && -s "${snapshot}/config.json" ]] || return 1
+
+    # A snapshot can exist while an interrupted download has left broken blob
+    # links. Do not mistake that for a usable local checkpoint.
+    if [[ -n "$(find -L "${snapshot}" -type l -print -quit 2>/dev/null)" ]]; then
+        return 1
+    fi
+
+    python3 - "${snapshot}" "${require_tokenizer}" <<'PYEOF'
+import glob
+import json
+import os
+import sys
+
+root = sys.argv[1]
+require_tokenizer = sys.argv[2] == "1"
+
+tokenizer_files = (
+    "tokenizer.json",
+    "tokenizer.model",
+    "spiece.model",
+    "vocab.json",
+)
+if require_tokenizer and not any(os.path.isfile(os.path.join(root, name)) for name in tokenizer_files):
+    raise SystemExit(1)
+
+# Custom-code models declare their entry points in auto_map. A config-only
+# snapshot with weights but without modeling/configuration Python files is not
+# actually usable offline (this has occurred in upstream republished repos).
+def auto_map_modules(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "auto_map" and isinstance(item, dict):
+                for target in item.values():
+                    targets = target if isinstance(target, list) else [target]
+                    for entry in targets:
+                        if isinstance(entry, str) and "." in entry:
+                            module = entry.split("--", 1)[-1].rsplit(".", 1)[0]
+                            yield module.replace(".", os.sep) + ".py"
+            yield from auto_map_modules(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from auto_map_modules(item)
+
+metadata_files = {os.path.join(root, "config.json")}
+metadata_files.update(glob.glob(os.path.join(root, "*config.json")))
+for metadata_file in metadata_files:
+    try:
+        with open(metadata_file, encoding="utf-8") as handle:
+            metadata = json.load(handle)
+    except (OSError, ValueError):
+        continue
+    for relative_module in auto_map_modules(metadata):
+        if not os.path.isfile(os.path.join(root, relative_module)):
+            raise SystemExit(1)
+
+indexes = sorted(glob.glob(os.path.join(root, "*.safetensors.index.json")))
+indexes += sorted(glob.glob(os.path.join(root, "*.bin.index.json")))
+if indexes:
+    for index in indexes:
+        with open(index, encoding="utf-8") as handle:
+            weight_map = json.load(handle).get("weight_map", {})
+        if not weight_map:
+            raise SystemExit(1)
+        for shard in set(weight_map.values()):
+            path = os.path.join(root, shard)
+            if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                raise SystemExit(1)
+else:
+    weights = glob.glob(os.path.join(root, "*.safetensors"))
+    weights += glob.glob(os.path.join(root, "pytorch_model*.bin"))
+    if not any(os.path.isfile(path) and os.path.getsize(path) > 1024 * 1024 for path in weights):
+        raise SystemExit(1)
+PYEOF
+}
+
+# Print the preferred complete snapshot for an HF repo. Honour refs/main when
+# it resolves locally; otherwise use the newest complete staged snapshot. The
+# latter matters for caches imported by snapshot path, which may legitimately
+# have no refs/main file (as on the current Thor Qwen3.6 cache).
+_thor_vllm_find_cached_snapshot() {
+    local repo="${1:-}" require_tokenizer="${2:-1}" repo_dir revision snapshot
+    repo_dir="${THOR_HF_CACHE_DIR}/hub/models--${repo//\//--}"
+    [[ -d "${repo_dir}/snapshots" ]] || return 1
+
+    revision="$(cat "${repo_dir}/refs/main" 2>/dev/null || true)"
+    if [[ -n "${revision}" ]]; then
+        snapshot="${repo_dir}/snapshots/${revision}"
+        if _thor_vllm_hf_snapshot_is_complete "${snapshot}" "${require_tokenizer}"; then
+            printf '%s\n' "${snapshot}"
+            return 0
+        fi
+    fi
+
+    while IFS= read -r snapshot; do
+        if _thor_vllm_hf_snapshot_is_complete "${snapshot}" "${require_tokenizer}"; then
+            printf '%s\n' "${snapshot}"
+            return 0
+        fi
+    done < <(
+        find "${repo_dir}/snapshots" -mindepth 1 -maxdepth 1 -type d \
+            -printf '%T@ %p\n' 2>/dev/null \
+            | sort -nr \
+            | cut -d' ' -f2-
+    )
+
+    return 1
+}
+
+# Discover auxiliary HF repos embedded in vLLM JSON arguments. Today this is
+# primarily an external speculative drafter (for example DFlash); keeping it
+# generic prevents auto-offline from selecting a cached target while silently
+# stranding an uncached draft model.
+_thor_collect_vllm_hf_aux_repos() {
+    local index value repo
+    for ((index = 0; index < ${#THOR_VLLM_ARGS[@]}; index++)); do
+        [[ "${THOR_VLLM_ARGS[index]}" == "--speculative-config" ]] || continue
+        ((index + 1 < ${#THOR_VLLM_ARGS[@]})) || continue
+        value="${THOR_VLLM_ARGS[index + 1]}"
+        repo="$(python3 - "${value}" <<'PYEOF' 2>/dev/null || true
+import json
+import sys
+
+value = json.loads(sys.argv[1]).get("model", "")
+if isinstance(value, str):
+    print(value)
+PYEOF
+)"
+        if [[ "${repo}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
+            THOR_VLLM_HF_AUX_REPOS+=("${repo}")
+        fi
+    done
+}
+
+# Resolve a vLLM HF-backed profile before the server starts. "auto" means
+# cache-first with an online first-download fallback; it is intentionally not
+# implemented as "retry online whenever vLLM exits", because an OOM or kernel
+# crash must remain visible and must never trigger a surprise upstream update.
+_thor_resolve_vllm_hf_source() {
+    local mode="${THOR_HF_MODE:-auto}" snapshot="" relative="" revision="" aux=""
+    local aux_missing=0
+
+    # Compatibility with the backend-specific control used by older commands.
+    if [[ -n "${THOR_VLLM_HF_OFFLINE:-}" ]]; then
+        case "${THOR_VLLM_HF_OFFLINE}" in
+            auto) mode=auto ;;
+            1|true) mode=offline ;;
+            0|false) mode=latest ;;
+            *)
+                fail "Invalid THOR_VLLM_HF_OFFLINE=${THOR_VLLM_HF_OFFLINE}; expected auto, 1/true, or 0/false."
+                return 1
+                ;;
+        esac
+    fi
+
+    case "${mode}" in
+        auto)
+            snapshot="$(_thor_vllm_find_cached_snapshot "${THOR_VLLM_HF_REPO}" || true)"
+            if [[ -n "${snapshot}" ]]; then
+                relative="${snapshot#"${THOR_HF_CACHE_DIR}"/}"
+                revision="$(basename "${snapshot}")"
+                THOR_LAUNCH_MODEL_SOURCE="/data/models/huggingface/${relative}"
+                for aux in "${THOR_VLLM_HF_AUX_REPOS[@]}"; do
+                    if ! _thor_vllm_find_cached_snapshot "${aux}" 0 >/dev/null; then
+                        aux_missing=1
+                        info "Target snapshot staged, but auxiliary repo ${aux} is missing → allowing its online download."
+                    fi
+                done
+                if [[ "${aux_missing}" == "0" ]]; then
+                    THOR_VLLM_HF_OFFLINE_ACTIVE=1
+                    info "Complete HF snapshot staged (${revision:0:12}…) → serving offline."
+                else
+                    # Keep the target pinned to its local path while allowing
+                    # vLLM to fetch only the missing external drafter/auxiliary.
+                    THOR_VLLM_HF_OFFLINE_ACTIVE=0
+                fi
+            else
+                THOR_LAUNCH_MODEL_SOURCE="${THOR_VLLM_HF_REPO}"
+                THOR_VLLM_HF_OFFLINE_ACTIVE=0
+                info "No complete HF snapshot staged → online first download from ${THOR_VLLM_HF_REPO}."
+            fi
+            ;;
+        offline)
+            snapshot="$(_thor_vllm_find_cached_snapshot "${THOR_VLLM_HF_REPO}" || true)"
+            if [[ -z "${snapshot}" ]]; then
+                fail "THOR_HF_MODE=${mode}, but no complete cached snapshot exists for ${THOR_VLLM_HF_REPO}."
+                fix "Allow the first download with THOR_HF_MODE=auto or force upstream with THOR_HF_MODE=latest."
+                return 1
+            fi
+            for aux in "${THOR_VLLM_HF_AUX_REPOS[@]}"; do
+                if ! _thor_vllm_find_cached_snapshot "${aux}" 0 >/dev/null; then
+                    fail "THOR_HF_MODE=${mode}, but auxiliary repo ${aux} is not completely cached."
+                    fix "Use THOR_HF_MODE=auto to fetch only the missing auxiliary, or =latest to update everything."
+                    return 1
+                fi
+            done
+            relative="${snapshot#"${THOR_HF_CACHE_DIR}"/}"
+            THOR_LAUNCH_MODEL_SOURCE="/data/models/huggingface/${relative}"
+            THOR_VLLM_HF_OFFLINE_ACTIVE=1
+            info "THOR_HF_MODE=${mode} → forcing complete local snapshot only."
+            ;;
+        latest)
+            THOR_LAUNCH_MODEL_SOURCE="${THOR_VLLM_HF_REPO}"
+            THOR_VLLM_HF_OFFLINE_ACTIVE=0
+            info "THOR_HF_MODE=${mode} → checking upstream and fetching changed/missing blobs."
+            ;;
+        *)
+            fail "Invalid THOR_HF_MODE=${mode}; expected auto, offline, or latest."
+            return 1
+            ;;
+    esac
 }
 
 check_thor_launch_prereqs() {
@@ -1270,6 +1527,7 @@ print_thor_launch_summary() {
         echo "  Image:              ${THOR_LLAMACPP_IMAGE}"
         if [[ -n "${THOR_LLAMACPP_HF:-}" ]]; then
             echo "  Model (HF):         ${THOR_LLAMACPP_HF}"
+            echo "  HF policy:          ${THOR_HF_MODE}"
             if [[ -n "${THOR_LLAMACPP_SPEC_DRAFT_HF:-}" ]]; then
                 echo "  Draft (HF):         ${THOR_LLAMACPP_SPEC_DRAFT_HF}"
                 echo "  Draft n-max:        ${THOR_LLAMACPP_SPEC_DRAFT_N_MAX:-6}"
@@ -1297,6 +1555,14 @@ print_thor_launch_summary() {
         fi
     else
         echo "  Image:              ${THOR_VLLM_IMAGE}"
+        if [[ -n "${THOR_VLLM_HF_REPO:-}" ]]; then
+            echo "  HF policy:          ${THOR_HF_MODE}"
+            if [[ "${THOR_VLLM_HF_OFFLINE_ACTIVE:-0}" == "1" ]]; then
+                echo "  HF resolution:      offline (complete cached snapshot)"
+            else
+                echo "  HF resolution:      online (cache/download fallback)"
+            fi
+        fi
         echo "  KV cache dtype:     ${THOR_LAUNCH_KV_CACHE_DTYPE}"
         echo "  GPU mem util:       ${THOR_LAUNCH_GPU_MEMORY_UTILIZATION}"
         if [[ -n "${THOR_LAUNCH_MAX_NUM_BATCHED_TOKENS}" ]]; then
@@ -1316,6 +1582,7 @@ run_thor_vllm_container() {
     local docker_tty_args=()
     local docker_mount_args=()
     local docker_name_args=()
+    local hf_offline_env_args=()
 
     # THOR_DETACH=1: run container in background, return immediately.
     # THOR_CONTAINER_NAME=<name>: pin the container name (for duo-serve).
@@ -1364,6 +1631,13 @@ run_thor_vllm_container() {
         entrypoint_args=(--entrypoint "${THOR_VLLM_ENTRYPOINT}")
     fi
 
+    if [[ "${THOR_VLLM_HF_OFFLINE_ACTIVE:-0}" == "1" ]]; then
+        hf_offline_env_args=(
+            -e HF_HUB_OFFLINE=1
+            -e TRANSFORMERS_OFFLINE=1
+        )
+    fi
+
     docker run "${docker_rm_args[@]}" \
         "${entrypoint_args[@]}" \
         "${docker_tty_args[@]}" \
@@ -1374,6 +1648,7 @@ run_thor_vllm_container() {
         -e HF_HOME=/data/models/huggingface \
         -e HF_HUB_CACHE=/data/models/huggingface/hub \
         -e TRANSFORMERS_CACHE=/data/models/huggingface/hub \
+        "${hf_offline_env_args[@]}" \
         ${HF_TOKEN:+-e "HF_TOKEN=${HF_TOKEN}"} \
         -e TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1 \
         -e TORCHINDUCTOR_CACHE_DIR=/root/.cache/torch/inductor \
@@ -1418,7 +1693,7 @@ _thor_hf_warn_if_update() {
         | python3 -c 'import json,sys; print(json.load(sys.stdin).get("sha",""))' 2>/dev/null || true)"
     if [[ -n "${latest}" && "${latest}" != "${cached}" ]]; then
         warn "${repo}: newer revision available upstream (cached ${cached:0:12}…, latest ${latest:0:12}…)."
-        warn "  Serving the staged copy. To update: THOR_LLAMACPP_OFFLINE=0 ./serving/start-model.sh ${THOR_MODEL_PROFILE}"
+        warn "  Serving the staged copy. To update: THOR_HF_MODE=latest ./serving/start-model.sh ${THOR_MODEL_PROFILE}"
     fi
 }
 

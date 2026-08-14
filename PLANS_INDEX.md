@@ -70,6 +70,7 @@ This board covers only the assistant-lane and serving work owned here.
 
 | Document | Status | Notes |
 |---|---|---|
+| [`QWEN38-27B-NVFP4-QUANTIZATION-PLAN.md`](serving/docs/QWEN38-27B-NVFP4-QUANTIZATION-PLAN.md) | Draft; pre-release assets prepared (2026-08-13) | Docker-only dense-27B ModelOpt plan: immutable local BF16 source, 768-record coding corpus, local-Hessian QKV-protected quality candidate, full eligible NVFP4 challenger, BF16 MTP/vision retention, vLLM and coding-agent promotion gates. |
 | [`DS4-THOR-OPTIMIZATION-PLAN.md`](serving/docs/DS4-THOR-OPTIMIZATION-PLAN.md) | Completed (2026-08-05); v0.5.6.2 adoption smoke (2026-08-10) | Docker-only Entrpi DS4 optimization for Thor `sm_110`: repaired upstream top-512 selector, 512K/4K stable default, optional faster 256K/8K profile, and recorded rejected D2R/SM110a candidates. The v0.5.6.2 runtime passes Chat/Responses smoke; fixed performance and deep-context evidence remains explicitly labelled v0.5.5. |
 | [`V9.1-EXECUTION.md`](serving/docs/V9.1-EXECUTION.md) | Completed (2026-05-30 → 31) | Consolidated V9.1 execution plan + results (Phases 0-4 ran; 5 deferred). Status markers point-in-time. |
 | [`V9.1-FOLLOWUP-TASKS.md`](serving/docs/V9.1-FOLLOWUP-TASKS.md) | Open | V9.1 follow-up tasks / findings. |

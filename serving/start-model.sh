@@ -33,6 +33,7 @@ for arg in "$@"; do
         echo "  THOR_MAX_NUM_BATCHED_TOKENS"
         echo "  THOR_LOCAL_VLLM_API_KEY"
         echo "  THOR_VLLM_IMAGE"
+        echo "  THOR_HF_MODE=auto|offline|latest"
         exit 0
     fi
 done

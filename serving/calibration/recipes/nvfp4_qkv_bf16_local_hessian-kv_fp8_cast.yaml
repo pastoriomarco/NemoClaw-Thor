@@ -1,0 +1,62 @@
+# Quality-first coding recipe for a dense/hybrid Qwen-family language model.
+#
+# Quantize ModelOpt-eligible linear weights/inputs to NVFP4 W4A4 with static
+# local-Hessian-selected weight scales, then restore QKV-like projections,
+# MTP, vision, embeddings, lm_head, norms, routers, and unsupported conv/state
+# modules to high precision. FP8 KV metadata is exported in cast mode; vLLM's
+# runtime --kv-cache-dtype remains authoritative at serving time.
+
+imports:
+  base_disable_all: configs/ptq/units/base_disable_all
+  default_disabled_quantizers: configs/ptq/units/default_disabled_quantizers
+  nvfp4: configs/numerics/nvfp4
+  nvfp4_static: configs/numerics/nvfp4_static
+  kv_fp8_cast: configs/ptq/units/kv_fp8_cast
+
+metadata:
+  recipe_type: ptq
+  description: >-
+    Quality-first NVFP4 W4A4 recipe with local-Hessian weight-scale search,
+    BF16 QKV-like projections, BF16 MTP and vision branches, and FP8 KV cast.
+
+quantize:
+  algorithm:
+    method: local_hessian
+    fp8_scale_sweep: true
+    block_size: 16
+    layerwise: false
+  quant_cfg:
+    - $import: base_disable_all
+    - quantizer_name: '*weight_quantizer'
+      cfg:
+        $import: nvfp4_static
+    - quantizer_name: '*input_quantizer'
+      cfg:
+        $import: nvfp4
+    - $import: kv_fp8_cast
+    - $import: default_disabled_quantizers
+
+    # Standard full-attention QKV projections remain BF16.
+    - quantizer_name: '*self_attn.q_proj*'
+      enable: false
+    - quantizer_name: '*self_attn.k_proj*'
+      enable: false
+    - quantizer_name: '*self_attn.v_proj*'
+      enable: false
+
+    # Hybrid linear-attention QKV projection remains BF16. ModelOpt's standard
+    # exclusions already preserve in_proj_a/in_proj_b and conv1d state paths.
+    - quantizer_name: '*linear_attn.in_proj_qkv*'
+      enable: false
+
+    # Preserve speculative-decoding and multimodal branches exactly. Vision is
+    # also covered by default_disabled_quantizers; these explicit rules make
+    # the intended checkpoint contract auditable.
+    - quantizer_name: '*mtp*'
+      enable: false
+    - quantizer_name: '*visual*'
+      enable: false
+    - quantizer_name: '*vision*'
+      enable: false
+    - quantizer_name: '*multi_modal_projector*'
+      enable: false
