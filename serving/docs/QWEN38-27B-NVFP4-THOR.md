@@ -23,16 +23,18 @@ This is intentionally attached: logs remain in the terminal and `Ctrl-C` stops
 the model container. The launcher also starts the ManyForge vLLM proxy on
 `:8000`, forwarding to the model on `:8050`.
 
-The profile uses the complete local Hugging Face snapshot without contacting
-the Hub when it is present. If the pinned snapshot is absent, it downloads only
-that revision. The persistent directories are created automatically.
+The profile uses a complete local Hugging Face snapshot without contacting the
+Hub when one is present. It prefers a valid local `refs/main`, then the most
+recently staged complete snapshot. If no complete local snapshot exists, it
+downloads the current upstream version. The persistent directories are created
+automatically.
 
-## Pinned components
+## Component versions and model policy
 
-| Component | Reproducible pin |
+| Component | Version policy |
 |---|---|
 | Target weights | `unsloth/Qwen3.8-27B-NVFP4` |
-| Target revision | `9c73e2daee1d0fd494ffbd1d8753f2174a953796` |
+| Target revision | Cache-first; current upstream `main` on first download or forced refresh |
 | Qwen3.8 vLLM base | `vllm/vllm-openai:qwen38@sha256:4a2f33a884222f7049b983263ad9976f89452bb81affecf5b67d89ad35c1bc31` |
 | SM110 extension donor | `vllm/vllm-openai:v0.27.1@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967` |
 | FlashInfer cubins | `flashinfer_cubin==0.6.17`, official release wheel |
@@ -135,13 +137,28 @@ THOR_VLLM_PORT=8050 \
 
 Hub policies are:
 
-- `THOR_HF_MODE=auto` (default): use the complete pinned local snapshot;
-  download that pinned revision only when missing.
-- `THOR_HF_MODE=offline`: fail unless the pinned revision is complete locally.
+- `THOR_HF_MODE=auto` (default): use a complete local snapshot regardless of
+  revision (`refs/main` when valid, otherwise the most recently staged copy);
+  download current upstream `main` only when no complete local copy exists.
+- `THOR_HF_MODE=offline`: fail unless any complete local snapshot exists.
 - `THOR_HF_MODE=latest`: check upstream `main` and fetch changed or missing
-  blobs. This deliberately drops the verified model-revision pin.
-- `THOR_QWEN38_REVISION=<commit>`: test another explicit revision while
-  retaining cache-first behavior.
+  blobs even when a complete local snapshot exists. Existing content-addressed
+  weight blobs are reused, so unchanged tensors are not downloaded again.
+- `THOR_QWEN38_REVISION=<commit>`: optionally reproduce a specific revision
+  while retaining cache-first behavior. This diagnostic override is ignored
+  when `THOR_HF_MODE=latest` is selected.
+
+Force an upstream refresh explicitly with:
+
+```bash
+THOR_HF_MODE=latest THOR_VLLM_PORT=8050 \
+  ./serving/start-model.sh qwen3.8-27b-nvfp4
+```
+
+The Qwen3.8 repository was republished after the first Thor validation. The
+current target and MTP tensor hashes are unchanged, while tokenizer and
+quantization metadata were corrected. For that reason the operational recipe
+does not pin the removed historical Hub commit.
 
 The verified profile does **not** set `NVIDIA_DISABLE_REQUIRE=true`. JetPack
 7.x provides the CUDA 13 runtime expected by the pinned image; keeping the

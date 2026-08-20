@@ -48,6 +48,12 @@ for direction.
 
 ### Changed
 
+- **Qwen3.8 cache-first model resolution** no longer pins the removed initial
+  `unsloth/Qwen3.8-27B-NVFP4` Hub revision. The default accepts a complete
+  local snapshot regardless of revision and downloads upstream `main` only
+  when absent;
+  `THOR_HF_MODE=latest` explicitly checks for and fetches upstream updates
+  while reusing unchanged content-addressed weight blobs.
 - **Dockerized DS4 alternative upgraded to Entrpi v0.5.5** at a pinned commit,
   still compiled only for Thor `sm_110`. The default now uses Entrpi's repaired
   streaming top-512 selector and v0.5.5 admission accounting; the verified

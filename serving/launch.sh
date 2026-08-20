@@ -777,15 +777,11 @@ prepare_thor_launch_profile() {
             THOR_NVIDIA_DISABLE_REQUIRE="${_user_nvidia_disable_require:-0}"
 
             THOR_LAUNCH_MODEL_SOURCE="${THOR_QWEN38_MODEL_SOURCE:-unsloth/Qwen3.8-27B-NVFP4}"
-            # Cache-first/offline launches are reproducible at the verified
-            # model commit. THOR_HF_MODE=latest intentionally follows main;
-            # an explicit THOR_QWEN38_REVISION pins an alternate commit.
-            if [[ "${THOR_HF_MODE}" != "latest" ]]; then
-                if [[ "${THOR_LAUNCH_MODEL_SOURCE}" == "unsloth/Qwen3.8-27B-NVFP4" ]]; then
-                    THOR_VLLM_HF_REVISION="${THOR_QWEN38_REVISION:-9c73e2daee1d0fd494ffbd1d8753f2174a953796}"
-                elif [[ -n "${THOR_QWEN38_REVISION:-}" ]]; then
-                    THOR_VLLM_HF_REVISION="${THOR_QWEN38_REVISION}"
-                fi
+            # Follow the common Hub policy: auto/offline accepts any complete
+            # local snapshot, while latest resolves upstream main. Keep an
+            # explicit revision override only for diagnostic reproduction.
+            if [[ "${THOR_HF_MODE}" != "latest" && -n "${THOR_QWEN38_REVISION:-}" ]]; then
+                THOR_VLLM_HF_REVISION="${THOR_QWEN38_REVISION}"
             fi
 
             THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.80}"

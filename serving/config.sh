@@ -322,8 +322,10 @@ resolve_model_profile() {
             ;;
         # qwen3.5-27b-claude-distilled-v2-nvfp4 profile removed 2026-04-24 — superseded by qwen3.6.
         qwen3.8-27b-nvfp4)
-            # Verified 2026-08-14 with unsloth/Qwen3.8-27B-NVFP4 revision
-            # 9c73e2d. This is a mixed-precision compressed-tensors checkpoint:
+            # Verified with unsloth/Qwen3.8-27B-NVFP4. The operational recipe
+            # is cache-first and intentionally does not pin a Hub revision;
+            # upstream republished metadata while retaining identical target
+            # and MTP tensor blobs. This is a mixed-precision checkpoint:
             # most MLP weights/activations use NVFP4 W4A4; attention/GDN,
             # lm_head and the final MLP retain FP8; vision and MTP retain BF16.
             # Runtime uses FP8 KV and MTP K=3.  Four scheduler slots reproduce
