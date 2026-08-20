@@ -328,14 +328,14 @@ resolve_model_profile() {
             # and MTP tensor blobs. This is a mixed-precision checkpoint:
             # most MLP weights/activations use NVFP4 W4A4; attention/GDN,
             # lm_head and the final MLP retain FP8; vision and MTP retain BF16.
-            # Runtime uses FP8 KV and MTP K=3.  Four scheduler slots reproduce
-            # the live recipe and leave one subagent slot with three OpenClaw
-            # main calls. The combined input+output budget is 262,144 tokens.
+            # Runtime uses FP8 KV and MTP K=3. Seven scheduler slots provide
+            # three OpenClaw main-call slots plus four shared subagent slots.
+            # The combined input+output budget is 262,144 tokens.
             THOR_MODEL_PROFILE="${requested}"
             THOR_MODEL_ID_DEFAULT="qwen3.8-27b-nvfp4"
             THOR_TARGET_MAX_MODEL_LEN="262144"
             THOR_TARGET_KV_CACHE_DTYPE="fp8"
-            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_MAX_NUM_SEQS="7"
             THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="3"
             THOR_TARGET_MODEL_REASONING="true"
             THOR_TARGET_MAX_TOKENS="16384"

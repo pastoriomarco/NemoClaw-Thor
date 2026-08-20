@@ -174,8 +174,8 @@ The matching cases in [`serving/config.sh`](../config.sh) and
 |---|---|
 | Combined context (`prompt + output`) | 262,144 tokens |
 | Advertised maximum output | 16,384 tokens |
-| Scheduler concurrency | 4 sequences |
-| ManyForge/OpenClaw main concurrency | 3, leaving one subagent slot |
+| Scheduler concurrency | 7 sequences |
+| ManyForge/OpenClaw main concurrency | 3 main-call slots plus 4 shared subagent slots |
 | GPU memory utilization | 0.80 |
 | KV cache | FP8 (not NVFP4) |
 | Batched-token cap | 8,192 |

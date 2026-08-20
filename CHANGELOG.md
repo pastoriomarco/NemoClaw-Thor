@@ -48,6 +48,8 @@ for direction.
 
 ### Changed
 
+- **Qwen3.8 scheduler capacity** now defaults to seven sequences: three
+  OpenClaw main-call slots and four shared subagent slots.
 - **Qwen3.8 cache-first model resolution** no longer pins the removed initial
   `unsloth/Qwen3.8-27B-NVFP4` Hub revision. The default accepts a complete
   local snapshot regardless of revision and downloads upstream `main` only
