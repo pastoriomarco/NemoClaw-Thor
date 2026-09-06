@@ -247,3 +247,68 @@ rate. Vision, tool parsing, FP8 KV, and MTP were present in the working server.
 
 The initial boot may compile shapes not covered by the cubin/JIT packages.
 Keep the four cache mounts persistent; subsequent launches should reuse them.
+
+## Experimental DSpark speed profile
+
+The `qwen3.8-27b-nvfp4-dspark` profile reproduces the later live deployment
+with a matched RadixArk target and DSpark v2 drafter. It is deliberately
+separate from the verified Unsloth/MTP profile above so the known-good image
+and serving recipe remain available.
+
+Build its thin tuning overlay once:
+
+```bash
+./serving/docker/build-qwen38-dspark-sm110.sh
+```
+
+Then serve it on the usual model port:
+
+```bash
+THOR_VLLM_PORT=8050 ./serving/start-model.sh qwen3.8-27b-nvfp4-dspark
+```
+
+The overlay starts from the local
+`nemoclaw-thor/vllm-openai:qwen38-thor-sm110` image and adds no libraries or
+model weights. It only extends vLLM's FlashInfer startup autotuning pass with
+the NVFP4 target-verification widths produced by DSpark K=7 at concurrency
+one through four: 9, 18, 27 and 36 tokens. This addresses the observed
+`fp4_gemm` `tactic=-1` fallback for the `(9, 2560) x (2560, 248320)` target
+`lm_head` shape and covers the corresponding flattened multi-request widths.
+The first startup takes longer while those shapes are profiled; persistent
+FlashInfer and vLLM cache mounts retain reusable generated artifacts.
+
+The profile enables all of the complementary speed settings by default:
+
+| Setting | Value |
+|---|---|
+| Target | `RadixArk/Qwen3.8-27B-NVFP4` |
+| Drafter | Local compatibility view of `RadixArk/Qwen3.8-27B-DSpark` v2 |
+| Speculation | DSpark K=7, greedy draft proposals |
+| DSpark projection | top-K 512 |
+| FlashInfer tuning widths | 9, 18, 27, 36 plus the normal prefill width |
+| Batched-token cap | 16,384 |
+| Scheduler concurrency | 4 sequences |
+| Combined context per sequence | 262,144 tokens |
+| Target and draft KV | FP8 |
+| GPU memory utilization | 0.80 |
+| Modalities | text and images; maximum 4 images, video disabled |
+
+The target model still verifies every accepted draft token. DSpark top-K and
+GEMM tactic selection are performance optimizations, not alternative target
+weights or lossy decoding modes. Four sequences permits concurrency but does
+not promise four simultaneous full 262K contexts: actual capacity depends on
+the KV blocks left after target, drafter and runtime allocations.
+
+The current Qwen3.8 preview recognizes this Qwen drafter as
+`Qwen3DSparkModel`, while the latest Hub config calls it `DSparkDraftModel`--a
+name the preview also uses for an unrelated DeepSeek implementation. The
+profile therefore uses the already-prepared compatibility view at
+`$THOR_HF_CACHE_DIR/vllm-adapters/qwen38-27b-dspark`. Its model tensor is a
+symlink to the normal Hugging Face blob, so it does not duplicate the roughly
+3.7 GB drafter. Only `config.json` differs: its `architectures` entry is
+`Qwen3DSparkModel`. Do not point this pinned preview image directly at the raw
+current Hub snapshot until upstream removes that architecture-name ambiguity.
+
+This profile is prepared but not yet promoted to the verified baseline. Record
+startup, output-correctness, acceptance and workload-level throughput results
+before replacing the MTP profile in a production workflow.

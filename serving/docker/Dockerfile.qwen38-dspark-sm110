@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1.6
+#
+# Qwen3.8 DSpark tuning overlay for Jetson AGX Thor (SM110).
+#
+# The base image remains the verified Qwen3.8/SM110 compatibility image.  This
+# thin layer only extends vLLM's FlashInfer startup tuning set with the target
+# verification widths produced by DSpark K=7 at max_num_seqs=1..4.
+ARG QWEN38_THOR_BASE_IMAGE=nemoclaw-thor/vllm-openai:qwen38-thor-sm110
+
+FROM ${QWEN38_THOR_BASE_IMAGE}
+
+COPY patches/qwen38-dspark-flashinfer-autotune.py /tmp/qwen38-dspark-flashinfer-autotune.py
+
+RUN set -eux; \
+    python3 /tmp/qwen38-dspark-flashinfer-autotune.py; \
+    python3 -m py_compile \
+        /usr/local/lib/python3.12/dist-packages/vllm/model_executor/warmup/kernel_warmup.py; \
+    grep -q '_FLASHINFER_DSPARK_VERIFY_TOKEN_COUNTS = (9, 18, 27, 36)' \
+        /usr/local/lib/python3.12/dist-packages/vllm/model_executor/warmup/kernel_warmup.py; \
+    rm -f /tmp/qwen38-dspark-flashinfer-autotune.py
+
+LABEL org.opencontainers.image.title="NemoClaw-Thor Qwen3.8 DSpark SM110 overlay" \
+      org.opencontainers.image.description="Qwen3.8 Thor image with FlashInfer tuning for DSpark K=7 verification widths at concurrency 1-4"

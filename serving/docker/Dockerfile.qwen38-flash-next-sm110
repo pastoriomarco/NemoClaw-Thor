@@ -1,0 +1,15 @@
+# Jetson Thor overlay for the locally-built Qwen3.8-Flash-Next preview image.
+# Build the pinned blazux/qwen3.8-Flash-DGX base as
+# nemoclaw-thor/qwen38-flash-next-vllm:sm110 before building this file.
+FROM nemoclaw-thor/qwen38-flash-next-vllm:sm110
+
+# The preview vLLM package excludes compute capability 11.x from the
+# FlashInfer CUTLASS MoE backend even though bundled FlashInfer 0.6.17 has an
+# SM110 dispatch. Lift that policy gate; select the backend explicitly at run
+# time with --moe-backend flashinfer_cutlass.
+COPY serving/docker/patches/qwen38-flash-next-sm110-moe.py /tmp/patch-sm110-moe.py
+RUN python3 /tmp/patch-sm110-moe.py && rm /tmp/patch-sm110-moe.py
+
+# The preview's fused CUDA GDN MTP kernel contains no SM110 code object.
+# Preserve MTP through the supported Triton GDN decode implementation.
+ENV VLLM_GDN_DECODE_KERNEL=triton

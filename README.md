@@ -31,6 +31,14 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 
 ## Quick start
 
+For **Qwen3.8-Flash-Next**, use the
+[current best verified Thor recipe](serving/docs/QWEN38-FLASH-NEXT-FAST-THOR.md):
+complete pinned image-build steps, local checkpoint setup, and foreground
+launcher. It uses fused SM110a GDN CUDA, optimized PLE reads, MTP=3, BF16 KV,
+0.90 GPU memory, 256K context and four scheduler slots (about 2.58 full
+contexts at the measured startup). This is a dedicated model recipe, not a
+change to the default ManyForge profile below.
+
 From scratch, using the default ManyForge assistant profile
 (`gemma4-12b-it-gguf`, Gemma 4 12B GGUF served by llama.cpp):
 

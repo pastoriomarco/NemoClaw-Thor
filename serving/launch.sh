@@ -557,11 +557,18 @@ prepare_thor_launch_profile() {
             #   OPENCLAW_PROXY_THINKING_TOKEN_BUDGET=512 — bounds the <think>
             #     block within the 2048 cap.
             THOR_LAUNCH_MODEL_SOURCE="nvidia/Qwen3.6-35B-A3B-NVFP4"
-            # Public vllm-openai nightly. THOR_VLLM_IMAGE is set globally before
-            # this case, so assign unconditionally. Blank the entrypoint: the
-            # nightly bakes ENTRYPOINT=["vllm","serve"], which would double with
-            # the serve command run_thor_vllm_container appends.
-            THOR_VLLM_IMAGE="vllm/vllm-openai:nightly-aarch64"
+            # Default to the public nightly, but permit an explicit profile-local
+            # image override. This is useful on bandwidth-limited Thor systems
+            # that already have a compatible release image cached locally.
+            THOR_VLLM_IMAGE="${THOR_QWEN36_35B_VLLM_IMAGE:-vllm/vllm-openai:nightly-aarch64}"
+            if [[ -n "${THOR_QWEN36_35B_VLLM_IMAGE:-}" ]]; then
+                # An explicit override is expected to be local. Fail instead of
+                # silently pulling a multi-gigabyte replacement image.
+                THOR_VLLM_IMAGE_MUST_EXIST=1
+                THOR_VLLM_IMAGE_BUILD_HINT="docker image inspect ${THOR_VLLM_IMAGE}"
+            fi
+            # The image bakes ENTRYPOINT=["vllm","serve"], which would double
+            # with the serve command run_thor_vllm_container appends.
             THOR_VLLM_ENTRYPOINT=""
             # 2026-06-03: dropped from 0.85 to 0.55. The 0.85 default was
             # carried over from the earlier max-concurrency-per-dollar
@@ -810,6 +817,43 @@ prepare_thor_launch_profile() {
                 "--tool-call-parser" "qwen3_coder"
                 "--max-num-batched-tokens" "8192"
                 "--speculative-config" '{"method":"mtp","num_speculative_tokens":3}'
+            )
+            ;;
+        qwen3.8-27b-nvfp4-dspark)
+            # Speed-oriented Qwen3.8 recipe using the RadixArk NVFP4 target and
+            # matched DSpark v2 drafter. The thin profile-specific image keeps
+            # the verified SM110 stack and adds FlashInfer tuning runs for the
+            # K=7 verification widths produced at concurrency 1..4.
+            THOR_VLLM_IMAGE="${THOR_QWEN38_DSPARK_VLLM_IMAGE:-nemoclaw-thor/vllm-openai:qwen38-dspark-sm110}"
+            THOR_VLLM_IMAGE_MUST_EXIST=1
+            THOR_VLLM_IMAGE_BUILD_HINT="./serving/docker/build-qwen38-dspark-sm110.sh"
+            THOR_VLLM_ENTRYPOINT=""
+            THOR_NVIDIA_DISABLE_REQUIRE="${_user_nvidia_disable_require:-0}"
+
+            THOR_LAUNCH_MODEL_SOURCE="${THOR_QWEN38_DSPARK_MODEL_SOURCE:-RadixArk/Qwen3.8-27B-NVFP4}"
+            THOR_LAUNCH_GPU_MEMORY_UTILIZATION="${THOR_GPU_MEMORY_UTILIZATION:-0.80}"
+            THOR_DOCKER_ENV_ARGS=(
+                -e "VLLM_DISABLED_KERNELS=CutlassFP8ScaledMMLinearKernel"
+                -e "FLASHINFER_CUDA_ARCH_LIST=11.0"
+                -e "ENABLE_TRIATTENTION=0"
+            )
+            THOR_VLLM_COMPILATION_CONFIG=""
+            THOR_VLLM_ARGS+=(
+                "--dtype" "bfloat16"
+                "--quantization" "modelopt"
+                "--linear-backend" "auto"
+                "--attention-backend" "flashinfer"
+                "--mm-encoder-attn-backend" "TORCH_SDPA"
+                "--limit-mm-per-prompt" '{"image":4,"video":0}'
+                "--enable-prefix-caching"
+                "--enable-chunked-prefill"
+                "--async-scheduling"
+                "--reasoning-parser" "qwen3"
+                "--default-chat-template-kwargs" '{"enable_thinking":true}'
+                "--enable-auto-tool-choice"
+                "--tool-call-parser" "qwen3_coder"
+                "--max-num-batched-tokens" "16384"
+                "--speculative-config" '{"method":"dspark","model":"/data/models/huggingface/vllm-adapters/qwen38-27b-dspark","num_speculative_tokens":7,"dspark_draft_topk":512,"draft_tensor_parallel_size":1,"kv_cache_dtype":"fp8","draft_sample_method":"greedy"}'
             )
             ;;
         qwen3.6-27b-fp8-mtp-kvfp8)

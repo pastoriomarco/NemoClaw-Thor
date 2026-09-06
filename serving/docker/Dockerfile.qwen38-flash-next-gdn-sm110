@@ -1,0 +1,13 @@
+FROM nemoclaw-thor/qwen38-flash-next-vllm:sm110-flashinfer-moe
+ARG GDN_REV=082cf021b7ef96e4819e386846ea34e5ef21c655
+ADD https://raw.githubusercontent.com/vllm-project/vllm/${GDN_REV}/csrc/libtorch_stable/gdn/fused_gdn_decode_kernel.cu /opt/thor-gdn/csrc/libtorch_stable/gdn/fused_gdn_decode_kernel.cu
+ADD https://raw.githubusercontent.com/vllm-project/vllm/${GDN_REV}/csrc/libtorch_stable/torch_utils.h /opt/thor-gdn/csrc/libtorch_stable/torch_utils.h
+ADD https://raw.githubusercontent.com/vllm-project/vllm/${GDN_REV}/csrc/cuda_compat.h /opt/thor-gdn/csrc/cuda_compat.h
+ADD https://raw.githubusercontent.com/vllm-project/vllm/${GDN_REV}/tests/kernels/test_fused_gdn_post_conv.py /opt/thor-gdn/test_fused_gdn_post_conv.py
+COPY serving/docker/patches/thor-gdn/ /opt/thor-gdn/
+ENV MAX_JOBS=2 TORCH_CUDA_ARCH_LIST=11.0a
+RUN python3 /opt/thor-gdn/build.py
+RUN python3 /opt/thor-gdn/install.py
+RUN python3 /opt/thor-gdn/patch_ple_io.py
+ENV VLLM_GDN_DECODE_KERNEL=cuda
+ENV VLLM_PLE_MMAP_MADV_RANDOM=1 VLLM_PLE_MMAP_FAST_ROWS=0

@@ -168,6 +168,7 @@ resolve_thor_sandbox_name() {
 # resolve case.
 _MODEL_PROFILE_CATALOG=(
     "qwen3.8-27b-nvfp4|thor|Qwen3.8-27B (coding/agentic dense VLM)|Unsloth mixed NVFP4 W4A4 + FP8/BF16 protected layers + BF16 vision/MTP; FP8 KV, MTP K=3, 256K context; verified custom Qwen3.8/SM110 image"
+    "qwen3.8-27b-nvfp4-dspark|thor|Qwen3.8-27B (coding/agentic dense VLM)|RadixArk mixed NVFP4/FP8 target + DSpark v2 K=7/top-K 512; tuned NVFP4 verification widths, FP8 target/draft KV, 256K context, 4 sequences"
     "qwen3.6-35b-a3b-nvfp4-nvidia|thor|Qwen3.6-35B-A3B (NVFP4 weights, agentic-tuned — recommended for orchestration)|Historical Task 4 winner — NVIDIA W4A16 + Marlin + Thor MoE config + sm110a-fp4-dsl-unlock patch. 56/66 (84.8%) composer smoke, 29.2 tok/s steady, 65min/66-case wall-clock"
     "laguna-s-2.1-nvfp4-dflash|thor|poolside Laguna 2.1 (coding/agentic MoE)|EXPERIMENTAL assistant candidate — 118B-A8B NVFP4 + DFlash drafter (n=7) on pinned public v0.25.1 image; 38-44 tok/s short-ctx coding, ~15 tok/s @150K ctx; needs 0.81 util so cannot co-reside with Isaac; thinking OFF"
     "qwen3.6-27b-fp8-mtp-kvfp8|thor|Other Qwen3.6|dense 27B FP8 + MTP + FP8 KV (TEB 84)"
@@ -342,6 +343,23 @@ resolve_model_profile() {
             THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
             THOR_TARGET_PROXY_LOOP_STOP_AT="8"
             THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"  # launch.sh: enable_thinking=true
+            ;;
+        qwen3.8-27b-nvfp4-dspark)
+            # Experimental speed profile matching the live RadixArk target +
+            # DSpark v2 deployment. Four scheduler slots are exposed; the
+            # dedicated image tunes the K=7 verification widths for 1..4
+            # simultaneously active sequences.
+            THOR_MODEL_PROFILE="${requested}"
+            THOR_MODEL_ID_DEFAULT="qwen3.8-27b-nvfp4-dspark"
+            THOR_TARGET_MAX_MODEL_LEN="262144"
+            THOR_TARGET_KV_CACHE_DTYPE="fp8"
+            THOR_TARGET_MAX_NUM_SEQS="4"
+            THOR_TARGET_OPENCLAW_MAIN_MAX_CONCURRENT="2"
+            THOR_TARGET_MODEL_REASONING="true"
+            THOR_TARGET_MAX_TOKENS="16384"
+            THOR_TARGET_PROXY_LOOP_REFLECT_AT="4"
+            THOR_TARGET_PROXY_LOOP_STOP_AT="8"
+            THOR_TARGET_PROXY_FORCE_ENABLE_THINKING="on"
             ;;
         qwen3.6-27b-fp8-mtp-kvfp8)
             # EXPERIMENTAL: Qwen/Qwen3.6-27B-FP8 (official FP8 release) +
