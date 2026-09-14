@@ -35,9 +35,12 @@ For **Qwen3.8-Flash-Next**, use the
 [current best verified Thor recipe](serving/docs/QWEN38-FLASH-NEXT-FAST-THOR.md):
 complete pinned image-build steps, local checkpoint setup, and foreground
 launcher. It uses fused SM110a GDN CUDA, optimized PLE reads, MTP=3, BF16 KV,
-0.90 GPU memory, 256K context and four scheduler slots (about 2.58 full
-contexts at the measured startup). This is a dedicated model recipe, not a
-change to the default ManyForge profile below.
+0.90 GPU memory, 256K context and four scheduler slots. Its full 88-scenario
+Tool Eval result is 94/100 overall and 95/100 on Hard Mode; public `sgbench`
+measured 34.8 / 57.3 / 82.7 tok/s aggregate at C1 / C2 / C4. A new Thor needs
+only the recipe's build, checkpoint-download and foreground-start helpers.
+This is a dedicated model recipe, not a change to the default ManyForge
+profile below.
 
 From scratch, using the default ManyForge assistant profile
 (`gemma4-12b-it-gguf`, Gemma 4 12B GGUF served by llama.cpp):

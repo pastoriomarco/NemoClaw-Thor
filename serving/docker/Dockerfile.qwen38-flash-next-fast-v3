@@ -1,0 +1,43 @@
+FROM nemoclaw-thor/qwen38-flash-next-vllm:sm110-gdn-cuda
+
+ARG SP=/usr/local/lib/python3.12/dist-packages
+
+# Rebuild the deterministic QSA top-k extension from the current audited pin.
+# The source is Apache-2.0 and checksummed; DET_ARCH=110a targets Jetson Thor.
+ARG KDET_SHA=e0ef69d4f5575dad00d34e05479eaf4c6547bace
+ARG KDET=https://raw.githubusercontent.com/jschmied/qwen38-flash-next-gb10/${KDET_SHA}
+ARG DET_ARCH=110a
+ADD --checksum=sha256:138cacfc5eb117f0922d53c88727e4d0dc26dcfb246c3d401fc280cfc726cc71 ${KDET}/patches/kernel-det/build_det.py /opt/llm/kernel-det-v2/src/build_det.py
+ADD --checksum=sha256:b103fbeaf7589b9468471142ad0b30012a076f93d20ba11fc5ff6dcb1ecd32a6 ${KDET}/patches/kernel-det/bindings_det.cpp /opt/llm/kernel-det-v2/src/bindings_det.cpp
+ADD --checksum=sha256:19e1d53425ea9a839445722fd1dac1c41727128eebdce84508c1bfb8592afecf ${KDET}/patches/kernel-det/topk_det.cu /opt/llm/kernel-det-v2/src/topk_det.cu
+ADD --checksum=sha256:16939700ae389750782ff5c0d5b9caef59aa0ff8b869b64ec94fa72c814910ee ${KDET}/patches/kernel-det/torch_utils.h /opt/llm/kernel-det-v2/src/torch_utils.h
+ADD --checksum=sha256:b4ef9ce298d43d6c0e6db9fcca451df20815b2cfe33791919c1ad9c0e84f0ba7 ${KDET}/patches/kernel-det/persistent_topk.cuh /opt/llm/kernel-det-v2/src/persistent_topk.cuh
+RUN cd /opt/llm/kernel-det-v2/src \
+ && DET_BUILD_DIR=/opt/llm/kernel-det-v2/build DET_ARCH=${DET_ARCH} python3 build_det.py \
+ && install -m 0755 /opt/llm/kernel-det-v2/build/_C_det.so /opt/llm/kernel-det/_C_det.so
+
+# The target head remains complete. This hook changes only the MTP proposal
+# projection when VLLM_MTP_DRAFT_VOCAB points to the bundled id set.
+COPY serving/docker/patches/flash-next-fast-v2/patch_mtp_draft_vocab.py /tmp/
+COPY serving/docker/assets/qwen38-flash-next/draft_vocab_code_47149.npy /opt/llm/draft_vocab_code_47149.npy
+RUN python3 /tmp/patch_mtp_draft_vocab.py \
+      ${SP}/vllm/models/qwen3_8_flash_next/nvidia/mtp.py \
+ && rm /tmp/patch_mtp_draft_vocab.py
+
+# Queue prefill-sized random PLE pages before the existing parallel mmap gather.
+COPY serving/docker/patches/flash-next-fast-v2/patch_ple_prefetch.py /tmp/
+RUN python3 /tmp/patch_ple_prefetch.py && rm /tmp/patch_ple_prefetch.py
+
+# The preview predates the merged upstream fix for speculative token batches
+# that continue after XGrammar has accepted its stop token.  This prevents the
+# known post-stop newline warning.  The separate token-271 draft/JSON-grammar
+# desynchronization is still tracked upstream and is not claimed fixed here.
+COPY serving/docker/patches/flash-next-fast-v2/patch_xgrammar_termination.py /tmp/
+RUN python3 /tmp/patch_xgrammar_termination.py \
+      ${SP}/vllm/v1/structured_output/backend_xgrammar.py \
+ && python3 -m py_compile ${SP}/vllm/v1/structured_output/backend_xgrammar.py \
+ && rm /tmp/patch_xgrammar_termination.py
+
+ENV VLLM_MTP_DRAFT_VOCAB=/opt/llm/draft_vocab_code_47149.npy \
+    VLLM_PLE_MMAP_PREFETCH=1 \
+    VLLM_PLE_MMAP_PREFETCH_MIN_ROWS=512
