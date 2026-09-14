@@ -1,23 +1,28 @@
 # Qwen3.8-Flash-Next: current best verified Thor recipe
 
-**Recommended as of 2026-09-06:** this is the best verified recipe in this
-repository for Qwen3.8-Flash-Next on Jetson AGX Thor. Use this setup instead
-of the historical Triton fallback. It prioritizes single-request decode speed
-without further quantizing the downloaded weights: fused SM110a GDN CUDA,
-native NVFP4 MoE, optimized PLE reads, **MTP=3, 0.90 memory, BF16 KV,
-256K context and four scheduler slots**. The final controlled short-context
-mean was about **35 tok/s versus 25 tok/s** for the original setup.
+**Recommended as of 2026-09-14:** this is the current best Thor recipe in this
+repository for Qwen3.8-Flash-Next. It retains the verified fused-GDN serving
+path and adds the immediately actionable September fast-path updates: a
+coding-oriented reduced MTP vocabulary, BF16 recurrent GDN state, refreshed
+SM110 deterministic QSA top-k, and best-effort PLE page prefetch. It uses the
+same downloaded checkpoint with native NVFP4 MoE, **MTP=3, 0.90 memory, BF16
+KV, 256K context and four scheduler slots**. The prior controlled
+short-context mean was about **35 tok/s versus 25 tok/s** for the original
+setup; the four new changes have runtime validation but are not yet represented
+by that inference benchmark.
 This is a measured recommendation, not a claim of the fastest possible engine
 or guaranteed speed at every context/concurrency; MTP=2 won the small
 four-request aggregate-throughput comparison below.
 
-Status (2026-09-05): fused CUDA + parallel random PLE reads verified at 0.90
-with MTP=2 and MTP=3, including four concurrent requests. Default: MTP=3
-for individual response speed; MTP=2 is the measured aggregate-throughput option.
+Status (2026-09-14): the new image builds on Thor, its top-k operator executes
+correctly on SM110 for one and four rows, and its PLE prefetch returns exact
+sampled data. Full model startup and A/B throughput for this incremental image
+remain to be measured. The older fused-GDN image/container is preserved as the
+known-working fallback.
 
 ## What changes
 
-Image: `nemoclaw-thor/qwen38-flash-next-vllm:sm110-gdn-cuda`.
+Recommended image: `nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v2`.
 
 - Fused GDN **decode** CUDA kernel compiled for SM110a from upstream source
   `082cf021b7ef96e4819e386846ea34e5ef21c655`, associated with
@@ -34,6 +39,27 @@ embedded MTP, deterministic QSA top-k, and prefix-cache fixes remain unchanged.
 **No weights downloaded or requantized.** GDN prefill and QSA still use their
 supported Triton implementations; this does not remove every Triton kernel or
 add FP4 KV support.
+
+The incremental `sm110-fast-v2` layer adds:
+
+- A 47,149-token coding-oriented MTP draft vocabulary. Only the speculative
+  draft head is reduced; target-model verification still uses the complete
+  248,320-token vocabulary, so accepted output remains target-verified. The
+  checked-in token-ID asset was generated deterministically from the local
+  768-record coding calibration corpus and the checkpoint tokenizer. Its SHA256
+  is `36cd2455dadd4f8362c1137a6e4b54305adb5fd640fc7653cfb3815584177a37`.
+- `--mamba-ssm-cache-dtype bfloat16`, reducing recurrent GDN state bandwidth
+  versus the checkpoint's FP32 state. This is separate from BF16 KV cache.
+- The latest audited deterministic QSA top-k source at commit
+  `e0ef69d4f5575dad00d34e05479eaf4c6547bace`, compiled for SM110a.
+- `POSIX_FADV_WILLNEED` hints for large PLE gathers (512 rows or more by
+  default), while leaving decode-sized reads on the already verified mmap path.
+
+All four changes are reversible at launch. Reduced-vocabulary drafting may
+lower MTP acceptance when a needed draft token is outside the selected set;
+target verification protects correctness but not throughput. BF16 state needs
+long-run behavioral validation. PLE advice is advisory and falls back to normal
+mmap faults if unsupported.
 
 ## Reproduce
 
@@ -61,7 +87,7 @@ mkdir -p "$HF_CACHE" "$VLLM_CACHE" "$TORCH_CACHE" "$FLASHINFER_CACHE"
 ### 2. Build the working image
 
 These are local image tags, not published images to pull. On a new machine,
-build all three layers in order. If they already exist from the verified
+build all four layers in order. If they already exist from the verified
 setup, skip rebuilding and proceed to launch. The upstream Dockerfile pins
 its official base by digest; source and GDN kernel revisions are pinned too.
 Building requires network access for the base image and source files, but
@@ -96,6 +122,30 @@ docker build --progress=plain \
   -t nemoclaw-thor/qwen38-flash-next-vllm:sm110-gdn-cuda .
 ```
 
+Add the reduced draft vocabulary, refreshed top-k and PLE prefetch layer:
+
+```bash
+docker build --progress=plain \
+  -f serving/docker/Dockerfile.qwen38-flash-next-fast-v2 \
+  -t nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v2 .
+```
+
+The `.npy` draft-vocabulary asset is checked into this repository, so building
+the image does not require the calibration corpus. To regenerate it from the
+prepared local corpus and the exact local tokenizer, run this from the
+repository root (the result is deterministic):
+
+```bash
+docker run --rm --pull never --user "$(id -u):$(id -g)" \
+  -v "$PWD:/repo" -v "$HF_CACHE:/hf:ro" --entrypoint python3 \
+  nemoclaw-thor/qwen38-flash-next-vllm:sm110-gdn-cuda \
+  /repo/serving/docker/patches/flash-next-fast-v2/build_draft_vocab.py \
+  "/hf/hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/$FLASHNEXT_MODEL_REV" \
+  /repo/serving/docker/assets/qwen38-flash-next/draft_vocab_code_47149.npy \
+  --size 47149 \
+  --corpus /hf/modelopt/calibration/qwen38-coding/coding-source-768.messages.jsonl
+```
+
 ### 3. Use the existing checkpoint (or download once on a new machine)
 
 The required model is **RadixArk/Qwen3.8-Flash-Next-NVFP4**, at the exact
@@ -114,7 +164,7 @@ download; allow enough disk space for the complete checkpoint and Docker images.
 docker run --rm --pull never --user "$(id -u):$(id -g)" \
   -v "$HF_CACHE:/hf" -e HF_HOME=/hf \
   -e FLASHNEXT_MODEL_REV="$FLASHNEXT_MODEL_REV" --entrypoint python3 \
-  nemoclaw-thor/qwen38-flash-next-vllm:sm110-gdn-cuda \
+  nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v2 \
   -c 'import os; from huggingface_hub import snapshot_download; snapshot_download("RadixArk/Qwen3.8-Flash-Next-NVFP4", revision=os.environ["FLASHNEXT_MODEL_REV"])'
 ```
 
@@ -124,7 +174,7 @@ Optional isolated numerical tests (while model serving is stopped):
 
 ```bash
 docker run --rm --runtime nvidia --gpus all --entrypoint python3 \
-  nemoclaw-thor/qwen38-flash-next-vllm:sm110-gdn-cuda \
+  nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v2 \
   -m pytest -q /opt/thor-gdn/test_fused_gdn_post_conv.py -k mtp
 ```
 
@@ -147,23 +197,30 @@ Single foreground launch command:
 bash serving/start-qwen38-flash-next-fast.sh
 ```
 
-Defaults: port **8050**, **0.90** GPU memory utilization, **BF16 KV**, **262144**
-maximum context, **four scheduler slots**, **MTP=3**.
+Defaults: port **8050**, **0.90** GPU memory utilization, **BF16 KV**, **BF16
+recurrent GDN state**, **262144** maximum context, **four scheduler slots**,
+**MTP=3**, reduced coding draft vocabulary, and large-gather PLE prefetch.
 Four slots do not guarantee four fully resident 256K contexts. Check the
 actual KV capacity in the boot log.
 
 The launcher uses only the existing local RadixArk snapshot
 `7b719225242aacd3dbd3f9407468c2ee9a9d2594` in `$HOME/thor-hf-cache`, and the usual
 `$HOME/thor-{vllm,torch,flashinfer}-cache` folders. It never refreshes weights
-upstream and never deletes/replaces a container. For a stopped existing
-instance use `docker start -a qwen38-flash-next-fast`.
+upstream and never deletes/replaces a container. The new default container is
+`qwen38-flash-next-fast-v2`; for a stopped instance use
+`docker start -a qwen38-flash-next-fast-v2`. The older stopped
+`qwen38-flash-next-fast` container remains available as the v1 fallback.
 
 Overrides: `HF_CACHE`, `VLLM_CACHE`, `TORCH_CACHE`, `FLASHINFER_CACHE`,
 `FLASHNEXT_IMAGE`, `FLASHNEXT_CONTAINER`, `FLASHNEXT_MODEL_REV`, `FLASHNEXT_PORT`,
 `FLASHNEXT_MTP`, `FLASHNEXT_GPU_MEM`, `FLASHNEXT_KV`, `FLASHNEXT_MAX_SEQS`,
-`FLASHNEXT_CONTEXT`. `FLASHNEXT_DETACH=1` opts into background serving.
+`FLASHNEXT_CONTEXT`, `FLASHNEXT_SSM_CACHE`, `FLASHNEXT_DRAFT_VOCAB`.
+`FLASHNEXT_DETACH=1` opts into background serving.
 For controlled diagnostics, `FLASHNEXT_GDN=triton` restores the old GDN path;
 `VLLM_PLE_MMAP_MADV_RANDOM=0 VLLM_PLE_MMAP_FAST_ROWS=512` restores old PLE I/O.
+Set `FLASHNEXT_SSM_CACHE=float32` to restore the checkpoint state precision,
+`FLASHNEXT_DRAFT_VOCAB=` to restore the full MTP draft head, or
+`VLLM_PLE_MMAP_PREFETCH=0` to disable page advice.
 
 ### Serialized compilation-cache restart failure
 
