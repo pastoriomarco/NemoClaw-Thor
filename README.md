@@ -32,13 +32,16 @@ Local-first NemoClaw/OpenShell integration for Jetson AGX Thor (SM110a / Blackwe
 ## Quick start
 
 For **Qwen3.8-Flash-Next**, use the
-[current best verified Thor recipe](serving/docs/QWEN38-FLASH-NEXT-FAST-THOR.md):
+[recommended Thor recipe](serving/docs/QWEN38-FLASH-NEXT-FAST-THOR.md):
 complete pinned image-build steps, local checkpoint setup, and foreground
 launcher. It uses fused SM110a GDN CUDA, optimized PLE reads, MTP=3, BF16 KV,
-0.90 GPU memory, 256K context and four scheduler slots. Its full 88-scenario
-Tool Eval result is 94/100 overall and 95/100 on Hard Mode; public `sgbench`
-measured 34.8 / 57.3 / 82.7 tok/s aggregate at C1 / C2 / C4. A new Thor needs
-only the recipe's build, checkpoint-download and foreground-start helpers.
+0.92 GPU memory, 256K context and three scheduler slots. The default linked
+hybrid keeps routed experts NVFP4 and KV BF16 while converting frequently read
+dense side weights to FP8; its initial public `sgbench` C1 result was 46.7 tok/s
+versus 34.8 for the original side weights. Its full 88-scenario Tool Eval
+matched the original at 94/100 overall, reached 100/100 on Hard Mode, and
+reduced median turn time from 4.3 to 4.1 seconds. A new Thor uses the recipe's build, base
+download, Docker-only hybrid-preparation and foreground-start helpers.
 This is a dedicated model recipe, not a change to the default ManyForge
 profile below.
 

@@ -43,4 +43,5 @@ docker build --progress=plain \
 
 echo "Built $final_image"
 echo "Next: ./serving/download-qwen38-flash-next.sh (new machine only)"
+echo "Then: ./serving/prepare-qwen38-flash-next-fp8-hybrid.sh"
 echo "Then: ./serving/start-qwen38-flash-next-fast.sh"

@@ -7,21 +7,32 @@ VLLM_CACHE=${VLLM_CACHE:-$HOME/thor-vllm-cache}
 TORCH_CACHE=${TORCH_CACHE:-$HOME/thor-torch-cache}
 FLASHINFER_CACHE=${FLASHINFER_CACHE:-$HOME/thor-flashinfer-cache}
 FLASHNEXT_IMAGE=${FLASHNEXT_IMAGE:-nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v3}
-FLASHNEXT_CONTAINER=${FLASHNEXT_CONTAINER:-qwen38-flash-next-fast-v3}
-FLASHNEXT_MODEL_REV=${FLASHNEXT_MODEL_REV:-7b719225242aacd3dbd3f9407468c2ee9a9d2594}
+FLASHNEXT_BASE_REV=${FLASHNEXT_BASE_REV:-7b719225242aacd3dbd3f9407468c2ee9a9d2594}
+FLASHNEXT_MODEL_REV=${FLASHNEXT_MODEL_REV:-${FLASHNEXT_BASE_REV}-fp8hybrid}
+FLASHNEXT_CONTAINER=${FLASHNEXT_CONTAINER:-qwen38-flash-next-fast-v3-fp8hybrid}
 FLASHNEXT_PORT=${FLASHNEXT_PORT:-8050}
 FLASHNEXT_MTP=${FLASHNEXT_MTP:-3}
-FLASHNEXT_GPU_MEM=${FLASHNEXT_GPU_MEM:-0.90}
+FLASHNEXT_GPU_MEM=${FLASHNEXT_GPU_MEM:-0.92}
 FLASHNEXT_KV=${FLASHNEXT_KV:-auto}
 FLASHNEXT_GDN=${FLASHNEXT_GDN:-cuda}
 FLASHNEXT_SSM_CACHE=${FLASHNEXT_SSM_CACHE:-bfloat16}
 FLASHNEXT_DRAFT_VOCAB=${FLASHNEXT_DRAFT_VOCAB:-/opt/llm/draft_vocab_code_47149.npy}
-FLASHNEXT_MAX_SEQS=${FLASHNEXT_MAX_SEQS:-4}
+FLASHNEXT_MAX_SEQS=${FLASHNEXT_MAX_SEQS:-3}
 FLASHNEXT_CONTEXT=${FLASHNEXT_CONTEXT:-262144}
 model_rel="hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/$FLASHNEXT_MODEL_REV"
 test -s "$HF_CACHE/$model_rel/config.json" || {
     echo "Local model snapshot missing: $HF_CACHE/$model_rel" >&2; exit 1;
 }
+hybrid_env=()
+if [[ "$FLASHNEXT_MODEL_REV" == *-fp8hybrid* ]]; then
+    test -f "$HF_CACHE/$model_rel/.prepared" || {
+        echo "FP8-hybrid snapshot is incomplete (missing .prepared): $HF_CACHE/$model_rel" >&2
+        exit 1
+    }
+    # Dispatch converted dense side layers through vLLM's blockwise-FP8 path.
+    # DeepGEMM is not the supported FP8 backend on Jetson Thor (SM110).
+    hybrid_env=(-e VLLM_FP8_HYBRID=1 -e VLLM_USE_DEEP_GEMM=0)
+fi
 mkdir -p "$VLLM_CACHE" "$TORCH_CACHE" "$FLASHINFER_CACHE"
 split_ops='["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::qwen3_8_flash_next_ple_short_conv","vllm::qwen3_8_flash_next_qsa_with_output","vllm::linear_attention","vllm::qwen_gdn_attention_core","vllm::qwen_gdn_attention_core_fused_norm_packed","vllm::sparse_attn_indexer","vllm::ple_mmap_lookup"]'
 run_mode=(-it)
@@ -32,6 +43,7 @@ exec docker run "${run_mode[@]}" --pull never \
     -v "$HF_CACHE:/hf" -v "$VLLM_CACHE:/root/.cache/vllm" \
     -v "$TORCH_CACHE:/root/.cache/torch" -v "$FLASHINFER_CACHE:/root/.cache/flashinfer" \
     -e HF_HOME=/hf -e HF_HUB_OFFLINE=1 \
+    "${hybrid_env[@]}" \
     -e VLLM_DISABLE_COMPILE_CACHE=1 -e VLLM_USE_AOT_COMPILE=1 \
     -e CUTE_DSL_ARCH=sm_110a -e TORCH_CUDA_ARCH_LIST=11.0a \
     -e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS=14 -e VLLM_PLE_MMAP_PREWARM=0 \

@@ -4,7 +4,7 @@ set -euo pipefail
 
 hf_cache=${HF_CACHE:-$HOME/thor-hf-cache}
 image=${FLASHNEXT_IMAGE:-nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v3}
-model_rev=${FLASHNEXT_MODEL_REV:-7b719225242aacd3dbd3f9407468c2ee9a9d2594}
+model_rev=${FLASHNEXT_BASE_REV:-7b719225242aacd3dbd3f9407468c2ee9a9d2594}
 model_rel="hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/$model_rev"
 
 if [[ -s "$hf_cache/$model_rel/config.json" ]]; then

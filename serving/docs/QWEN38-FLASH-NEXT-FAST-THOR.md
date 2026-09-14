@@ -1,22 +1,21 @@
-# Qwen3.8-Flash-Next: current best verified Thor recipe
+# Qwen3.8-Flash-Next: recommended Thor recipe
 
-**Recommended as of 2026-09-14:** this is the current best Thor recipe in this
-repository for Qwen3.8-Flash-Next. It retains the verified fused-GDN serving
-path and adds a coding-oriented reduced MTP vocabulary, BF16 recurrent GDN
-state, refreshed SM110 deterministic QSA top-k, best-effort PLE page prefetch,
-and the upstream XGrammar stop-token fix. It uses the same downloaded
-checkpoint with native NVFP4 MoE, **MTP=3, 0.90 memory, BF16 KV, 256K context
-and four scheduler slots**. The controlled short-context mean was about
-**35 tok/s versus 25 tok/s** for the original setup.
+**Recommended fast default as of 2026-09-14:** this recipe serves a linked
+FP8-hybrid form of the pinned RadixArk checkpoint. Routed experts remain native
+NVFP4; only 5.42 GiB of frequently read dense GDN, QSA and shared-expert BF16
+weights become 2.71 GiB of blockwise FP8 E4M3. The vision tower, embedded MTP,
+FP8 PLE table and **BF16 KV cache** remain. The default is **MTP=3, 0.92 memory,
+BF16 KV, 256K context and three scheduler slots**. Forum-style C1 throughput
+improved from **34.8 to 46.7 tok/s (+34%)** in the first two-run comparison.
 This is a measured recommendation, not a claim of the fastest possible engine
-or guaranteed speed at every context/concurrency; MTP=2 won the small
-four-request aggregate-throughput comparison below.
+or guaranteed speed at every context/concurrency. The original unmodified
+checkpoint remains the quality-verified fallback.
 
-Status (2026-09-14): the `fast-v2` image completed a full 88-scenario Tool Eval
-run at **94/100 overall and 95/100 on Hard Mode**. The `fast-v3` recipe is the
-same inference path plus merged vLLM PR #52805; it now boots and serves the
-pinned checkpoint successfully. Its forum-style `sgbench` results are recorded
-below. The older images remain valid fallbacks.
+Status (2026-09-14): the FP8 hybrid completed the full 88-scenario Tool Eval at
+**94/100 overall and 100/100 on Hard Mode**, matching the original-side-layer
+configuration's 94/100 overall while completing faster. The `fast-v3` recipe
+is the `fast-v2` inference path plus merged vLLM PR #52805. Both forum-style
+`sgbench` results and the controlled quality comparison are recorded below.
 
 ## What changes
 
@@ -32,11 +31,12 @@ Recommended image: `nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v3`.
   Similar mapping advice is documented in
   [Saren-Arterius's Spark recipe](https://github.com/Saren-Arterius/qwen3.8-Flash-DGX-AutoRound).
 
-The existing native NVFP4 routed experts, BF16 protected layers, FP8 PLE table,
-embedded MTP, deterministic QSA top-k, and prefix-cache fixes remain unchanged.
-**No weights downloaded or requantized.** GDN prefill and QSA still use their
-supported Triton implementations; this does not remove every Triton kernel or
-add FP4 KV support.
+The existing native NVFP4 routed experts, FP8 PLE table, embedded MTP,
+deterministic QSA top-k, vision tower and prefix-cache fixes remain unchanged.
+The default preparation step converts only 300 dense side-layer matrices from
+BF16 to blockwise FP8. It requires no calibration corpus and does not modify the
+original snapshot. GDN prefill and QSA still use their supported Triton
+implementations; this does not remove every Triton kernel or add FP4 KV support.
 
 The `sm110-fast-v2` portion adds:
 
@@ -69,7 +69,7 @@ which can still occur on newer upstream builds.
 
 ## Shortest working path
 
-The user performs three actions from the NemoClaw-Thor repository root. Change
+The user performs four actions from the NemoClaw-Thor repository root. Change
 `HF_CACHE` first only if the checkpoint should live somewhere other than the
 default fast NVMe path, `$HOME/thor-hf-cache`.
 
@@ -86,6 +86,13 @@ the cache:
 ./serving/download-qwen38-flash-next.sh
 ```
 
+Create the linked FP8-hybrid snapshot. Only four shards are rewritten, adding
+about 13 GiB on disk; unchanged files remain links to the base checkpoint:
+
+```bash
+./serving/prepare-qwen38-flash-next-fp8-hybrid.sh
+```
+
 Start vLLM in the foreground and watch loading and serving logs in the same
 terminal:
 
@@ -93,13 +100,14 @@ terminal:
 ./serving/start-qwen38-flash-next-fast.sh
 ```
 
-That is the complete normal procedure. Docker and the NVIDIA container runtime
+That is the complete normal procedure. `start-qwen38-flash-next-fast.sh` now
+defaults to the prepared FP8 hybrid. Docker and the NVIDIA container runtime
 must already work on the Thor host; the build needs network access, and a new
 machine needs enough fast-NVMe space and time for the approximately 126-GiB
-on-disk checkpoint. No host Python, CUDA toolkit, model conversion, separate
-drafter, or calibration corpus is required. The 47.7-GiB PLE portion stays
-file-backed; model loading used 79.42 GiB and the measured KV allocation was
-19.02 GiB, which is why the 126-GiB checkpoint fits in 128-GiB unified memory.
+base checkpoint plus the 13-GiB delta. No host Python, CUDA toolkit, separate
+drafter, or calibration corpus is required. The conversion runs inside Docker.
+The 47.7-GiB PLE portion stays file-backed; hybrid model loading used 76.75 GiB
+and the measured BF16-KV allocation at 0.92 was 23.05 GiB / 842439 tokens.
 
 ## Detailed reproduction and overrides
 
@@ -109,7 +117,7 @@ Validated on Jetson AGX Thor (128 GB unified memory), JetPack 7.1,
 with Docker and the NVIDIA container runtime already configured. Use fast
 local NVMe for the checkpoint: the large PLE table is read from disk during
 inference. Host Python/CUDA package installation is not needed for these builds.
-Stop other GPU model servers before loading this 0.90-memory profile.
+Stop other GPU model servers before loading this 0.92-memory profile.
 
 Run the commands below from the NemoClaw-Thor repository root. Change these
 paths before starting if desired; keep the exports in the same shell:
@@ -120,7 +128,8 @@ export HF_CACHE="$HOME/thor-hf-cache"
 export VLLM_CACHE="$HOME/thor-vllm-cache"
 export TORCH_CACHE="$HOME/thor-torch-cache"
 export FLASHINFER_CACHE="$HOME/thor-flashinfer-cache"
-export FLASHNEXT_MODEL_REV="7b719225242aacd3dbd3f9407468c2ee9a9d2594"
+export FLASHNEXT_BASE_REV="7b719225242aacd3dbd3f9407468c2ee9a9d2594"
+export FLASHNEXT_HYBRID_REV="${FLASHNEXT_BASE_REV}-fp8hybrid"
 mkdir -p "$HF_CACHE" "$VLLM_CACHE" "$TORCH_CACHE" "$FLASHINFER_CACHE"
 ```
 
@@ -180,18 +189,18 @@ docker run --rm --pull never --user "$(id -u):$(id -g)" \
   -v "$PWD:/repo" -v "$HF_CACHE:/hf:ro" --entrypoint python3 \
   nemoclaw-thor/qwen38-flash-next-vllm:sm110-gdn-cuda \
   /repo/serving/docker/patches/flash-next-fast-v2/build_draft_vocab.py \
-  "/hf/hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/$FLASHNEXT_MODEL_REV" \
+  "/hf/hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/$FLASHNEXT_BASE_REV" \
   /repo/serving/docker/assets/qwen38-flash-next/draft_vocab_code_47149.npy \
   --size 47149 \
   --corpus /hf/modelopt/calibration/qwen38-coding/coding-source-768.messages.jsonl
 ```
 
-### 3. Use the existing checkpoint (or download once on a new machine)
+### 3. Download the base and prepare the FP8 hybrid
 
-The required model is **RadixArk/Qwen3.8-Flash-Next-NVFP4**, at the exact
-revision exported above. No separate drafter or conversion is needed: MTP is
-embedded. The complete checkpoint, including the PLE table, must be present
-in `$HF_CACHE/hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/$FLASHNEXT_MODEL_REV`.
+The required base is **RadixArk/Qwen3.8-Flash-Next-NVFP4**, at the exact
+revision exported above. No separate drafter is needed: MTP is embedded. The
+complete checkpoint, including the PLE table, must be present in
+`$HF_CACHE/hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/$FLASHNEXT_BASE_REV`.
 When copying a Hugging Face cache to another machine, copy its referenced
 `blobs` too, not just the snapshot symlinks.
 
@@ -208,10 +217,77 @@ upstream latest:
 ```bash
 docker run --rm --pull never --user "$(id -u):$(id -g)" \
   -v "$HF_CACHE:/hf" -e HF_HOME=/hf \
-  -e FLASHNEXT_MODEL_REV="$FLASHNEXT_MODEL_REV" --entrypoint python3 \
+  -e FLASHNEXT_BASE_REV="$FLASHNEXT_BASE_REV" --entrypoint python3 \
   nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v3 \
-  -c 'import os; from huggingface_hub import snapshot_download; snapshot_download("RadixArk/Qwen3.8-Flash-Next-NVFP4", revision=os.environ["FLASHNEXT_MODEL_REV"])'
+  -c 'import os; from huggingface_hub import snapshot_download; snapshot_download("RadixArk/Qwen3.8-Flash-Next-NVFP4", revision=os.environ["FLASHNEXT_BASE_REV"])'
 ```
+
+Prepare the recommended hybrid locally:
+
+```bash
+./serving/prepare-qwen38-flash-next-fp8-hybrid.sh
+```
+
+This copies the snapshot's relative links, rewrites only
+`model-bf16-00001/00010/00011/00012.safetensors`, replaces the safetensors
+index, and writes `.prepared` only after validation succeeds. The original
+BF16-side-layer files remain in the base snapshot. The conversion uses direct
+128x128 block scaling, not PTQ calibration or Hessian search; the coding
+calibration corpus is therefore neither read nor required.
+
+#### Publish only the changed files to Hugging Face
+
+The hybrid is not a standalone 139-GiB upload. Publish it as a delta repository
+containing the four real converted shards plus the modified index. First create
+a Hugging Face write token. Enter it interactively so it is not placed in shell
+history; the login is stored in the persistent Thor HF directory:
+
+```bash
+docker run --rm -it --pull never \
+  -v "$HF_CACHE:/hf" -e HF_HOME=/hf \
+  --entrypoint hf nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v3 \
+  auth login
+```
+
+Verify the account, then choose the delta-repository name and upload:
+
+```bash
+docker run --rm --pull never \
+  -v "$HF_CACHE:/hf:ro" -e HF_HOME=/hf \
+  --entrypoint hf nemoclaw-thor/qwen38-flash-next-vllm:sm110-fast-v3 \
+  auth whoami
+```
+
+```bash
+export FLASHNEXT_DELTA_REPO="your-user/Qwen3.8-Flash-Next-NVFP4-FP8-Hybrid-Delta"
+./serving/upload-qwen38-flash-next-fp8-delta.sh
+```
+
+The uploader creates the model repository, adds a model card and checksummed
+manifest, and uploads only the five changed checkpoint files (about 13 GiB).
+At 5 MB/s, allow roughly 45-60 minutes. It prints the final Hub commit; record
+that hash and distribute it as `FLASHNEXT_DELTA_REV`, rather than relying on a
+mutable `main`. Re-running Hugging Face's folder upload resumes/skips uploaded
+content after interruption. The repository is private by default; set
+`FLASHNEXT_DELTA_PRIVATE=0` only after confirming that the source-model and
+RadixArk redistribution terms permit publishing derived weights. Do not upload
+the `.bf16.bak` links or the other 201 base shards.
+
+Another Thor can reconstruct the linked hybrid without quantizing locally:
+
+```bash
+./serving/download-qwen38-flash-next.sh
+./serving/apply-qwen38-flash-next-fp8-delta.sh
+```
+
+The apply helper defaults to the uploaded
+[`pastoriomarco/Qwen3.8-Flash-Next-NVFP4-FP8-Hybrid-Delta`](https://huggingface.co/pastoriomarco/Qwen3.8-Flash-Next-NVFP4-FP8-Hybrid-Delta)
+repository at immutable revision
+`358162ffaaeb4372c79843d9cd1f67d3654593da`. It checks every downloaded file
+against the manifest, requires the exact base revision, and links all unchanged
+files from that base. The Hub upload/download flow follows Hugging Face's current resumable
+[`upload_folder`](https://huggingface.co/docs/huggingface_hub/main/guides/upload)
+path.
 
 ### 4. Optional validation and foreground launch
 
@@ -236,25 +312,37 @@ sudo sysctl -w vm.drop_caches=3
 Cache clearing does not release live model allocations. Stop the serving
 container first when reclaiming RAM; do not clear caches during benchmarks.
 
-Single foreground launch command:
+Single foreground launch command (recommended FP8 hybrid):
 
 ```bash
 bash serving/start-qwen38-flash-next-fast.sh
 ```
 
-Defaults: port **8050**, **0.90** GPU memory utilization, **BF16 KV**, **BF16
-recurrent GDN state**, **262144** maximum context, **four scheduler slots**,
+Defaults: port **8050**, **0.92** GPU memory utilization, **BF16 KV**, **BF16
+recurrent GDN state**, **262144** maximum context, **three scheduler slots**,
 **MTP=3**, reduced coding draft vocabulary, and large-gather PLE prefetch.
-Four slots do not guarantee four fully resident 256K contexts. Check the
-actual KV capacity in the boot log.
+The measured 842439-token KV pool advertises 3.21 full 256K contexts, so the
+three-slot default matches the full-context capacity. Set
+`FLASHNEXT_MAX_SEQS=4` explicitly for four shorter mixed requests.
 
-The launcher uses only the existing local RadixArk snapshot
-`7b719225242aacd3dbd3f9407468c2ee9a9d2594` in `$HOME/thor-hf-cache`, and the usual
-`$HOME/thor-{vllm,torch,flashinfer}-cache` folders. It never refreshes weights
-upstream and never deletes/replaces a container. The default container is
-`qwen38-flash-next-fast-v3`; for a stopped instance use
-`docker start -a qwen38-flash-next-fast-v3`. Older stopped containers remain
-available as fallbacks.
+The launcher uses the linked local hybrid snapshot
+`7b719225242aacd3dbd3f9407468c2ee9a9d2594-fp8hybrid` in
+`$HOME/thor-hf-cache`, plus the usual `$HOME/thor-{vllm,torch,flashinfer}-cache`
+folders. It never refreshes weights upstream and never deletes/replaces a
+container. The default container is `qwen38-flash-next-fast-v3-fp8hybrid`; for
+a stopped instance use `docker start -a qwen38-flash-next-fast-v3-fp8hybrid`.
+Older stopped containers and the base snapshot remain available as fallbacks.
+
+To restore the original 94/100 Tool-Eval checkpoint path without deleting the
+hybrid, choose the base revision, the original memory setting and a distinct
+container name:
+
+```bash
+FLASHNEXT_MODEL_REV=7b719225242aacd3dbd3f9407468c2ee9a9d2594 \
+FLASHNEXT_CONTAINER=qwen38-flash-next-fast-v3-bf16-side \
+FLASHNEXT_GPU_MEM=0.90 \
+bash serving/start-qwen38-flash-next-fast.sh
+```
 
 Overrides: `HF_CACHE`, `VLLM_CACHE`, `TORCH_CACHE`, `FLASHINFER_CACHE`,
 `FLASHNEXT_IMAGE`, `FLASHNEXT_CONTAINER`, `FLASHNEXT_MODEL_REV`, `FLASHNEXT_PORT`,
@@ -289,23 +377,26 @@ Client: base URL `http://<thor-ethernet-ip>:8050/v1`, model ID
 
 ## Agentic quality result
 
-The `sm110-fast-v2` image and pinned RadixArk checkpoint completed
-tool-eval-bench `v2.6.1.dev65+g6be685f0e` on 2026-09-14. Protocol: all 88
-standard + Hard Mode scenarios, temperature 0, seed 42, one scenario at a time,
-and explicit `enable_thinking=true` / `reasoning_effort=medium`.
+The original-side-layer and FP8-hybrid snapshots completed tool-eval-bench
+`v2.6.1.dev65+g6be685f0e` on 2026-09-14. Protocol: all 88 standard + Hard Mode
+scenarios, temperature 0, seed 42, one scenario at a time, and explicit
+`enable_thinking=true` / `reasoning_effort=medium`.
 
-| Result | Value |
-|---|---:|
-| Overall | **94/100** |
-| Hard Mode | **36/38 points, 95/100** |
-| Passed / partial / failed | 79 / 7 / 2 |
-| Context & State | 100% |
-| Code Patterns | 100% |
-| Toolset Scale | 100% |
-| Median turn | 4.3 s |
-| Runtime | 1471.4 s |
+| Result | Original side weights | FP8 hybrid |
+|---|---:|---:|
+| Overall | **94/100** | **94/100** |
+| Points | 165/176 | **166/176** |
+| Hard Mode | 36/38, 95% | **38/38, 100%** |
+| Passed / partial / failed | 79 / 7 / 2 | **80 / 6 / 2** |
+| Error Recovery | 83% | **100%** |
+| Safety & Boundaries | **92%** | 85% |
+| Median turn | 4.3 s | **4.1 s** |
+| Responsiveness | 37/100 | **39/100** |
+| Deployability | 77/100 | **78/100** |
+| Runtime | 1471.4 s | **1299.6 s** |
+| Total tokens | 575840 | 583098 |
 
-One safety warning was recorded on TC-82: the model sent a checklist without
+In the original run, one safety warning was recorded on TC-82: the model sent a checklist without
 first confirming the current recipient. TC-68 returned the correct schema
 fields but wrapped the JSON in a Markdown fence and explanatory prose. Its
 timestamp coincided exactly with xgrammar rejecting draft tokens 271 (`\n\n`)
@@ -314,6 +405,11 @@ failure rather than evidence that the target model did not understand the
 schema. It still counts in the deployment score because an agent requires
 valid JSON. The v3 termination patch removes one related post-stop failure
 mode; the remaining token-271 path needs a new controlled run.
+
+The hybrid preserved the aggregate quality score and improved responsiveness,
+but individual categories still varied: Safety & Boundaries fell from 92% to
+85%, while Error Recovery reached 100% and Hard Mode reached 100%. Treat the
+result as empirical parity for this run, not bitwise or scenario-level identity.
 
 This benchmark measures tool selection, argument precision, state handling,
 structured output and safety over mock tools. It does not measure independent
@@ -337,6 +433,27 @@ C2/C4 values are aggregate throughput across all streams.
 | Math | 37.8 | 54.3 | 98.9 |
 | LongCode | 31.7 | 53.2 | 77.7 |
 | **Token-weighted overall** | **34.8** | **57.3** | **82.7 tok/s** |
+
+The recommended FP8-hybrid snapshot was then tested with the same C1 script,
+two runs, MTP=3, BF16 KV and 0.92 memory. The C2/C4 rerun and full Tool Eval
+were still pending when these figures were recorded:
+
+| Workload | Original C1 | FP8-hybrid C1 | Change |
+|---|---:|---:|---:|
+| Q&A | 31.7 | 41.0 | +29% |
+| Code | 37.6 | 42.9 | +14% |
+| JSON | 43.2 | 53.2 | +23% |
+| Math | 37.8 | 44.9 | +19% |
+| LongCode | 31.7 | 45.6 | +44% |
+| **Token-weighted overall** | **34.8** | **46.7 tok/s** | **+34%** |
+
+The hybrid boot detected all 300 intended blockwise-FP8 layers and selected
+`CutlassFp8BlockScaledMMKernel`. Loaded tensor memory fell from 79.42 to
+76.75 GiB. At 0.92 it allocated 23.05 GiB / 842439 BF16 KV tokens, advertising
+3.21 full 262144-token contexts. The base at 0.90 allocated 19.95 GiB / 728869
+tokens (2.78x). Most of the visible KV increase comes from 0.90 -> 0.92; only
+5.42 GiB of this particular checkpoint was eligible for conversion, becoming
+2.71 GiB FP8.
 
 These are end-to-end output rates: `sgbench.sh` divides completion tokens by
 the complete request time, so TTFT and prefill remain in the denominator. They
