@@ -1,10 +1,10 @@
 # Qwen3.8-Flash-Next: recommended Thor recipe
 
-**Recommended fast default as of 2026-09-14:** this recipe serves a linked
+**Recommended fast default as of 2026-09-16:** this recipe serves a linked
 FP8-hybrid form of the pinned RadixArk checkpoint. Routed experts remain native
 NVFP4; only 5.42 GiB of frequently read dense GDN, QSA and shared-expert BF16
 weights become 2.71 GiB of blockwise FP8 E4M3. The vision tower, embedded MTP,
-FP8 PLE table and **BF16 KV cache** remain. The default is **MTP=3, 0.92 memory,
+FP8 PLE table and **BF16 KV cache** remain. The default is **MTP=3, 0.90 memory,
 BF16 KV, 256K context and three scheduler slots**. Forum-style C1 throughput
 improved from **34.8 to 46.7 tok/s (+34%)** in the first two-run comparison.
 This is a measured recommendation, not a claim of the fastest possible engine
@@ -106,8 +106,9 @@ must already work on the Thor host; the build needs network access, and a new
 machine needs enough fast-NVMe space and time for the approximately 126-GiB
 base checkpoint plus the 13-GiB delta. No host Python, CUDA toolkit, separate
 drafter, or calibration corpus is required. The conversion runs inside Docker.
-The 47.7-GiB PLE portion stays file-backed; hybrid model loading used 76.75 GiB
-and the measured BF16-KV allocation at 0.92 was 23.05 GiB / 842439 tokens.
+The 47.7-GiB PLE portion stays file-backed; hybrid model loading used 76.75 GiB.
+A three-slot launch at 0.91 measured 24.19 GiB / 884444 BF16-KV tokens (3.37x
+full 256K contexts); the 0.90 default leaves additional host-memory headroom.
 
 ## Detailed reproduction and overrides
 
@@ -117,7 +118,7 @@ Validated on Jetson AGX Thor (128 GB unified memory), JetPack 7.1,
 with Docker and the NVIDIA container runtime already configured. Use fast
 local NVMe for the checkpoint: the large PLE table is read from disk during
 inference. Host Python/CUDA package installation is not needed for these builds.
-Stop other GPU model servers before loading this 0.92-memory profile.
+Stop other GPU model servers before loading this 0.90-memory profile.
 
 Run the commands below from the NemoClaw-Thor repository root. Change these
 paths before starting if desired; keep the exports in the same shell:
@@ -318,20 +319,23 @@ Single foreground launch command (recommended FP8 hybrid):
 bash serving/start-qwen38-flash-next-fast.sh
 ```
 
-Defaults: port **8050**, **0.92** GPU memory utilization, **BF16 KV**, **BF16
+Defaults: port **8050**, **0.90** GPU memory utilization, **BF16 KV**, **BF16
 recurrent GDN state**, **262144** maximum context, **three scheduler slots**,
 **MTP=3**, reduced coding draft vocabulary, and large-gather PLE prefetch.
-The measured 842439-token KV pool advertises 3.21 full 256K contexts, so the
-three-slot default matches the full-context capacity. Set
+With three scheduler slots, a measured launch at 0.91 allocated 884444 KV
+tokens and advertised 3.37 full 256K contexts; 0.90 is expected to remain above
+3.0 while leaving more unified-memory headroom. Confirm the exact allocation in
+the startup log on each machine. Set
 `FLASHNEXT_MAX_SEQS=4` explicitly for four shorter mixed requests.
 
 The launcher uses the linked local hybrid snapshot
 `7b719225242aacd3dbd3f9407468c2ee9a9d2594-fp8hybrid` in
 `$HOME/thor-hf-cache`, plus the usual `$HOME/thor-{vllm,torch,flashinfer}-cache`
-folders. It never refreshes weights upstream and never deletes/replaces a
-container. The default container is `qwen38-flash-next-fast-v3-fp8hybrid`; for
-a stopped instance use `docker start -a qwen38-flash-next-fast-v3-fp8hybrid`.
-Older stopped containers and the base snapshot remain available as fallbacks.
+folders. It never refreshes weights upstream or replaces an already existing
+container. The default container is `qwen38-flash-next-fast-v3-fp8hybrid` and
+Docker removes it automatically when vLLM exits, while all weights and caches
+remain in the host-mounted directories. Set `FLASHNEXT_NO_RM=1` only when a
+stopped container and its Docker logs must be preserved.
 
 To restore the original 94/100 Tool-Eval checkpoint path without deleting the
 hybrid, choose the base revision, the original memory setting and a distinct
@@ -348,7 +352,8 @@ Overrides: `HF_CACHE`, `VLLM_CACHE`, `TORCH_CACHE`, `FLASHINFER_CACHE`,
 `FLASHNEXT_IMAGE`, `FLASHNEXT_CONTAINER`, `FLASHNEXT_MODEL_REV`, `FLASHNEXT_PORT`,
 `FLASHNEXT_MTP`, `FLASHNEXT_GPU_MEM`, `FLASHNEXT_KV`, `FLASHNEXT_MAX_SEQS`,
 `FLASHNEXT_CONTEXT`, `FLASHNEXT_SSM_CACHE`, `FLASHNEXT_DRAFT_VOCAB`.
-`FLASHNEXT_DETACH=1` opts into background serving.
+`FLASHNEXT_DETACH=1` opts into background serving; `FLASHNEXT_NO_RM=1` preserves
+the stopped container instead of deleting it automatically.
 For controlled diagnostics, `FLASHNEXT_GDN=triton` restores the old GDN path;
 `VLLM_PLE_MMAP_MADV_RANDOM=0 VLLM_PLE_MMAP_FAST_ROWS=512` restores old PLE I/O.
 Set `FLASHNEXT_SSM_CACHE=float32` to restore the checkpoint state precision,
@@ -498,14 +503,16 @@ samples, not a universal MTP winner. Select the throughput option with:
 FLASHNEXT_MTP=2 bash serving/start-qwen38-flash-next-fast.sh
 ```
 
-Changing configuration requires a new container; `docker start` reuses the old
-arguments. Stop and rename an existing container if preserving its logs before
-launching another. The MTP=2 boot advertised 711119 KV tokens / 2.71x full 256K
-contexts; allocator estimates can vary between startups.
+Changing configuration requires a new container. The default `--rm` behavior
+removes it when vLLM exits; if `FLASHNEXT_NO_RM=1` was used, remove or rename the
+stopped container before launching another. The MTP=2 boot advertised 711119 KV
+tokens / 2.71x full 256K contexts; allocator estimates can vary between startups.
 
-At 0.90 / MTP=3 / BF16 KV, startup advertised **19.37 GiB KV, 670238 tokens,
-2.56x concurrency at 262144 tokens per request**. Four scheduler slots therefore
-support four shorter conversations, not four full 256K contexts. The QSA
+In an older four-slot run at 0.90 / MTP=3 / BF16 KV, startup advertised
+**19.37 GiB KV, 670238 tokens, 2.56x concurrency at 262144 tokens per request**.
+Four scheduler slots therefore supported four shorter conversations, not four
+full 256K contexts. The current three-slot default reserves less runtime memory
+and leaves enough KV capacity for three complete contexts. The QSA
 backend still rebuilds metadata between draft steps (fully fused multi-step
 drafting is unsupported in this preview). This is separate from, and does not
 disable, the now-working GDN CUDA decode operator.
