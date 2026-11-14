@@ -292,3 +292,119 @@ freely), and regenerable ONNX dirs (large).
 **Possible next**: (a) exercise DDTree mechanics on the upstream-validated
 Qwen3.5-4B pair (BF16 base → compiles); (b) MTP retest on the now-compiling
 dense checkpoint — likely hits the same spec-profile wall.
+
+---
+
+## v0.12.0 evaluation — 2026-11-14 (dense Qwen3.8-27B NVFP4 + MTP: **works**, fast decode, weak serving)
+
+Jetson AGX Thor, JetPack 7.2.1 (R39.2.1), CUDA 13.2.2, TensorRT 10.16.2.10.
+Model: `nvidia/Qwen3.8-27B-NVFP4` @ `482ca0f3832238542f8f5295dde86b5f22711d80`
+(ModelOpt MIXED_PRECISION: NVFP4 MLPs, FP8 GDN/attention projections, built-in MTP layer).
+Built engines and the server container were removed after the test; the image was kept.
+
+### Install (published wheel, no source build)
+
+- Image `nemoclaw-thor/edgellm:0.12.0` from [`edgellm-0.12/Dockerfile`](edgellm-0.12/Dockerfile):
+  `nvidia/cuda:13.2.1-runtime-ubuntu24.04` + JetPack TensorRT 10.16.2.10 + `pip install "tensorrt-edgellm[runtime]==0.12.0"`
+  (757 MB aarch64 wheel; it carries a `jetson-thor-jp72-cu13-sm110` payload). 5.3 GB image.
+- **TensorRT must come from the Jetson apt repo** (`repo.download.nvidia.com/jetson/common r39.2`,
+  key `/etc/apt/trusted.gpg.d/jetson-ota-public.asc` copied from the host into the build context).
+  The CUDA sbsa repo does not carry the `10.16.2.10-1+cuda13.2` JetPack build (`E: Version ... was not found`).
+- Check: `python -c "import tensorrt; from tensorrt_edgellm import runtime; runtime.load()"`.
+
+### Serve command used
+
+```bash
+docker run -d --name edgellm-27b --runtime nvidia --network host --ipc host --ulimit memlock=-1 -e HF_HUB_OFFLINE=1 \
+  -v $HOME/thor-hf-cache:/root/.cache/huggingface:ro -v $HOME/edgellm-cache:/data/edgellm-cache \
+  nemoclaw-thor/edgellm:0.12.0 trtedge serve /root/.cache/huggingface/hub/models--nvidia--Qwen3.8-27B-NVFP4/snapshots/482ca0f3832238542f8f5295dde86b5f22711d80 \
+  --served-model-name qwen38-27b --host 0.0.0.0 --port 8000 --cache-dir /data/edgellm-cache --engine-cache-max-size-gb 100 \
+  --max-input-len 65536 --max-kv-cache-capacity 131072 --max-batch-size 2 --enable-in-flight-batching --enable-context-reuse \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+  --enable-auto-tool-choice --tool-call-parser qwen3_xml --reasoning-parser qwen3
+```
+
+`trtedge serve` builds all engines itself on a cache miss (checkpoint-direct builder; no ONNX export,
+no `llm_build`). This closes both v0.8 blockers: dense MTP now builds and serves.
+
+### Build facts
+
+- First build ~30 min: `spec-base` 12 m 41 s (17.6 GB engine, prefill + decode profiles),
+  `spec-draft` 14 m 27 s (718 MB), `visual` 2 m 36 s (12.7 MB). Peak build memory 28.7 GB.
+  Later starts reuse the bundle (`i65536-b2-kv131072-mtp-<hash>`); load + warmup ~6 min.
+- **int32 overflow at batch 4:** `--max-batch-size 4 --max-input-len 65536` failed after 8 min with
+  `cuda_tile.iota ... 18446744071562067968 exceeds ... i32` / `Could not find any implementation for node
+  {ForeignNode...}`: 4 × 65536 tokens × an 8192-wide tensor = 2^31 elements. Keep batch × input ≤ 131072
+  (batch 2 × 64K worked; 4 × 32K should).
+- **Draft-token default is 60:** `--max-spec-verify-tokens` / `--max-spec-draft-tokens` default to 60 for MTP,
+  which slows the drafter build and sizes GDN spec-verify buffers for 60 tokens. Set them to K+1 / K
+  (e.g. 4 / 3, or 8 / 7 to allow MTP up to 7).
+- Prefill workspace is sized for batch × max-input-len: 12.4 GB (base) and 13.2 GB (draft), shared at
+  runtime as one 13.2 GB block. Total server footprint ~80 GB with these limits (KV 16 GiB FP16).
+- Compact (mixed prefill + decode) execution is unavailable on sm_110 in this build, and speculative
+  deployments run single-cohort anyway (see concurrency below).
+
+### Results (single user, Cline + smoke prompts)
+
+| Metric | Edge-LLM 0.12 + MTP 3 | vLLM reference |
+|---|---:|---|
+| Decode, short prompts | 38–46 tok/s (prose without thinking ~25) | earlier vLLM MTP-3 record ~22.5 tok/s (`QWEN38-27B-NVFP4-THOR.md`) |
+| Decode at 30–50K context | 32–35 tok/s | vLLM 0.33 + DSpark K=7, same day: 14–47 tok/s depending on acceptance, ~10% slower 58K→74K |
+| Prefill of uncached tokens | ~2,000–4,000 tok/s | not recorded |
+| Context reuse (hybrid + spec) | works: 86–98% of each Cline prompt reused, TTFT 0.6–3 s at 20–50K | prefix caching, 73–86% hit rate |
+| Tool call | correct OpenAI `tool_calls` via `qwen3_xml` | `qwen3_coder` |
+
+### Problems found
+
+1. **Thinking is off by default.** Edge-LLM renders chat requests with `enable_thinking=false` unless the
+   request asks. Cline does not send it, so Qwen3.8-27B ran a 30K-token agent task without thinking and
+   re-issued an identical `run_commands` call six times (Cline's loop detector stopped the task). Replays
+   with thinking on (`low`/`medium`) took a different action. Context reuse was ruled out (same output
+   with `reuse_context=false`).
+2. **No anti-repetition sampling.** `presence_penalty` ≠ 0 is rejected ("not supported by the Edge-LLM
+   runtime"); `repetition_penalty` and `min_p` are ignored with a warning. Server defaults are
+   `top_p 0.9, top_k 50`, not the checkpoint's `generation_config` (`top_p 0.95, top_k 20`). With thinking
+   on, one turn at a 46K prompt looped in its reasoning for 13,713 tokens (6.9 min) until `finish=length`.
+3. **Effectively one request at a time with speculative decoding:** scheduling resolves to
+   `prefillFirst` + `single-cohort`; a second request waited 6 min behind a long Cline turn.
+4. **Tool calls are streamed only when complete**, so client-side TTFT/decode metrics for tool-call turns
+   are meaningless; measure total time per request instead.
+5. Valid `reasoning_effort` values for Qwen3.8 are `xhigh` (template default), `medium`, `low`; others fail
+   template rendering.
+
+### Verdict
+
+- **Pros:** official Thor (sm_110) and Orin support; dense MTP works; ~1.5–1.7× vLLM's recorded 27B decode;
+  NVFP4 + FP8 kept in the engine; context reuse works on the hybrid model with speculation; fast restarts
+  from cached engines; OpenAI server with tool/reasoning parsers and guided decoding.
+- **Cons:** 30-min engine builds per limit set; serial serving under speculation; no repetition controls;
+  non-vLLM defaults (thinking off, sampling) that clients must override; memory-hungry prefill workspaces.
+- Suited to a single-user assistant with a client or proxy that sets thinking and sampling; not (yet) to a
+  shared server. Rebuild next time with smaller limits (e.g. input 32K, batch 2–4, draft tokens 4–8).
+
+### Helper
+
+[`manyforge/scripts/debug/tps_proxy.py`](../../manyforge/scripts/debug/tps_proxy.py): OpenAI pass-through
+that prints per-request TTFT / decode tok/s, keeps the last N request and reply bodies
+(`--dump-dir`, `--dump-keep`), and with `--thinking-effort` turns thinking on for requests that do not set it.
+Ran on Thor as `tps-proxy` on `:8001` → `:8000`, using the Edge-LLM image (Starlette, httpx, uvicorn).
+
+Its `ttft`/`decode` are valid only when the server streams tokens as they are generated. Edge-LLM streams
+reasoning token by token, so the Edge-LLM decode figures above (thinking-on turns) hold; its tool-call-only
+turns were measured from total request time instead. vLLM 0.33 sends Qwen3.8 reasoning and tool calls in a
+few late bursts (a Cline turn arrived in 13 chunks), which makes the proxy's `decode` far too high (it read
+50–65 tok/s while vLLM's own stats showed 14–32). For vLLM use the engine's 10 s stats lines or the proxy's
+`e2e` figure (output tokens / whole request time).
+
+### Same-day vLLM 0.33 speculative-method comparison (engine stats, single-request windows)
+
+| | DSpark K=7 (`RadixArk/Qwen3.8-27B-DSpark`) | MTP K=5 (built-in head) |
+|---|---|---|
+| Mean accepted tokens per step | 2.3–7.6, average ~5.1 | 2.5–5.2, average ~3.9 |
+| Verification steps per second (≈ 58–74K context) | ~5.7–6.4 | ~5.8–6.0 |
+| Generation throughput | 14–47 tok/s, mostly 24–46 | 14–32 tok/s, mostly 20–29 |
+| KV capacity at `--gpu-memory-utilization 0.75` | 609,053 tokens | 949,221 tokens |
+
+Both at `--gpu-memory-utilization 0.75`, BF16 KV, `--max-num-seqs 4`, Cline on comparable but not identical
+task phases. Step cost is the same; DSpark wins on acceptance, so DSpark K=7 was faster overall. 0.85 memory
+made Thor swap-thrash during startup with the workbench running (2 GB swap at the time; now 32 GB).

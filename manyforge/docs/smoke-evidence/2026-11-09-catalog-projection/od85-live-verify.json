@@ -1,0 +1,74 @@
+{
+ "validate": {
+  "status": 200,
+  "ms": [
+   1047,
+   886,
+   862,
+   819,
+   827
+  ],
+  "keys": [
+   "candidate",
+   "diagnostics",
+   "reference_validation",
+   "valid"
+  ],
+  "rv_keys": [
+   "diagnostics",
+   "program_content_digest",
+   "schema_version",
+   "selector_facts",
+   "total_count",
+   "truncated",
+   "workspace_generation"
+  ]
+ },
+ "edits_ms": [
+  1980,
+  1823,
+  1949,
+  1897,
+  1832
+ ],
+ "edit_median_ms": 1897,
+ "edit_max_ms": 1980,
+ "edit_refs_first": [
+  200,
+  true,
+  [
+   [
+    "component_reference_missing",
+    "/forest/0/children/12/parameters/target"
+   ]
+  ]
+ ],
+ "edit_refs_last": [
+  200,
+  true,
+  [
+   [
+    "component_reference_missing",
+    "/forest/0/children/12/parameters/target"
+   ],
+   [
+    "component_reference_missing",
+    "/forest/0/children/13/parameters/target"
+   ],
+   [
+    "component_reference_missing",
+    "/forest/0/children/14/parameters/target"
+   ],
+   [
+    "component_reference_missing",
+    "/forest/0/children/15/parameters/target"
+   ],
+   [
+    "component_reference_missing",
+    "/forest/0/children/16/parameters/target"
+   ]
+  ]
+ ],
+ "discard": 200,
+ "after_discard_children": 12
+}

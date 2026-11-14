@@ -99,6 +99,11 @@ Production-decision status (interim): [`manyforge/docs/PHASE-5-PRODUCTION-DECISI
   ModelOpt PTQ.
 - [`serving/docs/KV-CACHE-BUDGET.md`](serving/docs/KV-CACHE-BUDGET.md) — Thor
   128 GB unified-memory KV budget reference.
+- [`serving/docs/THOR-ACCELERATORS.md`](serving/docs/THOR-ACCELERATORS.md) —
+  accelerator map for the T5000 module: SM/TPC counts, per-SM FP4 arithmetic,
+  the memory roofline, and what each engine (tensor cores, PVA v3, NVENC/NVDEC,
+  CPU, MIG) can and cannot contribute to serving. Read this before proposing a
+  new "use the hardware better" optimization.
 - [`serving/docs/`](serving/docs/) — serving plans, recipes, performance
   reports, and architectural investigations. Status board for these is in
   [`PLANS_INDEX.md`](PLANS_INDEX.md). Highlights:
@@ -117,6 +122,11 @@ Production-decision status (interim): [`manyforge/docs/PHASE-5-PRODUCTION-DECISI
     [`COSMOS-REASON2-32B-QUANTIZATION.md`](serving/docs/COSMOS-REASON2-32B-QUANTIZATION.md).
   - **Bench / perf** — [`TOOL-EVAL-BENCH-THOR.md`](serving/docs/TOOL-EVAL-BENCH-THOR.md),
     [`PERFORMANCE-V7.md`](serving/docs/PERFORMANCE-V7.md).
+  - **Accelerator ROI plan** — [`THOR-ACCELERATOR-ROI.md`](serving/docs/THOR-ACCELERATOR-ROI.md)
+    (Draft, 2026-11-07): **recommended setup route for each served model**
+    (Flash-Next and Qwen3.8-27B) up front, followed by the roofline-scored
+    experiment list E1–E14, GB10 precedent with source links, and non-goals
+    recorded so they stay closed.
 - [`serving/agentic-bench/README.md`](serving/agentic-bench/README.md) — bench
   harness and candidate plan.
 - [`serving/docker/`](serving/docker/) — Thor-specific build notes and patch

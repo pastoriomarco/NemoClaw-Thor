@@ -37,6 +37,19 @@ This board covers only the assistant-lane and serving work owned here.
 
 ## Active work focus
 
+- **Assistant sandboxed refactor** — [`ASSISTANT-SANDBOX-REFACTOR-PLAN.md`](ASSISTANT-SANDBOX-REFACTOR-PLAN.md)
+  (Draft rev. 2, 2026-11-08; design only). Drop NemoClaw/OpenClaw/Hermes;
+  the assistant becomes a ManyForge v2 component whose adapter runs the
+  direct bridge in a pinned OpenShell sandbox; model servers run in hardened
+  no-egress containers; portable across Thor, Orin and AMD64; new
+  `manyforge-assistant` component-package repo. Phase A first brings the
+  assistant up on ManyForge 0.2.1 as it ships. Supersedes the three-lane
+  direction below.
+- **Fine-tuned small assistant model** — [`ASSISTANT-FINETUNE-PLAN.md`](ASSISTANT-FINETUNE-PLAN.md)
+  (Draft rev. 1, 2026-11-10; **to review**; design only). Nemotron 3.5 Bolt
+  E4B fine-tuned on ManyForge traces (every example scenario as the minimum
+  coverage), FP8/NVFP4 on Thor, 4-bit on Orin; training data outside the
+  ManyForge repo with an on-demand contract checker.
 - **DS4 Thor optimization** — [`serving/docs/DS4-THOR-OPTIMIZATION-PLAN.md`](serving/docs/DS4-THOR-OPTIMIZATION-PLAN.md)
   completed its tuning phases on 2026-08-05. The runtime is now pinned to
   v0.5.6.2 while retaining the fixed v0.5.5 performance/deep-context baseline.
@@ -70,7 +83,10 @@ This board covers only the assistant-lane and serving work owned here.
 
 | Document | Status | Notes |
 |---|---|---|
+| [`QWEN38-FLASH-NEXT-FP4-LOCAL-THOR.md`](serving/docs/QWEN38-FLASH-NEXT-FP4-LOCAL-THOR.md) | In progress (2026-11-14) | Flash-Next FP4-Local on official vLLM 0.33 + read-only overlays: bring-up, runs R1–R7b, profiles, Cline and `sgbench` results. Current best recipe **R7b** (FlashInfer W4A4 MoE + MXFP8 side layers on tcgen05, screened FP8 head, FP8 draft head, draft graphs, PLE from page cache, MTP 3): `sgbench` C1 51.0 tok/s vs 46.7 for the RadixArk recipe; Tool Eval pending. Next steps listed in the doc. |
+| [`SM110-NVFP4-MOE-PLAN.md`](serving/docs/SM110-NVFP4-MOE-PLAN.md) | Proposed — to investigate (2026-11-14) | Bring NVIDIA's tcgen05 NVFP4 MoE kernels (fused FC1 gather+GEMM+SwiGLU+requant, FC2 GEMM+router weight+scatter-reduce) to vLLM on Thor for Flash-Next FP4-Local and NVIDIA NVFP4. Main route: open FlashInfer 0.7.2's CuTe DSL MoE (`FLASHINFER_CUTEDSL`, already in the vLLM 0.33 image) on sm_110 with a gate overlay; fallback: port the Edge-LLM 0.12 SM110 kernels. Staged with go/no-go gates (0a facts without GPU, 0b half-day Thor spike, 1 overlay + correctness, 2 tuning + Tool Eval, 3 upstream). Expected ~5 % decode / ~10 % prefill vs R7b, medium-low confidence. Design by a Fable 5.2 analysis agent; nothing executed. Baseline: [`QWEN38-FLASH-NEXT-FP4-LOCAL-THOR.md`](serving/docs/QWEN38-FLASH-NEXT-FP4-LOCAL-THOR.md). |
 | [`QWEN38-27B-NVFP4-QUANTIZATION-PLAN.md`](serving/docs/QWEN38-27B-NVFP4-QUANTIZATION-PLAN.md) | Draft; pre-release assets prepared (2026-08-13) | Docker-only dense-27B ModelOpt plan: immutable local BF16 source, 768-record coding corpus, local-Hessian QKV-protected quality candidate, full eligible NVFP4 challenger, BF16 MTP/vision retention, vLLM and coding-agent promotion gates. |
+| [`THOR-ACCELERATOR-ROI.md`](serving/docs/THOR-ACCELERATOR-ROI.md) | Draft (2026-11-07) | Contains the **recommended setup route per model** (Route A Flash-Next: official NVIDIA FP4-Local weights + hashed-resident PLE + MTP 4/5 + optional 10→5 routing cut → 65–80 tok/s; Route B 27B: kernel audit + promoted DSpark + drafter quantization → 42–52 tok/s), plus a GB10-precedent evidence table with source links and a 2×2 engine-attribution protocol that keeps the SGLang question open. Underlying work list E1–E14: CUDA graphs, CPU isolation, NVFP4 dense side layers, FP4 KV via upstream RFE, CPU n-gram drafting, own `sm_110a` FP4 grouped-GEMM, TRT-Edge-LLM at v0.8, PVA, PLE FP8→FP4, 27B kernel audit, KV dtype matrix, drafter quantization, top-k routing cut + heal, thinking-budget cap. Non-goals (MIG, NVENC/NVDEC, PVA matmul, DLA, stack rewrite) recorded with reasons. Facts/arithmetic: [`THOR-ACCELERATORS.md`](serving/docs/THOR-ACCELERATORS.md). Design only; nothing executed. |
 | [`DS4-THOR-OPTIMIZATION-PLAN.md`](serving/docs/DS4-THOR-OPTIMIZATION-PLAN.md) | Completed (2026-08-05); v0.5.6.2 adoption smoke (2026-08-10) | Docker-only Entrpi DS4 optimization for Thor `sm_110`: repaired upstream top-512 selector, 512K/4K stable default, optional faster 256K/8K profile, and recorded rejected D2R/SM110a candidates. The v0.5.6.2 runtime passes Chat/Responses smoke; fixed performance and deep-context evidence remains explicitly labelled v0.5.5. |
 | [`V9.1-EXECUTION.md`](serving/docs/V9.1-EXECUTION.md) | Completed (2026-05-30 → 31) | Consolidated V9.1 execution plan + results (Phases 0-4 ran; 5 deferred). Status markers point-in-time. |
 | [`V9.1-FOLLOWUP-TASKS.md`](serving/docs/V9.1-FOLLOWUP-TASKS.md) | Open | V9.1 follow-up tasks / findings. |

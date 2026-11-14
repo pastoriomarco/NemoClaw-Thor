@@ -1,0 +1,74 @@
+A train leaves at 09:40 at 84 km/h; a second leaves the same station at 10:05 at 112 km/h on a parallel track. When and where does the second catch up? Show your reasoning.
+A tank is filled by pipe A in 6 h and by pipe B in 9 h, and drained by pipe C in 12 h. All three open at once on an empty tank. How long until it is full?
+You have 12 coins, one counterfeit (heavier or lighter). With a balance and three weighings, find it and say whether it is heavier or lighter. Give the full procedure.
+Prove that the sum of the first n odd numbers is n squared, then generalise to the sum of the first n terms of any arithmetic sequence.
+How many trailing zeros does 1000! have? Explain the method and check it on 25!.
+A box has 5 red, 4 blue and 3 green balls. Draw 3 without replacement. What is the probability of exactly one of each colour? Of at least two of the same colour?
+Estimate how many piano tuners work in a city of 2 million people. State each assumption and its uncertainty.
+Three friends split a bill of 137.50 euros where one ordered a 22 euro dish and the others ordered 15 euro dishes, plus shared starters of 30 euros and a 10 percent tip on everything. Who pays what? Explain a fair rule.
+A ladder 5 m long leans on a wall; its foot slides away at 0.3 m/s. How fast does the top slide down when the foot is 3 m from the wall?
+Solve: find all integer pairs (x, y) with x^2 - y^2 = 45.
+Five people sit in a row. Alice is not at an end, Bob sits next to Carla, Dan is left of Eve but not adjacent. List all valid arrangements and explain how you enumerated them.
+A knight starts on a corner of an 8x8 board. What is the minimum number of moves to reach the opposite corner? Prove it is minimal.
+Island puzzle: every inhabitant is a knight (always truthful) or a knave (always lies). A says "B is a knave". B says "A and C are the same type". What is C? Show all cases.
+Is the following argument valid? "All robots that pass the safety audit are certified. Some certified robots are collaborative. Therefore some robots that pass the safety audit are collaborative." Explain with sets.
+Design an algorithm to find the k most frequent words in a 50 GB log file on a machine with 8 GB RAM. Discuss complexity and trade-offs.
+Explain how to detect a cycle in a linked list in O(1) memory, prove the method works, and show how to find where the cycle starts.
+Compare a binary heap, a pairing heap and a Fibonacci heap for Dijkstra on a sparse road graph. Which would you choose in practice and why?
+Given intervals of robot tasks with start and end times, find the minimum number of robots needed so no robot has overlapping tasks. Give the algorithm and prove it is optimal.
+Design a rate limiter for an API that allows bursts of 20 requests and a sustained 5 requests per second per client, across 10 server instances. Discuss consistency trade-offs.
+Explain the difference between a mutex, a spinlock, a semaphore and a condition variable. Give one realistic bug that each one invites.
+A program has two threads: one pushes to a queue under lock L1 and then signals condition C; the other waits on C under lock L2. Explain everything that is wrong and fix it.
+Why can priority inversion stall a real-time thread? Describe priority inheritance and priority ceiling, and when each is preferable.
+Walk through what happens, step by step, between typing a URL in a browser and the page rendering, focusing on where latency comes from.
+Explain how SQLite's WAL mode works, what synchronous=NORMAL versus FULL guarantees on power loss, and when NORMAL is acceptable.
+This Python function is supposed to return the median of a list but is sometimes wrong. Find the bug and fix it: def median(xs): xs.sort(); return xs[len(xs)//2]
+A C++ program crashes only in release builds when a std::vector is resized while another thread iterates it. Explain why it can work in debug builds and how to fix it properly.
+A service's p99 latency doubled after adding a cache, while p50 improved. Give at least four plausible causes and how you would tell them apart.
+A unit test passes alone but fails when the whole suite runs. List the likely causes and a systematic way to find the culprit.
+Explain why floating-point sums of the same numbers can differ when computed in a different order, and how to make a summation reproducible across GPUs.
+A memory leak appears only after a week of uptime in a long-running Python service. How would you find it without restarting the service?
+Derive the closed-loop transfer function of a PI controller on a first-order plant and explain how to choose gains for a 5 percent overshoot.
+A robot arm must move between two poses in minimum time with velocity and acceleration limits per joint. Explain trapezoidal and S-curve profiles and how to synchronise all joints.
+Explain inverse kinematics for a 6-axis arm: analytical versus numerical solutions, singularities, and how to choose among multiple solutions.
+Why does a quaternion avoid gimbal lock? Show how to interpolate between two orientations and why naive Euler-angle interpolation fails.
+A pick-and-place cell misses parts 2 percent of the time. List the likely mechanical, perception, calibration and software causes and a plan to isolate the dominant one.
+Explain how a collision checker can use bounding volume hierarchies, and what trade-off swept-volume checking makes compared with discrete checks.
+A gripper's force sensor reads noisy values at 1 kHz. Design a filter that detects contact within 5 ms without false triggers, and justify the parameters.
+Explain the difference between a safety-rated stop (category 0, 1, 2) and an operational stop in industrial robotics, and why software stops are not safety functions.
+Explain why a Kalman filter is optimal for linear Gaussian systems, and what goes wrong when you apply it to a strongly nonlinear robot localisation problem.
+Plan the order of operations to refactor a 200-file codebase from callbacks to async/await without breaking production. Include how you would stage and verify it.
+You must migrate a database with 400 million rows to a new schema with at most 5 minutes of downtime. Describe the plan, its risks and the rollback.
+A team must choose between a monorepo and multiple repositories for 12 services. Lay out the decision criteria and give a recommendation for a team of 8 engineers.
+Estimate the energy needed to train a 7-billion-parameter model on 1 trillion tokens on modern GPUs. State the formulas and assumptions.
+Explain how speculative decoding speeds up language model inference, why the output distribution is unchanged, and what limits the speed-up.
+Explain the roofline model and use it to decide whether decoding a 30B mixture-of-experts model at batch 1 is compute-bound or memory-bound.
+Why does a hash map have amortised O(1) insertion even though resizing is O(n)? Prove it with the potential or accounting method.
+Explain the CAP theorem with a concrete example of a partition and what a CP and an AP system each do during it.
+Explain how TCP congestion control reacts to packet loss, and why it performs poorly on links with random (non-congestion) loss.
+Compare garbage collection by reference counting and by tracing. Explain how CPython combines them and the consequences for latency.
+Explain why the halting problem is undecidable using a diagonal argument, in plain language.
+A function f satisfies f(x + y) = f(x) + f(y) for all reals and is continuous. Prove f(x) = c x.
+Show that among any 6 people there are 3 mutual acquaintances or 3 mutual strangers.
+Two dice are rolled until a sum of 7 or 8 appears. What is the probability that 7 comes first? Explain two different ways.
+In a game, you may flip a fair coin up to 10 times and stop any time, winning the fraction of heads so far. What is a good stopping strategy? Reason it out.
+Explain Bayes' theorem with a medical test that is 99 percent sensitive and 95 percent specific for a disease with 1 percent prevalence.
+A warehouse robot fleet of 20 robots shares 3 charging stations. Each robot runs 3 h and charges 1 h. Is the capacity enough? Model it and discuss queueing.
+Write a step-by-step plan to debug a ROS 2 node that stops publishing after a few minutes, without access to a debugger.
+Explain why a real-time control loop should avoid dynamic memory allocation, logging and blocking I/O, and how to structure the code to achieve that.
+Explain the difference between latency and throughput in a robot motion pipeline, and give an example where improving one harms the other.
+Compare JSON, YAML and protocol buffers for configuration files of an industrial application. Recommend one and explain the failure modes of each.
+A JSON schema must validate that a list of waypoints has strictly increasing timestamps. Can JSON Schema express that? If not, where should the check live and why?
+Explain how a behaviour tree differs from a finite state machine, with an example where each is the better choice.
+Design a retry policy for a network call that is idempotent, and one for a call that is not. Explain exponential backoff with jitter.
+Explain eventual consistency to a mechanical engineer using an analogy, then state precisely where the analogy breaks down.
+Explain why time-of-check to time-of-use bugs happen and give two examples outside security.
+A sorted array was rotated at an unknown pivot. Find a target in O(log n) and prove correctness, including duplicates.
+Explain dynamic programming using the edit distance between two strings; compute it for "kitten" and "sitting" step by step.
+Explain how a Bloom filter works, derive its false-positive rate, and choose parameters for 10 million items at 1 percent.
+What is the expected number of rolls of a fair die until every face has appeared at least once? Derive it.
+Explain why the median is more robust than the mean, and design an online algorithm for a running median of a data stream.
+A factory has three machines with failure rates of 1, 2 and 5 percent per day. What is the chance at least one fails in a week, assuming independence? When is independence a bad assumption here?
+Plan a two-week schedule to learn enough control theory to tune a robot joint controller, assuming 1 hour per day. Justify the order of topics.
+Explain the difference between precision and accuracy in robot positioning, and how repeatability is measured according to common standards.
+You are given a log of 10,000 alarms from a production line. Describe how you would find which alarms are nuisance alarms and which matter.

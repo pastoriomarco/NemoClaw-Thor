@@ -1,0 +1,25 @@
+{
+  "machine": "Orin, workbench on manyforge-ros-lyrical-full:m10-src-r02, scenario mock_ur10e_assistant_scene_authoring",
+  "method": "profile_chain.py, 5 calls each, [median_ms, max_ms]",
+  "before_od93_2026-11-09T16:40Z": {
+    "headless GET mode projection": [325, 363],
+    "headless GET node-environment": [173, 216],
+    "composer callback program_read": [949, 1116],
+    "composer /api/program/validate": [426, 1329],
+    "composer callback insert (commit + ref validation)": [2465, 2530]
+  },
+  "after_od93_2026-11-09T23Z_run1": {
+    "headless GET mode projection": [310, 346],
+    "headless GET node-environment": [143, 147],
+    "composer callback program_read": [322, 999],
+    "composer /api/program/validate": [294, 1356],
+    "composer callback insert (commit + ref validation)": [970, 1023]
+  },
+  "after_od93_2026-11-09T23Z_run2": {
+    "headless GET mode projection": [316, 403],
+    "headless GET node-environment": [95, 110],
+    "composer callback program_read": [341, 353],
+    "composer /api/program/validate": [304, 346],
+    "composer callback insert (commit + ref validation)": [1027, 1046]
+  }
+}

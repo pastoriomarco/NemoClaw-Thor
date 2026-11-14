@@ -1,0 +1,1109 @@
+# ManyForge assistant smoke corpus, ported to ManyForge 0.2.1 (Program v3).
+# Generated once from smoke_corpus.yaml; edit this file directly from now on.
+# Review: manyforge/docs/smoke-evidence/2026-11-09-phase-a-0.2.1/CORPUS-REVIEW.md
+# Runner: smoke_corpus_direct.py. Expected-value forms: 'one_of a|b', index 'end'.
+schema_version: manyforge.assistant_smoke_corpus.v1
+ported_from: smoke_corpus.yaml (schema v0, baseline iter-32 2026-06-09)
+target: 'ManyForge 0.2.1 direct bridge: Program manyforge.program.v3, node catalog 3.0.0'
+scenario: examples/mock_ur10e_assistant_scene_authoring.scenario
+fresh_program_fixture:
+  tree:
+    node_id: sequence
+    instance_id: pick_and_place
+    parameters: {}
+    children:
+    - node_id: timer
+      instance_id: scaffold
+      parameters:
+        duration_s: 0.1
+      children: []
+  remove_scene_resources: all
+cases:
+- id: P1_wrap_root_specific
+  category: tree_wrap_root
+  detail_level: specific
+  prompt: add a repeat node as root
+  expected:
+    forbidden_tools:
+    - tree_draft_insert_node
+    answer_must_contain:
+    - repeat
+    - root
+    tools_called:
+    - name: tree_draft_wrap_node
+      args_contain:
+        target_instance_id: pick_and_place
+        wrapper.node_id: repeat
+    state_after:
+      program.tree.node_id: repeat
+      program.tree.children[0].instance_id: pick_and_place
+- id: P2_scene_add_specific
+  category: scene_add
+  detail_level: specific
+  prompt: add a box of size 1.0, 0.02, 0.25 in position 0.0, -0.15, 0.125
+  expected:
+    answer_must_contain:
+    - box
+    - added
+    tools_called:
+    - name: scene_draft_add_object
+      args_contain:
+        scene_resource.shape.type: box
+        scene_resource.shape.box_dimensions_m:
+        - 1.0
+        - 0.02
+        - 0.25
+        scene_resource.pose.position_m:
+        - 0.0
+        - -0.15
+        - 0.125
+      alt_names:
+      - scene_draft_upsert_objects
+    state_after:
+      scene.objects[*].shape.box_dimensions_m: contains [1.0, 0.02, 0.25]
+- id: P3_tree_insert_runtime_obj_specific
+  category: tree_insert_runtime_obj
+  detail_level: specific
+  prompt: 'add an upsert node at the end of pick_and_place sequence that places
+
+    ''graspable'' object in the same position and orientation as the scene
+
+    start, with the same original size
+
+    '
+  expected:
+    forbidden_tools:
+    - scene_draft_add_object
+    - scene_draft_update_object
+    answer_must_contain:
+    - upsert
+    - graspable
+    - pick_and_place
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        parent_instance_id: pick_and_place
+        index: end
+        node.node_id: scene.upsert_object
+        node.parameters.scene_resource_id: graspable
+        node.parameters.pose.position_m:
+        - 0.3
+        - -0.3
+        - 0.15
+        node.parameters.pose.orientation_xyzw:
+        - 0
+        - 0
+        - -0.382683432365
+        - 0.923879532511
+      allow_retries: true
+- id: WRAP_root_generic
+  category: tree_wrap_root
+  detail_level: generic
+  prompt: wrap the tree
+  expected:
+    tools_called: []
+    forbidden_tools:
+    - tree_draft_wrap_node
+    - tree_draft_insert_node
+    answer_must_contain:
+    - which
+- id: WRAP_root_medium
+  category: tree_wrap_root
+  detail_level: medium
+  prompt: wrap the root with a retry decorator
+  expected:
+    tools_called:
+    - name: tree_draft_wrap_node
+      args_contain:
+        target_instance_id: pick_and_place
+        wrapper.node_id: retry
+    state_after:
+      program.tree.node_id: retry
+- id: SCENE_add_generic
+  category: scene_add
+  detail_level: generic
+  prompt: add a small box to the scene
+  expected:
+    answer_must_contain:
+    - box
+    - added
+    tools_called:
+    - name: scene_draft_add_object
+      args_contain:
+        scene_resource.shape.type: box
+      alt_names:
+      - scene_draft_upsert_objects
+- id: SCENE_add_medium
+  category: scene_add
+  detail_level: medium
+  prompt: add a sphere of radius 0.05 in front of the robot
+  expected:
+    answer_must_contain:
+    - sphere
+    tools_called:
+    - name: scene_draft_add_object
+      args_contain:
+        scene_resource.shape.type: sphere
+        scene_resource.shape.sphere_radius_m: 0.05
+      alt_names:
+      - scene_draft_upsert_objects
+- id: TREE_insert_runtime_generic
+  category: tree_insert_runtime_obj
+  detail_level: generic
+  prompt: add a node that places graspable somewhere
+  expected:
+    tools_called: []
+    forbidden_tools:
+    - tree_draft_insert_node
+    - tree_draft_wrap_node
+    answer_must_contain:
+    - where
+- id: TREE_insert_runtime_medium
+  category: tree_insert_runtime_obj
+  detail_level: medium
+  prompt: at the end of the cycle, re-place the graspable at the start position
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        parent_instance_id: pick_and_place
+        index: end
+        node.node_id: one_of scene.upsert_object|scene.update_object_pose
+        node.parameters.scene_resource_id: graspable
+- id: INSERT_position_first_specific
+  category: tree_insert_at_position
+  detail_level: specific
+  prompt: insert a wait_for_value node as child index 0 of pick_and_place that waits for start_pick=true
+  original_prompt: insert a wait_for_signal_bool node as child index 0 of pick_and_place that waits for start_pick=true
+  precondition:
+    chain_timeout_s: 220
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        parent_instance_id: pick_and_place
+        index: 0
+        node.node_id: logic.wait_for_value
+        node.parameters.key: start_pick
+        node.parameters.value: true
+    state_after:
+      program.tree.children[0].node_id: logic.wait_for_value
+  port_notes:
+  - 'prompt ported: prompt named removed node id wait_for_signal_bool; v3 node is logic.wait_for_value'
+- id: INSERT_position_after_named_medium
+  category: tree_insert_at_position
+  detail_level: medium
+  prompt: insert a 2 second timer after move_to_pick_approach
+  expected:
+    answer_must_contain:
+    - timer
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        after_instance_id: move_to_pick_approach
+        node.node_id: timer
+        node.parameters.duration_s: 2.0
+- id: INSERT_position_before_named_generic
+  category: tree_insert_at_position
+  detail_level: generic
+  prompt: put a delay before the place step
+  expected:
+    tools_called: []
+    forbidden_tools:
+    - tree_draft_insert_node
+    answer_must_contain:
+    - which
+- id: PARALLEL_concurrent_medium
+  category: tree_insert_parallel
+  detail_level: medium
+  prompt: add a parallel that runs gripper open and a status update at the same time
+  expected:
+    tools_called: []
+    forbidden_tools:
+    - tree_draft_insert_node
+    answer_must_contain:
+    - which
+- id: PARALLEL_generic
+  category: tree_insert_parallel
+  detail_level: generic
+  prompt: add a parallel
+  expected:
+    tools_called: []
+    forbidden_tools:
+    - tree_draft_insert_node
+    - tree_draft_wrap_node
+    answer_must_contain:
+    - which
+    - where
+- id: FALLBACK_retry_specific
+  category: tree_insert_fallback
+  detail_level: specific
+  prompt: insert a fallback as the second child of pick_and_place containing two move_to_pose nodes named primary_pick
+    and backup_pick that each try a different grasp pose
+  original_prompt: insert a fallback as the second child of pick_and_place containing two move_manipulator_action
+    nodes named primary_pick and backup_pick that each try a different grasp pose
+  expected:
+    answer_must_contain:
+    - fallback
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        parent_instance_id: pick_and_place
+        index: 1
+        node.node_id: fallback
+  port_notes:
+  - 'prompt ported: prompt named removed node id move_manipulator_action; v3 node is motion.move_to_pose'
+- id: FALLBACK_alternate_medium
+  category: tree_insert_fallback
+  detail_level: medium
+  prompt: add a fallback node before the gripper close that tries two alternate approach paths
+  expected:
+    tools_called: []
+    forbidden_tools:
+    - tree_draft_insert_node
+    answer_must_contain:
+    - which
+- id: FALLBACK_generic
+  category: tree_insert_fallback
+  detail_level: generic
+  prompt: add a fallback
+  expected:
+    tools_called: []
+    forbidden_tools:
+    - tree_draft_insert_node
+    - tree_draft_wrap_node
+    answer_must_contain:
+    - which
+    - where
+- id: UPDATE_params_specific
+  category: tree_update_node_params
+  detail_level: specific
+  prompt: set the move_to_pick_approach node's velocity_scale parameter to 0.3
+  expected:
+    tools_called:
+    - name: tree_draft_update_node_params
+      args_contain:
+        instance_id: move_to_pick_approach
+        parameters.velocity_scale: 0.3
+    state_after:
+      program.tree.children[instance_id=move_to_pick_approach].parameters.velocity_scale: 0.3
+- id: UPDATE_params_medium
+  category: tree_update_node_params
+  detail_level: medium
+  prompt: slow down move_to_pick_approach by half
+  expected:
+    answer_must_contain:
+    - move_to_pick_approach
+    - velocity
+    tools_called:
+    - name: tree_draft_update_node_params
+      args_contain:
+        instance_id: move_to_pick_approach
+- id: UPDATE_params_generic
+  category: tree_update_node_params
+  detail_level: generic
+  prompt: make the robot move slower
+  expected:
+    tools_called: []
+    forbidden_tools:
+    - tree_draft_insert_node
+    - tree_draft_delete_node
+    - tree_draft_update_node_params
+    answer_must_contain:
+    - which
+- id: DELETE_named_specific
+  category: tree_delete_node
+  detail_level: specific
+  prompt: delete the node named move_to_pick_approach
+  expected:
+    answer_must_contain:
+    - move_to_pick_approach
+    - delete
+    tools_called:
+    - name: tree_draft_delete_node
+      args_contain:
+        instance_id: move_to_pick_approach
+    state_after:
+      program.tree.children[*].instance_id: does_not_contain move_to_pick_approach
+- id: DELETE_kind_medium
+  category: tree_delete_node
+  detail_level: medium
+  prompt: remove the gripper-close step
+  expected:
+    tools_called:
+    - name: tree_draft_delete_node
+- id: DELETE_generic
+  category: tree_delete_node
+  detail_level: generic
+  prompt: drop the last node
+  expected:
+    tools_called:
+    - name: tree_draft_delete_node
+- id: MOVE_swap_specific
+  category: tree_move_node
+  detail_level: specific
+  prompt: move pick_retreat to be the second child of pick_and_place
+  expected:
+    tools_called:
+    - name: tree_draft_move_node
+      args_contain:
+        instance_id: pick_retreat
+        new_parent_instance_id: pick_and_place
+        index: 1
+    state_after:
+      program.tree.children[1].instance_id: pick_retreat
+- id: MOVE_reorder_medium
+  category: tree_move_node
+  detail_level: medium
+  prompt: swap the order of pick_retreat and move_to_drop_approach
+  expected:
+    tools_called:
+    - name: tree_draft_move_node
+- id: MOVE_generic
+  category: tree_move_node
+  detail_level: generic
+  prompt: move that step earlier
+  expected:
+    forbidden_tools:
+    - tree_draft_move_node
+    - tree_draft_wrap_node
+    - tree_draft_replace_subtree
+    - tree_draft_change_node_kind
+    - tree_draft_insert_node
+    - tree_draft_delete_node
+    - tree_draft_update_node_params
+    answer_must_contain:
+    - which
+    - step
+- id: REPLACE_subtree_specific
+  category: tree_replace_subtree
+  detail_level: specific
+  prompt: 'replace the pick step (children of pick_and_place from ''descend'' to
+
+    ''attach'') with a single ''pick_routine'' subtree that wraps the same
+
+    nodes inside a fallback for retry-on-failure semantics
+
+    '
+  precondition:
+    chain_timeout_s: 240
+  expected:
+    answer_must_contain:
+    - replace
+    tools_called:
+    - name: tree_draft_replace_subtree
+- id: REPLACE_simple_medium
+  category: tree_replace_subtree
+  detail_level: medium
+  prompt: replace the close_gripper action with a 1 second timer
+  expected:
+    tools_called:
+    - name: tree_draft_replace_subtree
+      alt_names:
+      - tree_draft_change_node_kind
+- id: SCENE_update_pose_specific
+  category: scene_update
+  detail_level: specific
+  prompt: move graspable to position (0.5, 0.1, 0.05)
+  expected:
+    tools_called:
+    - name: scene_draft_update_object
+      args_contain:
+        scene_resource.scene_resource_id: graspable
+        scene_resource.pose.position_m:
+        - 0.5
+        - 0.1
+        - 0.05
+      alt_names:
+      - scene_draft_upsert_objects
+    state_after:
+      scene.objects[scene_resource_id=graspable].pose.position_m:
+      - 0.5
+      - 0.1
+      - 0.05
+- id: SCENE_update_size_medium
+  category: scene_update
+  detail_level: medium
+  prompt: make the graspable twice as wide
+  expected:
+    tools_called:
+    - name: scene_draft_update_object
+      args_contain:
+        scene_resource.scene_resource_id: graspable
+      alt_names:
+      - scene_draft_upsert_objects
+- id: SCENE_remove_specific
+  category: scene_remove
+  detail_level: specific
+  prompt: remove graspable from the scene
+  expected:
+    tools_called:
+    - name: scene_draft_remove_objects
+      args_contain:
+        scene_resource_ids:
+        - graspable
+    state_after:
+      scene.objects[*].scene_resource_id: does_not_contain graspable
+- id: SCENE_remove_generic
+  category: scene_remove
+  detail_level: generic
+  prompt: clean up unused obstacles
+  expected:
+    answer_must_contain:
+    - which
+- id: PARAM_add_specific
+  category: parameters_add
+  detail_level: specific
+  prompt: add a program parameter named max_velocity of type float with default 0.5
+  expected:
+    tools_called:
+    - name: program_draft_upsert_parameters
+      args_contain:
+        parameters:
+        - parameter_id: max_velocity
+          type: float64
+          default: 0.5
+    state_after:
+      program.parameters[*].parameter_id: contains max_velocity
+- id: PARAM_modify_medium
+  category: parameters_modify
+  detail_level: medium
+  prompt: change the velocity_scale parameter default to 0.25
+  expected:
+    tools_called:
+    - name: program_draft_upsert_parameters
+      args_contain:
+        parameters:
+        - parameter_id: velocity_scale
+          type: float64
+          default: 0.25
+    state_after:
+      program.parameters[parameter_id=velocity_scale].default: 0.25
+- id: PARAM_delete_specific
+  category: parameters_delete
+  detail_level: specific
+  prompt: remove the parameter named legacy_offset
+  precondition:
+    fixtures:
+    - tool: program_draft_upsert_parameters
+      arguments:
+        parameters:
+        - parameter_id: legacy_offset
+          type: float64
+          default: 0.0
+          description: Seed parameter inserted by the smoke harness.
+  expected:
+    tools_called:
+    - name: program_draft_remove_parameters
+      args_contain:
+        parameter_ids:
+        - legacy_offset
+- id: BB_add_specific
+  category: blackboard_add
+  detail_level: specific
+  prompt: add a blackboard key named target_pose of type pose
+  expected:
+    tools_called:
+    - name: blackboard_draft_upsert_keys
+      args_contain:
+        keys:
+        - key: target_pose
+          type: stored_pose
+    state_after:
+      program.blackboard.keys[*].key: contains target_pose
+- id: BB_modify_medium
+  category: blackboard_modify
+  detail_level: medium
+  prompt: change the type of grip_force to float
+  precondition:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: grip_force
+          type: int64
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  expected:
+    tools_called:
+    - name: blackboard_draft_upsert_keys
+      args_contain:
+        keys:
+        - key: grip_force
+          type: float64
+- id: BB_delete_specific
+  category: blackboard_delete
+  detail_level: specific
+  prompt: delete the blackboard key called scratch_value
+  precondition:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: scratch_value
+          type: string
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  expected:
+    tools_called:
+    - name: blackboard_draft_remove_keys
+      args_contain:
+        keys:
+        - scratch_value
+- id: PnP_01_scene_ground
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: 'add a ground plane: a thin box 2x2x0.01 m centered at the origin'
+  precondition:
+    chain_step: 1
+    chain_id: pnp_build
+    fresh_program: true
+  expected:
+    tools_called:
+    - name: scene_draft_add_object
+      args_contain:
+        scene_resource.shape.type: box
+        scene_resource.shape.box_dimensions_m:
+        - 2.0
+        - 2.0
+        - 0.01
+      alt_names:
+      - scene_draft_upsert_objects
+- id: PnP_02_scene_graspable
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: add a graspable cube 0.05x0.05x0.05 m at (0.4, 0.0, 0.05) named graspable
+  precondition:
+    chain_id: pnp_build
+    chain_step: 2
+  expected:
+    tools_called:
+    - name: scene_draft_add_object
+      args_contain:
+        scene_resource.scene_resource_id: graspable
+        scene_resource.shape.type: box
+        scene_resource.shape.box_dimensions_m:
+        - 0.05
+        - 0.05
+        - 0.05
+        scene_resource.pose.position_m:
+        - 0.4
+        - 0.0
+        - 0.05
+      alt_names:
+      - scene_draft_upsert_objects
+- id: PnP_03_scene_pick_pad
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: 'add a pick pad: 0.2x0.2x0.025 m box at (0.4, 0.0, 0.012) named pick_pad'
+  precondition:
+    chain_id: pnp_build
+    chain_step: 3
+  expected:
+    tools_called:
+    - name: scene_draft_add_object
+      args_contain:
+        scene_resource.scene_resource_id: pick_pad
+      alt_names:
+      - scene_draft_upsert_objects
+- id: PnP_04_scene_place_pad
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: 'add a place pad: 0.2x0.2x0.025 m box at (0.0, 0.4, 0.012) named place_pad'
+  precondition:
+    chain_id: pnp_build
+    chain_step: 4
+  expected:
+    tools_called:
+    - name: scene_draft_add_object
+      args_contain:
+        scene_resource.scene_resource_id: place_pad
+      alt_names:
+      - scene_draft_upsert_objects
+- id: PnP_05_tree_root
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: before adding any children, read the current program state so we know the root we'll insert under
+  precondition:
+    chain_id: pnp_build
+    chain_step: 5
+  expected:
+    tools_called:
+    - name: program_read
+    state_after:
+      program.tree.node_id: sequence
+      program.tree.instance_id: pick_and_place
+- id: PnP_06_approach
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: 'as the first child, add a move-to-pose that approaches above the graspable: position (0.4, 0.0, 0.20)'
+  precondition:
+    chain_id: pnp_build
+    chain_step: 6
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        parent_instance_id: pick_and_place
+        index: 0
+        node.node_id: motion.move_to_pose
+- id: PnP_07_descend
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the approach, add a move-to-pose that descends to (0.4, 0.0, 0.07) for grasping
+  precondition:
+    chain_id: pnp_build
+    chain_step: 7
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: motion.move_to_pose
+- id: PnP_08_close_gripper
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the descend, close the gripper
+  precondition:
+    chain_id: pnp_build
+    chain_step: 8
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: gripper.command_position
+- id: PnP_09_attach
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the gripper close, attach graspable to the gripper
+  original_prompt: after the gripper close, attach graspable to link grasp_frame
+  precondition:
+    chain_id: pnp_build
+    chain_step: 9
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: scene.attach_carried_object
+        node.parameters.scene_resource_id: graspable
+  port_notes:
+  - 'prompt ported: prompt named link grasp_frame (old link-based attach); v3 attach uses the active TCP or a {component_id,
+    frame_id} carrier frame and the UR10e/2F-140 model has no grasp_frame'
+- id: PnP_10_lift
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the attach, add a lift move-to-pose at (0.4, 0.0, 0.20)
+  precondition:
+    chain_id: pnp_build
+    chain_step: 10
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: motion.move_to_pose
+- id: PnP_11_transport
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the lift, add a transport move-to-pose at (0.0, 0.4, 0.20)
+  precondition:
+    chain_id: pnp_build
+    chain_step: 11
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: motion.move_to_pose
+- id: PnP_12_place_descend
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the transport, add a descend-to-place move at (0.0, 0.4, 0.07)
+  precondition:
+    chain_id: pnp_build
+    chain_step: 12
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: motion.move_to_pose
+- id: PnP_13_detach
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the place descend, detach graspable
+  original_prompt: after the place descend, detach graspable from grasp_frame
+  precondition:
+    chain_id: pnp_build
+    chain_step: 13
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: scene.detach_carried_object
+        node.parameters.scene_resource_id: graspable
+  port_notes:
+  - 'prompt ported: prompt named link grasp_frame; v3 detach takes only the scene resource'
+- id: PnP_14_upsert
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the detach, upsert graspable at the new location (0.0, 0.4, 0.05)
+  precondition:
+    chain_id: pnp_build
+    chain_step: 14
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: scene.upsert_object
+        node.parameters.scene_resource_id: graspable
+        node.parameters.pose.position_m:
+        - 0.0
+        - 0.4
+        - 0.05
+- id: PnP_15_open_gripper
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the upsert, open the gripper
+  precondition:
+    chain_id: pnp_build
+    chain_step: 15
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: gripper.command_position
+- id: PnP_16_retract
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the open, add a retract move-to-pose at (0.0, 0.4, 0.20)
+  precondition:
+    chain_id: pnp_build
+    chain_step: 16
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: motion.move_to_pose
+- id: PnP_17_home
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: after the retract, add a return-home move-to-pose
+  precondition:
+    chain_id: pnp_build
+    chain_step: 17
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: one_of motion.move_to_pose|motion.move_to_joint_target
+- id: PnP_18_repeat_root
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: wrap the whole pick_and_place sequence with a repeat node as the new root, num_cycles=-1
+  precondition:
+    chain_id: pnp_build
+    chain_step: 18
+  expected:
+    tools_called:
+    - name: tree_draft_wrap_node
+      args_contain:
+        target_instance_id: pick_and_place
+        wrapper.node_id: repeat
+        wrapper.parameters.num_cycles: -1
+    state_after:
+      program.tree.node_id: repeat
+      program.tree.parameters.num_cycles: -1
+- id: PnP_20_grip_force
+  category: pick_and_place_build
+  detail_level: specific
+  prompt: set the gripper-close grip force to 40 N
+  precondition:
+    chain_id: pnp_build
+    chain_step: 20
+  expected:
+    tools_called:
+    - name: tree_draft_update_node_params
+- id: CUR_wrap_existing_motion_with_retry
+  category: current_tree_control
+  detail_level: specific
+  prompt: retry the move_to_pick step up to 2 times before failing
+  expected:
+    forbidden_tools:
+    - tree_draft_replace_subtree
+    answer_must_contain:
+    - retry
+    - move_to_pick
+    tools_called:
+    - name: tree_draft_wrap_node
+      args_contain:
+        target_instance_id: move_to_pick
+        wrapper.node_id: retry
+        wrapper.parameters.num_attempts: 2
+    state_after:
+      program.tree.children[*].node_id: contains retry
+- id: CUR_update_existing_motion_speed
+  category: current_tree_update
+  detail_level: specific
+  prompt: set move_to_pick_approach velocity_scale to 0.25 and keep the rest of its motion parameters
+  expected:
+    forbidden_tools:
+    - tree_draft_replace_subtree
+    tools_called:
+    - name: tree_draft_update_node_params
+      args_contain:
+        instance_id: move_to_pick_approach
+        parameters.velocity_scale: 0.25
+    state_after:
+      program.tree.children[instance_id=move_to_pick_approach].parameters.velocity_scale: 0.25
+- id: CUR_scene_add_static_fixture_not_runtime
+  category: current_scene_tool_routing
+  detail_level: medium
+  prompt: add a fixed 0.4 by 0.02 by 0.2 meter safety wall at x=0.2 y=-0.45 z=0.1
+  expected:
+    forbidden_tools:
+    - tree_draft_insert_node
+    answer_must_contain:
+    - wall
+    tools_called:
+    - name: scene_draft_add_object
+      args_contain:
+        scene_resource.shape.type: box
+        scene_resource.shape.box_dimensions_m:
+        - 0.4
+        - 0.02
+        - 0.2
+        scene_resource.pose.position_m:
+        - 0.2
+        - -0.45
+        - 0.1
+      alt_names:
+      - scene_draft_upsert_objects
+    state_after:
+      scene.objects[*].shape.box_dimensions_m: contains [0.4, 0.02, 0.2]
+- id: CUR_scene_update_graspable_pose
+  category: current_scene_update
+  detail_level: specific
+  prompt: move the static scene object graspable to [0.35, -0.25, 0.15] in the cell frame
+  original_prompt: move the static scene object graspable to [0.35, -0.25, 0.15] in the universe frame
+  expected:
+    forbidden_tools:
+    - tree_draft_insert_node
+    tools_called:
+    - name: scene_draft_update_object
+      args_contain:
+        scene_resource.scene_resource_id: graspable
+        scene_resource.pose.position_m:
+        - 0.35
+        - -0.25
+        - 0.15
+        scene_resource.pose.frame_ref.kind: cell_frame
+      alt_names:
+      - scene_draft_upsert_objects
+    state_after:
+      scene.objects[scene_resource_id=graspable].pose.position_m:
+      - 0.35
+      - -0.25
+      - 0.15
+  port_notes:
+  - 'prompt ported: ''universe'' frame is gone; v3 scene poses use frame_ref cell_frame'
+- id: CUR_runtime_remove_then_restore_graspable
+  category: current_runtime_scene_mutation
+  detail_level: specific
+  prompt: 'at the end of pick_and_place, remove graspable from the runtime scene
+
+    and then upsert it again at its initial scene pose and size
+
+    '
+  expected:
+    forbidden_tools:
+    - scene_draft_remove_objects
+    - scene_draft_update_object
+    answer_must_contain:
+    - runtime
+    - graspable
+    tools_called:
+    - name: scene_inspect
+      alt_names:
+      - program_read
+    - name: tree_draft_insert_node
+      args_contain:
+        parent_instance_id: pick_and_place
+        node.node_id: scene.remove_object
+        node.parameters.scene_resource_id: graspable
+    - name: tree_draft_insert_node
+      args_contain:
+        parent_instance_id: pick_and_place
+        node.node_id: scene.upsert_object
+        node.parameters.scene_resource_id: graspable
+        node.parameters.shape.type: box
+        node.parameters.shape.box_dimensions_m:
+        - 0.1
+        - 0.01
+        - 0.01
+        node.parameters.pose.position_m:
+        - 0.3
+        - -0.3
+        - 0.15
+        node.parameters.pose.orientation_xyzw:
+        - 0
+        - 0
+        - -0.382683432365
+        - 0.923879532511
+- id: CUR_runtime_update_graspable_pose_each_cycle
+  category: current_runtime_scene_mutation
+  detail_level: medium
+  prompt: after each cycle, set graspable's runtime pose back to [0.3, -0.3, 0.15]
+  expected:
+    forbidden_tools:
+    - scene_draft_update_object
+    - scene_draft_upsert_objects
+    answer_must_contain:
+    - runtime
+    - pose
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        parent_instance_id: pick_and_place
+        node.node_id: one_of scene.update_object_pose|scene.upsert_object
+        node.parameters.scene_resource_id: graspable
+        node.parameters.pose.position_m:
+        - 0.3
+        - -0.3
+        - 0.15
+- id: CLARIFY_scene_remove_pronoun
+  category: clarification
+  detail_level: generic
+  prompt: remove it from the scene
+  expected:
+    forbidden_tools:
+    - scene_draft_remove_objects
+    - scene_draft_add_object
+    - scene_draft_update_object
+    - scene_draft_upsert_objects
+    - tree_draft_delete_node
+    - tree_draft_insert_node
+    - tree_draft_wrap_node
+    - tree_draft_update_node_params
+    - tree_draft_move_node
+    - tree_draft_replace_subtree
+    - tree_draft_change_node_kind
+    answer_must_contain:
+    - which
+    - object
+- id: CLARIFY_tree_wrap_pronoun
+  category: clarification
+  detail_level: generic
+  prompt: wrap that step in a retry
+  expected:
+    forbidden_tools:
+    - tree_draft_wrap_node
+    - tree_draft_replace_subtree
+    - tree_draft_insert_node
+    - tree_draft_delete_node
+    - tree_draft_move_node
+    - tree_draft_change_node_kind
+    - tree_draft_update_node_params
+    - scene_draft_remove_objects
+    - scene_draft_add_object
+    answer_must_contain:
+    - which
+    - step
+- id: CLARIFY_motion_generic
+  category: clarification
+  detail_level: generic
+  prompt: make the robot move over there
+  expected:
+    forbidden_tools:
+    - tree_draft_insert_node
+    - tree_draft_update_node_params
+    - tree_draft_wrap_node
+    - tree_draft_replace_subtree
+    - tree_draft_move_node
+    - scene_draft_add_object
+    - scene_draft_remove_objects
+    answer_must_contain:
+    - where
+# --- Catalog projection additions (2026-11-09, OD-75) ------------------------
+# Node families the derived node set newly exposes (checks, gripper status,
+# frame queries). Not part of the 66 original cases; report them separately.
+- id: CAT_check_gripper_status_medium
+  category: catalog_additions
+  detail_level: medium
+  prompt: right after close_gripper, add a step that checks the gripper actually reached its commanded position
+  expected:
+    forbidden_tools:
+    - tree_draft_update_node_params
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: gripper.check_status
+        node.parameters.expected_state: reached
+    state_after:
+      program.tree.children[*].node_id: contains gripper.check_status
+- id: CAT_wait_gripper_status_specific
+  category: catalog_additions
+  detail_level: specific
+  prompt: before attach_graspable, add a node that waits until the robotiq gripper command has reached its target, with a 5 second timeout
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: gripper.wait_for_status
+    state_after:
+      program.tree.children[*].node_id: contains gripper.wait_for_status
+- id: CAT_check_value_specific
+  category: catalog_additions
+  detail_level: specific
+  prompt: at the start of pick_and_place, add a check that the blackboard key part_count is less than 10
+  precondition:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: part_count
+          type: int64
+          access: read_write
+          persistence: run
+          initial: 0
+          description: Seed blackboard key inserted by the smoke harness.
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: logic.check_value
+        parent_instance_id: pick_and_place
+    state_after:
+      program.tree.children[0].node_id: logic.check_value
+- id: CAT_frame_pose_specific
+  category: catalog_additions
+  detail_level: specific
+  prompt: at the end of pick_and_place, store the current pose of the robotiq_2f_140 tcp frame in the blackboard key tcp_pose
+  precondition:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: tcp_pose
+          type: stored_pose
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  expected:
+    tools_called:
+    - name: tree_draft_insert_node
+      args_contain:
+        node.node_id: model.get_frame_pose
+        node.parameters.output_key: tcp_pose
+    state_after:
+      program.tree.children[*].node_id: contains model.get_frame_pose
+- id: CAT_io_unavailable_generic
+  category: catalog_additions
+  detail_level: generic
+  prompt: add a step at the end of pick_and_place that switches digital output 0 of the robot on
+  port_notes:
+  - The Mock UR10e Deployment offers no I/O capability, so io.set_output is not in the derived node set; the assistant should say so instead of inserting a substitute.
+  expected:
+    forbidden_tools:
+    - tree_draft_insert_node
+    - tree_draft_replace_subtree
+    answer_must_contain:
+    - output

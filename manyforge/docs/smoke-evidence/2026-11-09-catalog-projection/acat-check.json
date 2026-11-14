@@ -1,0 +1,127 @@
+{
+ "summary": {
+  "model": "nemotron35-lightning",
+  "corpus": "/home/tndlux/assist-phaseA/corpus/smoke_corpus_v021.yaml",
+  "scored": 1,
+  "pass": 0,
+  "recovered": 0,
+  "soft": 0,
+  "fail": 1,
+  "harness_errors": 0,
+  "excluded": 0,
+  "effective_rate": 0.0,
+  "first_try_rate": 0.0,
+  "turn_latency_s": {
+   "n": 1,
+   "mean": 23.06,
+   "p50": 23.06,
+   "max": 23.06
+  }
+ },
+ "results": [
+  {
+   "case_id": "INSERT_position_before_named_generic",
+   "category": "tree_insert_at_position",
+   "detail_level": "generic",
+   "prompt": "put a delay before the place step",
+   "turns": [
+    {
+     "state": "completed",
+     "elapsed_s": 23.06,
+     "status": {
+      "schemaVersion": "manyforge.assistant.provider_status.v1",
+      "requestId": "smoke-corpus.0fd09f38c7cf4c67ba7f75d4ae3ba52e",
+      "requestOwnerEpoch": "smoke-corpus.ef4a21e4faa0",
+      "sourceLabel": "assistant_smoke_corpus",
+      "correlationId": null,
+      "conversationId": "smoke-case-INSERT_position_before_named_generic.94689f3d",
+      "assistantMode": "composer-assistant",
+      "state": "completed",
+      "response": {
+       "schemaVersion": "manyforge.assistant.provider_response.v1",
+       "requestId": "smoke-corpus.0fd09f38c7cf4c67ba7f75d4ae3ba52e",
+       "requestOwnerEpoch": "smoke-corpus.ef4a21e4faa0",
+       "sourceLabel": "assistant_smoke_corpus",
+       "correlationId": null,
+       "conversationId": "smoke-case-INSERT_position_before_named_generic.94689f3d",
+       "assistantMode": "composer-assistant",
+       "catalogHash": "sha256:445651dc1e74f5e60b85abae93bbfc29f5120c68d5e1e8502e5a4d4a52a43e4a",
+       "message": "A\u202f`timer` node named **`delay_before_place`** has been inserted at position\u202f6 inside the `pick_and_place` sequence, right before the original \u201cplace\u201d steps. It will pause the program for **1\u202fsecond** (you can change the `duration_s` parameter later if you need a different delay).\n\nThe draft now looks like this (truncated for brevity):\n\n```\npick_and_place (sequence)\n \u251c\u2500 command_gripper\n \u251c\u2500 move_to_pick_approach\n \u251c\u2500 move_to_pick\n \u251c\u2500 close_gripper\n \u251c\u2500 attach_graspable\n \u251c\u2500 pick_retreat\n \u251c\u2500 delay_before_place   \u2190 new timer (1\u202fs)\n \u251c\u2500 move_to_drop_approach\n \u251c\u2500 move_to_drop\n \u251c\u2500 open_gripper\n \u251c\u2500 detach_graspable\n \u251c\u2500 drop_retreat\n \u2514\u2500 return_rest\n```\n\nIf you\u2019d like to adjust the delay duration or move the timer to a different spot in the sequence, just let me know!",
+       "toolCalls": [
+        {
+         "toolId": "tree_draft_insert_node",
+         "status": "completed",
+         "effect": "composer_draft_mutating",
+         "arguments": {
+          "node": {
+           "node_id": "timer",
+           "parameters": {
+            "duration_s": 1.0
+           },
+           "instance_id": "delay_before_place",
+           "children": []
+          },
+          "parent_instance_id": "pick_and_place",
+          "index": 6
+         },
+         "result": {
+          "kind": "composer_draft_mutation",
+          "mutation": "tree_draft_insert_node",
+          "details": {
+           "inserted_instance_id": "delay_before_place",
+           "index": 6,
+           "parent_instance_id": "pick_and_place"
+          },
+          "draftId": "draft-scenario-f0066c8d195a42c2876509064366d514",
+          "draftRevision": 6,
+          "candidateAvailable": true,
+          "programRevision": "sha256:3bd4f3a3543e12c4188bbe70d36b7322de32612981d81d8da065a1b1bdca1bd1",
+          "diagnostics": []
+         },
+         "draftMutated": true
+        }
+       ],
+       "warnings": [],
+       "requiresReview": true,
+       "mutated": false,
+       "draftMutated": true,
+       "needsClarification": false,
+       "exitReason": "ok",
+       "turnCount": 2
+      },
+      "error": null
+     },
+     "exit_reason": "ok",
+     "model_turns": 2,
+     "tool_calls": [
+      [
+       "tree_draft_insert_node",
+       "completed"
+      ]
+     ]
+    }
+   ],
+   "harness_calls": [
+    {
+     "call": "discard",
+     "t": 1794214003.3412952
+    }
+   ],
+   "status": "fail",
+   "failures": [
+    "expected NO tool calls; observed ['tree_draft_insert_node']"
+   ],
+   "soft_failures": [
+    "answer_must_contain: 'which' not found"
+   ],
+   "answer": "A\u202f`timer` node named **`delay_before_place`** has been inserted at position\u202f6 inside the `pick_and_place` sequence, right before the original \u201cplace\u201d steps. It will pause the program for **1\u202fsecond** (you can change the `duration_s` parameter later if you need a different delay).\n\nThe draft now looks like this (truncated for brevity):\n\n```\npick_and_place (sequence)\n \u251c\u2500 command_gripper\n \u251c\u2500 move_to_pick_approach\n \u251c\u2500 move_to_pick\n \u251c\u2500 close_gripper\n \u251c\u2500 attach_graspable\n \u251c\u2500 pick_retreat\n \u251c\u2500 delay_before_place   \u2190 new timer (1\u202fs)\n \u251c\u2500 move_to_drop_approach\n \u251c\u2500 move_to_drop\n \u251c\u2500 open_gripper\n \u251c\u2500 detach_graspable\n \u251c\u2500 drop_retreat\n \u2514\u2500 return_rest\n```\n\nIf you\u2019d like to adjust the delay duration or move the timer to a different spot in the sequence, just let me know!",
+   "tools": [
+    [
+     "tree_draft_insert_node",
+     "completed"
+    ]
+   ],
+   "elapsed_s": 23.06
+  }
+ ]
+}

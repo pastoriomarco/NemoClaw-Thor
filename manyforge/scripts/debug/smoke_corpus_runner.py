@@ -899,6 +899,13 @@ def assert_tools(case: dict, observed: list[dict], failures: list[str],
         args_contain = exp.get("args_contain") or {}
         if args_contain:
             actual_args = available[consumed_idx].get("arguments")
+            # 2026-11-09: scene_draft_upsert_objects is the accepted alt of
+            # scene_draft_add_object; its one resource sits at
+            # scene_resources[0], the add tool's scene_resource path.
+            if (matched_alt == "scene_draft_upsert_objects" and isinstance(actual_args, dict)
+                    and isinstance(actual_args.get("scene_resources"), list)
+                    and len(actual_args["scene_resources"]) == 1):
+                actual_args = {**actual_args, "scene_resource": actual_args["scene_resources"][0]}
             if isinstance(actual_args, dict) and actual_args:
                 # 2026-06-03: schema-drift-tolerant matching. The corpus
                 # uses pre-rename field names (shape.box_dims, pose.position,

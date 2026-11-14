@@ -1,0 +1,1401 @@
+# ManyForge assistant smoke corpus v2: outcome form (ASSISTANT_CONTEXT_AND_OUTCOME_TESTS_PLAN.md, part B).
+# Rewritten from smoke_corpus_v021.yaml (same ids and intent); a case passes when the Draft shows the
+# requested result. Runner: smoke_corpus_v2.py (scorer: outcome_scorer.py). Merged from fragments g1-g3(+g4).
+schema_version: manyforge.assistant_smoke_corpus.v2
+ported_from: smoke_corpus.yaml (schema v0, baseline iter-32 2026-06-09)
+target: 'ManyForge 0.2.1 direct bridge: Program manyforge.program.v3, node catalog 3.0.0'
+scenario: examples/mock_ur10e_assistant_scene_authoring.scenario
+fresh_program_fixture:
+  tree:
+    node_id: sequence
+    instance_id: pick_and_place
+    parameters: {}
+    children:
+    - node_id: timer
+      instance_id: scaffold
+      parameters:
+        duration_s: 0.1
+      children: []
+  remove_scene_resources: all
+cases:
+
+# ===== fragment g1.yaml =====
+# Group g1: pick_and_place_build (20) + catalog_additions (4), outcome form (manyforge.assistant_smoke_corpus.v2).
+# PnP chain: fresh program = sequence pick_and_place with one timer child "scaffold" that stays LAST,
+# so the n-th inserted step sits at index n-1 under pick_and_place. The index checks encode the
+# "first child / after the previous step" wording; the model's own instance ids are never checked.
+# Motion poses: position_m is checked against the prompt's coordinates; the prompt gives them as
+# absolute base-frame positions, so a relative-mode move would be a wrong result (target_mode, if
+# stated, must be absolute; the check is on goal.position_m only).
+# Gripper position encodings: Robotiq 2F-140 here is angular: open = 0.0 rad, closed = 0.66 rad (as in the
+# demo Program); a named preset is equivalent.
+
+- id: PnP_01_scene_ground
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add a thin 2x2x0.01 m box centred at the origin as the ground plane of the scene."
+  prompt: 'add a ground plane: a thin box 2x2x0.01 m centered at the origin'
+  preconditions:
+    chain_step: 1
+    chain_id: pnp_build
+    fresh_program: true
+  outcome:
+    clarify: none
+    draft:
+      # v2: the prompt gives no resource id, so the scene resource is matched by shape and pose (no id).
+      - scene_resource: {present: true, shape: {type: box, box_dimensions_m: [2.0, 2.0, 0.01]}, pose: {position_m: [0.0, 0.0, 0.0]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "scene_draft_upsert_objects", "arguments": {"scene_resources": [{"scene_resource_id": "ground_plane", "shape": {"type": "box", "box_dimensions_m": [2.0, 2.0, 0.01]}, "pose": {"frame_ref": {"kind": "cell_frame"}, "position_m": [0.0, 0.0, 0.0], "orientation": {"rpy_deg": [0.0, 0.0, 0.0]}}}]}}]
+
+- id: PnP_02_scene_graspable
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add a 5 cm graspable cube named graspable at (0.4, 0, 0.05)."
+  prompt: add a graspable cube 0.05x0.05x0.05 m at (0.4, 0.0, 0.05) named graspable
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 2
+  outcome:
+    clarify: none
+    draft:
+      - scene_resource: {id: graspable, present: true, shape: {type: box, box_dimensions_m: [0.05, 0.05, 0.05]}, pose: {position_m: [0.4, 0.0, 0.05]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "scene_draft_upsert_objects", "arguments": {"scene_resources": [{"scene_resource_id": "graspable", "shape": {"type": "box", "box_dimensions_m": [0.05, 0.05, 0.05]}, "pose": {"frame_ref": {"kind": "cell_frame"}, "position_m": [0.4, 0.0, 0.05], "orientation": {"rpy_deg": [0.0, 0.0, 0.0]}}}]}}]
+
+- id: PnP_03_scene_pick_pad
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add a 0.2x0.2x0.025 m pick pad named pick_pad at (0.4, 0, 0.012)."
+  prompt: 'add a pick pad: 0.2x0.2x0.025 m box at (0.4, 0.0, 0.012) named pick_pad'
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 3
+  outcome:
+    clarify: none
+    draft:
+      # v2: v1 only checked the id; the prompt also fixes size and position, so they are checked.
+      - scene_resource: {id: pick_pad, present: true, shape: {type: box, box_dimensions_m: [0.2, 0.2, 0.025]}, pose: {position_m: [0.4, 0.0, 0.012]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "scene_draft_upsert_objects", "arguments": {"scene_resources": [{"scene_resource_id": "pick_pad", "shape": {"type": "box", "box_dimensions_m": [0.2, 0.2, 0.025]}, "pose": {"frame_ref": {"kind": "cell_frame"}, "position_m": [0.4, 0.0, 0.012], "orientation": {"rpy_deg": [0.0, 0.0, 0.0]}}}]}}]
+
+- id: PnP_04_scene_place_pad
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add a 0.2x0.2x0.025 m place pad named place_pad at (0, 0.4, 0.012)."
+  prompt: 'add a place pad: 0.2x0.2x0.025 m box at (0.0, 0.4, 0.012) named place_pad'
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 4
+  outcome:
+    clarify: none
+    draft:
+      # v2: v1 only checked the id; the prompt also fixes size and position, so they are checked.
+      - scene_resource: {id: place_pad, present: true, shape: {type: box, box_dimensions_m: [0.2, 0.2, 0.025]}, pose: {position_m: [0.0, 0.4, 0.012]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "scene_draft_upsert_objects", "arguments": {"scene_resources": [{"scene_resource_id": "place_pad", "shape": {"type": "box", "box_dimensions_m": [0.2, 0.2, 0.025]}, "pose": {"frame_ref": {"kind": "cell_frame"}, "position_m": [0.0, 0.4, 0.012], "orientation": {"rpy_deg": [0.0, 0.0, 0.0]}}}]}}]
+
+- id: PnP_05_tree_root
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Learn what the root of the program is before building under it; nothing should change."
+  prompt: before adding any children, read the current program state so we know the root we'll insert under
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 5
+  outcome:
+    clarify: none
+    draft:
+      # v2: a read-only request; the outcome is an unchanged Draft whose root is still the pick_and_place
+      # sequence, and an answer that tells the operator what the root is (wording matters here).
+      - node: {node_id: sequence, instance_id: pick_and_place, parent: null}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true, must_contain: [pick_and_place, sequence]}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: []
+
+- id: PnP_06_approach
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Make the first step of pick_and_place a move to the pose above the cube, (0.4, 0, 0.20)."
+  prompt: 'as the first child, add a move-to-pose that approaches above the graspable: position (0.4, 0.0, 0.20)'
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 6
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: motion.move_to_pose, parent: pick_and_place, index: 0, parameters: {goal.position_m: [0.4, 0.0, 0.20]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 0, "node": {"node_id": "motion.move_to_pose", "instance_id": "pnp_approach", "parameters": {"base_frame": {"component_id": "ur10e_robot", "frame_id": "base"}, "execution_timeout_s": 30.0, "planning_timeout_s": 10.0, "target": {"component_id": "ur10e_robot", "command_target_id": "arm"}, "target_mode": "absolute", "tcp_endpoint": {"kind": "current"}, "goal": {"position_m": [0.4, 0.0, 0.2], "orientation": {"rpy_deg": [180.0, 0.0, -180.0]}}}, "value_sources": {"velocity_scale": {"kind": "program_parameter", "reference": "velocity_scale"}}, "children": []}}}]
+
+- id: PnP_07_descend
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add the grasp-descend move to (0.4, 0, 0.07) right after the approach."
+  prompt: after the approach, add a move-to-pose that descends to (0.4, 0.0, 0.07) for grasping
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 7
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: motion.move_to_pose, parent: pick_and_place, index: 1, parameters: {goal.position_m: [0.4, 0.0, 0.07]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 1, "node": {"node_id": "motion.move_to_pose", "instance_id": "pnp_descend", "parameters": {"base_frame": {"component_id": "ur10e_robot", "frame_id": "base"}, "execution_timeout_s": 30.0, "planning_timeout_s": 10.0, "target": {"component_id": "ur10e_robot", "command_target_id": "arm"}, "target_mode": "absolute", "tcp_endpoint": {"kind": "current"}, "goal": {"position_m": [0.4, 0.0, 0.07], "orientation": {"rpy_deg": [180.0, 0.0, -180.0]}}}, "value_sources": {"velocity_scale": {"kind": "program_parameter", "reference": "velocity_scale"}}, "children": []}}}]
+
+- id: PnP_08_close_gripper
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Close the gripper right after the descend."
+  prompt: after the descend, close the gripper
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 8
+  outcome:
+    clarify: none
+    draft:
+      # v2: v1 accepted any gripper command (an open would have passed); the result must be a closing command.
+      - any_of:
+          - [{node: {node_id: gripper.command_position, parent: pick_and_place, index: 2, parameters: {position.kind: named_preset, position.name: closed}}}]
+          - [{node: {node_id: gripper.command_position, parent: pick_and_place, index: 2, parameters: {position.kind: angular_rad, position.value_rad: 0.66}}}]
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 2, "node": {"node_id": "gripper.command_position", "instance_id": "pnp_close_gripper", "parameters": {"command_duration_s": 1.0, "completion_timeout_s": 15.0, "wait_for_duration": true, "target": {"component_id": "robotiq_2f_140", "command_target_id": "gripper"}, "max_effort": {"kind": "angular_newton_meter", "value_nm": 40.0}, "position": {"kind": "angular_rad", "value_rad": 0.66}}, "children": []}}}]
+
+- id: PnP_09_attach
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Attach the graspable cube to the gripper right after the gripper close."
+  prompt: after the gripper close, attach graspable to the gripper
+  original_prompt: after the gripper close, attach graspable to link grasp_frame
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 9
+  outcome:
+    clarify: none
+    draft:
+      # v2: carrier frame/TCP and touch bodies are left open by the prompt (v3 uses the active TCP or a
+      # component frame); only the object and the gripper as carrier are checked.
+      - node: {node_id: scene.attach_carried_object, parent: pick_and_place, index: 3, parameters: {scene_resource_id: graspable, target.component_id: robotiq_2f_140}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 3, "node": {"node_id": "scene.attach_carried_object", "instance_id": "pnp_attach", "parameters": {"carrier_frame_ref": {"component_id": "robotiq_2f_140", "frame_id": "tcp"}, "scene_resource_id": "graspable", "target": {"component_id": "robotiq_2f_140", "command_target_id": "gripper"}, "touch_bodies": [{"collision_body_id": "gripper_collision", "component_id": "robotiq_2f_140"}]}, "children": []}}}]
+  port_notes:
+  - 'prompt ported: prompt named link grasp_frame (old link-based attach); v3 attach uses the active TCP or a {component_id, frame_id} carrier frame and the UR10e/2F-140 model has no grasp_frame'
+
+- id: PnP_10_lift
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add a lift move to (0.4, 0, 0.20) right after the attach."
+  prompt: after the attach, add a lift move-to-pose at (0.4, 0.0, 0.20)
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 10
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: motion.move_to_pose, parent: pick_and_place, index: 4, parameters: {goal.position_m: [0.4, 0.0, 0.20]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 4, "node": {"node_id": "motion.move_to_pose", "instance_id": "pnp_lift", "parameters": {"base_frame": {"component_id": "ur10e_robot", "frame_id": "base"}, "execution_timeout_s": 30.0, "planning_timeout_s": 10.0, "target": {"component_id": "ur10e_robot", "command_target_id": "arm"}, "target_mode": "absolute", "tcp_endpoint": {"kind": "current"}, "goal": {"position_m": [0.4, 0.0, 0.2], "orientation": {"rpy_deg": [180.0, 0.0, -180.0]}}}, "value_sources": {"velocity_scale": {"kind": "program_parameter", "reference": "velocity_scale"}}, "children": []}}}]
+
+- id: PnP_11_transport
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add the transport move to (0, 0.4, 0.20) right after the lift."
+  prompt: after the lift, add a transport move-to-pose at (0.0, 0.4, 0.20)
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 11
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: motion.move_to_pose, parent: pick_and_place, index: 5, parameters: {goal.position_m: [0.0, 0.4, 0.20]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 5, "node": {"node_id": "motion.move_to_pose", "instance_id": "pnp_transport", "parameters": {"base_frame": {"component_id": "ur10e_robot", "frame_id": "base"}, "execution_timeout_s": 30.0, "planning_timeout_s": 10.0, "target": {"component_id": "ur10e_robot", "command_target_id": "arm"}, "target_mode": "absolute", "tcp_endpoint": {"kind": "current"}, "goal": {"position_m": [0.0, 0.4, 0.2], "orientation": {"rpy_deg": [180.0, 0.0, -180.0]}}}, "value_sources": {"velocity_scale": {"kind": "program_parameter", "reference": "velocity_scale"}}, "children": []}}}]
+
+- id: PnP_12_place_descend
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add the place-descend move to (0, 0.4, 0.07) right after the transport."
+  prompt: after the transport, add a descend-to-place move at (0.0, 0.4, 0.07)
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 12
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: motion.move_to_pose, parent: pick_and_place, index: 6, parameters: {goal.position_m: [0.0, 0.4, 0.07]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 6, "node": {"node_id": "motion.move_to_pose", "instance_id": "pnp_place_descend", "parameters": {"base_frame": {"component_id": "ur10e_robot", "frame_id": "base"}, "execution_timeout_s": 30.0, "planning_timeout_s": 10.0, "target": {"component_id": "ur10e_robot", "command_target_id": "arm"}, "target_mode": "absolute", "tcp_endpoint": {"kind": "current"}, "goal": {"position_m": [0.0, 0.4, 0.07], "orientation": {"rpy_deg": [180.0, 0.0, -180.0]}}}, "value_sources": {"velocity_scale": {"kind": "program_parameter", "reference": "velocity_scale"}}, "children": []}}}]
+
+- id: PnP_13_detach
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Detach the graspable cube right after the place descend."
+  prompt: after the place descend, detach graspable
+  original_prompt: after the place descend, detach graspable from grasp_frame
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 13
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: scene.detach_carried_object, parent: pick_and_place, index: 7, parameters: {scene_resource_id: graspable}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 7, "node": {"node_id": "scene.detach_carried_object", "instance_id": "pnp_detach", "parameters": {"scene_resource_id": "graspable", "target": {"component_id": "robotiq_2f_140", "command_target_id": "gripper"}}, "children": []}}}]
+  port_notes:
+  - 'prompt ported: prompt named link grasp_frame; v3 detach takes only the scene resource'
+
+- id: PnP_14_upsert
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Re-create the graspable cube at its new place location (0, 0.4, 0.05) after the detach, so the scene matches where it was released."
+  prompt: after the detach, upsert graspable at the new location (0.0, 0.4, 0.05)
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 14
+  outcome:
+    clarify: none
+    draft:
+      # v2: scene.upsert_object replaces shape and pose, so the shape must stay the 5 cm cube from PnP_02
+      # (needed for correctness) and the pose is the one in the prompt.
+      - node: {node_id: scene.upsert_object, parent: pick_and_place, index: 8, parameters: {scene_resource_id: graspable, shape.type: box, shape.box_dimensions_m: [0.05, 0.05, 0.05], pose.position_m: [0.0, 0.4, 0.05]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 8, "node": {"node_id": "scene.upsert_object", "instance_id": "pnp_upsert", "parameters": {"scene_resource_id": "graspable", "shape": {"type": "box", "box_dimensions_m": [0.05, 0.05, 0.05]}, "pose": {"frame_ref": {"kind": "cell_frame"}, "position_m": [0.0, 0.4, 0.05], "orientation": {"rpy_deg": [0.0, 0.0, 0.0]}}}, "children": []}}}]
+
+- id: PnP_15_open_gripper
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Open the gripper right after the upsert."
+  prompt: after the upsert, open the gripper
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 15
+  outcome:
+    clarify: none
+    draft:
+      # v2: v1 accepted any gripper command; the result must be an opening command.
+      - any_of:
+          - [{node: {node_id: gripper.command_position, parent: pick_and_place, index: 9, parameters: {position.kind: named_preset, position.name: open}}}]
+          - [{node: {node_id: gripper.command_position, parent: pick_and_place, index: 9, parameters: {position.kind: angular_rad, position.value_rad: 0.0}}}]
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 9, "node": {"node_id": "gripper.command_position", "instance_id": "pnp_open_gripper", "parameters": {"command_duration_s": 1.0, "completion_timeout_s": 15.0, "wait_for_duration": true, "target": {"component_id": "robotiq_2f_140", "command_target_id": "gripper"}, "max_effort": {"kind": "angular_newton_meter", "value_nm": 40.0}, "position": {"kind": "angular_rad", "value_rad": 0.0}}, "children": []}}}]
+
+- id: PnP_16_retract
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add the retract move to (0, 0.4, 0.20) right after the gripper open."
+  prompt: after the open, add a retract move-to-pose at (0.0, 0.4, 0.20)
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 16
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: motion.move_to_pose, parent: pick_and_place, index: 10, parameters: {goal.position_m: [0.0, 0.4, 0.20]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 10, "node": {"node_id": "motion.move_to_pose", "instance_id": "pnp_retract", "parameters": {"base_frame": {"component_id": "ur10e_robot", "frame_id": "base"}, "execution_timeout_s": 30.0, "planning_timeout_s": 10.0, "target": {"component_id": "ur10e_robot", "command_target_id": "arm"}, "target_mode": "absolute", "tcp_endpoint": {"kind": "current"}, "goal": {"position_m": [0.0, 0.4, 0.2], "orientation": {"rpy_deg": [180.0, 0.0, -180.0]}}}, "value_sources": {"velocity_scale": {"kind": "program_parameter", "reference": "velocity_scale"}}, "children": []}}}]
+
+- id: PnP_17_home
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Add a final step that sends the robot back to its home position after the retract."
+  prompt: after the retract, add a return-home move-to-pose
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 17
+  outcome:
+    # v2: the prompt gives no home pose and the fresh Program defines none, so it is vague but answerable;
+    # asking is fine, acting with either move node is fine (home pose values are not checked).
+    clarify: allowed
+    clarification_answer: "Use a joint-target move to the robot's home position; any sensible home is fine."
+    draft:
+      - any_of:
+          - [{node: {node_id: motion.move_to_pose, parent: pick_and_place, index: 11}}]
+          - [{node: {node_id: motion.move_to_joint_target, parent: pick_and_place, index: 11}}]
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_insert_node", "arguments": {"parent_instance_id": "pick_and_place", "index": 11, "node": {"node_id": "motion.move_to_joint_target", "instance_id": "pnp_home", "parameters": {"base_frame": {"component_id": "ur10e_robot", "frame_id": "base"}, "execution_timeout_s": 30.0, "planning_timeout_s": 10.0, "target": {"component_id": "ur10e_robot", "command_target_id": "arm"}, "tcp_endpoint": {"kind": "current"}, "goal": [{"joint_name": "shoulder_pan_joint", "position_rad": 0.0}, {"joint_name": "shoulder_lift_joint", "position_rad": -1.57}, {"joint_name": "elbow_joint", "position_rad": 1.57}, {"joint_name": "wrist_1_joint", "position_rad": -1.57}, {"joint_name": "wrist_2_joint", "position_rad": -1.57}, {"joint_name": "wrist_3_joint", "position_rad": 0.0}]}, "value_sources": {"velocity_scale": {"kind": "program_parameter", "reference": "velocity_scale"}}, "children": []}}}]
+
+- id: PnP_18_repeat_root
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Make the whole pick_and_place sequence loop forever by wrapping it in a repeat as the new root."
+  prompt: wrap the whole pick_and_place sequence with a repeat node as the new root, num_cycles=-1
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 18
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: repeat, parent: null, parameters: {num_cycles: -1}, children_node_ids: [sequence]}
+      - node: {instance_id: pick_and_place, node_id: sequence, parent_node_id: repeat}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_wrap_node", "arguments": {"target_instance_id": "pick_and_place", "wrapper": {"node_id": "repeat", "instance_id": "pnp_repeat", "parameters": {"num_cycles": -1}}}}]
+
+- id: PnP_20_grip_force
+  category: pick_and_place_build
+  detail_level: specific
+  intent: "Limit the grip force of the closing gripper command to 40 N."
+  prompt: set the gripper-close grip force to 40 N
+  preconditions:
+    chain_id: pnp_build
+    chain_step: 20
+  outcome:
+    clarify: none
+    draft:
+      # v2: v1 only required "some update call". The grip force lives in max_effort of the close command
+      # (index 2 under pick_and_place, now below the repeat root). The 2F-140 here is an angular gripper whose
+      # effort is a torque, so "40 N" has two sensible results: a literal 40 N (linear_newton) or 40 on the
+      # gripper's own unit (angular_newton_meter); both fulfil the request. It must stay a closing command.
+      - any_of:
+          - - node: {node_id: gripper.command_position, parent: pick_and_place, index: 2, parameters: {max_effort.kind: linear_newton, max_effort.value_n: 40.0}}
+          - - node: {node_id: gripper.command_position, parent: pick_and_place, index: 2, parameters: {max_effort.kind: angular_newton_meter, max_effort.value_nm: 40.0}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+    # chain repair: the complete expected result of this step (smoke_corpus_v2.py applies it after a FAIL)
+    repair: [{"tool": "tree_draft_update_node_params", "arguments": {"instance_id": "@child:pick_and_place:2", "expected_node_id": "gripper.command_position", "merge": true, "parameters": {"max_effort": {"kind": "angular_newton_meter", "value_nm": 40.0}}}}]
+
+- id: CAT_check_gripper_status_medium
+  category: catalog_additions
+  detail_level: medium
+  intent: "After the gripper close, verify that the gripper reached its commanded position."
+  prompt: right after close_gripper, add a step that checks the gripper actually reached its commanded position
+  outcome:
+    clarify: none
+    draft:
+      # v2: v1 forbade update_node_params; the result form makes that implicit: the new check node sits right
+      # after close_gripper, close_gripper itself is untouched (unchanged), expected state is "reached".
+      - node: {node_id: gripper.check_status, parent: pick_and_place, after: close_gripper, parameters: {expected_state: reached, target.component_id: robotiq_2f_140}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: CAT_wait_gripper_status_specific
+  category: catalog_additions
+  detail_level: specific
+  intent: "Before attaching the cube, wait up to 5 s until the gripper command has reached its target."
+  prompt: before attach_graspable, add a node that waits until the robotiq gripper command has reached its target, with a 5 second timeout
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: gripper.wait_for_status, parent: pick_and_place, before: attach_graspable, parameters: {expected_state: reached, timeout_s: 5.0, target.component_id: robotiq_2f_140}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: CAT_check_value_specific
+  category: catalog_additions
+  detail_level: specific
+  intent: "Start pick_and_place with a check that the blackboard counter part_count is below 10."
+  prompt: at the start of pick_and_place, add a check that the blackboard key part_count is less than 10
+  preconditions:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: part_count
+          type: int64
+          access: read_write
+          persistence: run
+          initial: 0
+          description: Seed blackboard key inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: logic.check_value, parent: pick_and_place, index: 0, parameters: {key: part_count, operator: "<", value: 10}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: CAT_frame_pose_specific
+  category: catalog_additions
+  detail_level: specific
+  intent: "At the end of pick_and_place, record the gripper TCP pose into the blackboard key tcp_pose."
+  prompt: at the end of pick_and_place, store the current pose of the robotiq_2f_140 tcp frame in the blackboard key tcp_pose
+  preconditions:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: tcp_pose
+          type: stored_pose
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: model.get_frame_pose, parent: pick_and_place, last_child: true, parameters: {output_key: tcp_pose, frame.component_id: robotiq_2f_140, frame.frame_id: tcp}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: CAT_io_unavailable_generic
+  category: catalog_additions
+  detail_level: generic
+  intent: "Switch digital output 0 of the robot on at the end of the program (a capability this Mock UR10e Deployment does not offer)."
+  prompt: add a step at the end of pick_and_place that switches digital output 0 of the robot on
+  port_notes:
+  - The Mock UR10e Deployment offers no I/O capability, so io.set_output is not in the derived node set; the assistant should say so instead of inserting a substitute.
+  outcome:
+    clarify: none
+    draft:
+      # v2: the right result is no change plus an honest answer; "unchanged" also rules out any substitute
+      # node or subtree replacement that v1 listed as forbidden tools.
+      - node_absent: {node_id: io.set_output, parent: pick_and_place}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true, must_contain: [output]}
+
+# ===== fragment g2.yaml =====
+# manyforge.assistant_smoke_corpus.v2: tree_* and current_tree_* cases (group g2).
+# Start Program: examples/mock_ur10e_assistant_scene_authoring.scenario/program.yaml
+#   sequence pick_and_place with 12 flat children: command_gripper, move_to_pick_approach, move_to_pick,
+#   close_gripper, attach_graspable, pick_retreat, move_to_drop_approach, move_to_drop, open_gripper,
+#   detach_graspable, drop_retreat, return_rest. Motion nodes bind velocity_scale to Program parameter
+#   velocity_scale (default 0.5) via value_sources. No blackboard keys. Scene: graspable, ground.
+# Check forms beyond the plan appendix (g2 needs them; the scorer must support or reject them):
+#   node.parent: null (top level); node_id as a list (any of); children_order: any;
+#   node.ancestor: <instance_id> (anywhere below it); node.value_sources; node.effective_parameters
+#   (value after resolving value_sources); {max_exclusive: x} in place of a number;
+#   differ: {instances, parameter}; subtree_order. (all_nodes and node.value_sources were rewritten at merge.)
+#   Nodes moved into a newly created composite count as matched for 'unchanged'.
+- id: P1_wrap_root_specific
+  category: tree_wrap_root
+  detail_level: specific
+  intent: The operator wants a repeat node above the whole Program, so the existing tree runs inside it.
+  prompt: add a repeat node as root
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: repeat, parent: null, children_node_ids: [sequence]}
+      - node: {instance_id: pick_and_place, parent_node_id: repeat}
+    # v2: wrap-at-root and insert-repeat-then-move-the-sequence give the same tree; both pass.
+    # num_cycles is not given by the prompt, so it is not checked.
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: P3_tree_insert_runtime_obj_specific
+  category: tree_insert_runtime_obj
+  detail_level: specific
+  intent: The operator wants the Program to re-create the graspable at its scene-start pose and size as the last step of the sequence.
+  prompt: 'add an upsert node at the end of pick_and_place sequence that places
+  
+    ''graspable'' object in the same position and orientation as the scene
+  
+    start, with the same original size
+  
+    '
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: scene.upsert_object, parent: pick_and_place, last_child: true,
+               parameters: {scene_resource_id: graspable,
+                            shape.type: box, shape.box_dimensions_m: [0.1, 0.01, 0.01],
+                            pose.position_m: [0.3, -0.3, 0.15],
+                            pose.orientation.xyzw: [0.0, 0.0, -0.3826834, 0.9238795]}}
+    # v2: the start pose is the scene resource's pose in the cell frame (45 deg about z);
+    # rotations compare as rotations, so rpy_deg [0, 0, -45] is equally acceptable.
+    # The scene itself must stay as it was (default unchanged: true covers the scene resource).
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: WRAP_root_generic
+  category: tree_wrap_root
+  detail_level: generic
+  intent: The operator says to wrap the tree but does not say in what.
+  prompt: wrap the tree
+  outcome:
+    # v2: which wrapper node to use is an arbitrary choice with a visible effect on the whole Program.
+    clarify: required
+    clarification_answer: "Wrap it in a retry node."
+    draft:
+      # judged after the clarification turn
+      - node: {node_id: retry, parent: null, children_node_ids: [sequence]}
+      - node: {instance_id: pick_and_place, parent_node_id: retry}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: WRAP_root_medium
+  category: tree_wrap_root
+  detail_level: medium
+  intent: The operator wants the whole Program retried as a unit, with a retry decorator at the root.
+  prompt: wrap the root with a retry decorator
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: retry, parent: null, children_node_ids: [sequence]}
+      - node: {instance_id: pick_and_place, parent_node_id: retry}
+    # v2: attempt count is not given by the prompt, so num_attempts is not checked.
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: TREE_insert_runtime_generic
+  category: tree_insert_runtime_obj
+  detail_level: generic
+  intent: The operator wants a step in the Program that places the graspable object, without saying where or when.
+  prompt: add a node that places graspable somewhere
+  outcome:
+    # v2: vague but answerable and harmless in a reviewable Draft; acting on the only sensible
+    # reading (a scene node for graspable inside the main sequence) is accepted if the answer says so.
+    clarify: allowed
+    clarification_answer: "At the end of the cycle, back at its start position."
+    draft:
+      - node: {node_id: [scene.upsert_object, scene.update_object_pose], parent: pick_and_place,
+               parameters: {scene_resource_id: graspable}}
+    # v2: node_id as a list means any of those node ids.
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: TREE_insert_runtime_medium
+  category: tree_insert_runtime_obj
+  detail_level: medium
+  intent: The operator wants the graspable put back at its start pose as the last step of the cycle.
+  prompt: at the end of the cycle, re-place the graspable at the start position
+  outcome:
+    clarify: none
+    draft:
+      # v2: upsert and update-pose both put the object back; both are accepted.
+      - any_of:
+          - - node: {node_id: scene.upsert_object, parent: pick_and_place, last_child: true,
+                     parameters: {scene_resource_id: graspable,
+                                  shape.type: box, shape.box_dimensions_m: [0.1, 0.01, 0.01],
+                                  pose.position_m: [0.3, -0.3, 0.15],
+                                  pose.orientation.xyzw: [0.0, 0.0, -0.3826834, 0.9238795]}}
+          - - node: {node_id: scene.update_object_pose, parent: pick_and_place, last_child: true,
+                     parameters: {scene_resource_id: graspable,
+                                  pose.position_m: [0.3, -0.3, 0.15],
+                                  pose.orientation.xyzw: [0.0, 0.0, -0.3826834, 0.9238795]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: INSERT_position_first_specific
+  category: tree_insert_at_position
+  detail_level: specific
+  intent: The operator wants the sequence to wait for the start_pick signal being true before doing anything else.
+  prompt: insert a wait_for_value node as child index 0 of pick_and_place that waits for start_pick=true
+  original_prompt: insert a wait_for_signal_bool node as child index 0 of pick_and_place that waits for start_pick=true
+  preconditions:
+    chain_timeout_s: 220
+  port_notes:
+  - 'prompt ported: prompt named removed node id wait_for_signal_bool; v3 node is logic.wait_for_value'
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: logic.wait_for_value, parent: pick_and_place, index: 0,
+               parameters: {key: start_pick, value: true}}
+      # v2: wait_for_value needs a declared blackboard key and the Program has none, so the
+      # request is only fulfilled if start_pick is declared (type bool); the old v1 check
+      # ignored this because the v1 node read a signal directly.
+      - blackboard_key: {key: start_pick, present: true, type: bool}
+    # operator omitted: == is the default, so it is not checked.
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: INSERT_position_after_named_medium
+  category: tree_insert_at_position
+  detail_level: medium
+  intent: The operator wants a 2 second pause right after the approach move to the pick.
+  prompt: insert a 2 second timer after move_to_pick_approach
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: timer, parent: pick_and_place, after: move_to_pick_approach,
+               before: move_to_pick, parameters: {duration_s: 2.0}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: INSERT_position_before_named_generic
+  category: tree_insert_at_position
+  detail_level: generic
+  intent: The operator wants a delay inserted before the place phase, without saying the duration or exactly which step starts it.
+  prompt: put a delay before the place step
+  outcome:
+    # v2: vague but answerable. A delay before the place phase has three reasonable readings
+    # (before the drop approach, the drop move or the release); any of them is accepted when the
+    # model states its choice. The duration is free but a timer needs one.
+    clarify: allowed
+    clarification_answer: "Before the approach to the drop position, one and a half seconds."
+    draft:
+      - any_of:
+          - - node: {node_id: timer, parent: pick_and_place, before: move_to_drop_approach}
+          - - node: {node_id: timer, parent: pick_and_place, before: move_to_drop}
+          - - node: {node_id: timer, parent: pick_and_place, before: open_gripper}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: PARALLEL_concurrent_medium
+  category: tree_insert_parallel
+  detail_level: medium
+  intent: The operator wants the gripper opened and some status update to run concurrently inside a parallel node.
+  prompt: add a parallel that runs gripper open and a status update at the same time
+  outcome:
+    # v2: the placement and what "status update" means are not given, but the request is
+    # answerable by a plausible reading (a gripper status check); acting is accepted if the
+    # answer states the reading. v1 required a question only because the model could not act.
+    clarify: allowed
+    clarification_answer: "At the end of the sequence. The second branch should check the gripper status."
+    draft:
+      - node: {node_id: parallel, parent: pick_and_place,
+               # T1 (live trace): wait_for_status fulfils "status update" as well.
+               children_node_ids: [gripper.command_position, [gripper.check_status, gripper.wait_for_status]],
+               children_order: any}
+      - node: {node_id: gripper.command_position, parent_node_id: parallel,
+               parameters: {position.value_rad: 0.0}}
+      # position 0.0 rad is "open" for this gripper (open_gripper in the Program uses it).
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: PARALLEL_generic
+  category: tree_insert_parallel
+  detail_level: generic
+  intent: The operator wants a parallel node added, with no children or location given.
+  prompt: add a parallel
+  outcome:
+    # v2: the plan allows an incomplete composite in the Draft (diagnostic until completed), so
+    # adding an empty parallel in the main sequence is a valid direct action; asking is valid too.
+    clarify: allowed
+    clarification_answer: "At the end of pick_and_place, with a 1 second timer and a gripper status check inside."
+    draft:
+      - node: {node_id: parallel, parent: pick_and_place}
+    unchanged: true
+    diagnostics: allow_incomplete
+    answer: {consistent: true}
+- id: FALLBACK_retry_specific
+  category: tree_insert_fallback
+  detail_level: specific
+  intent: The operator wants a fallback as the second step of the sequence that tries two named alternative grasp moves.
+  prompt: insert a fallback as the second child of pick_and_place containing two move_to_pose nodes named primary_pick and backup_pick that each try a different grasp pose
+  original_prompt: insert a fallback as the second child of pick_and_place containing two move_manipulator_action nodes named primary_pick and backup_pick that each try a different grasp pose
+  port_notes:
+  - 'prompt ported: prompt named removed node id move_manipulator_action; v3 node is motion.move_to_pose'
+  outcome:
+    clarify: allowed
+    clarification_answer: "primary_pick goes to 0.0, 0.0, 0.025 above the graspable like move_to_pick; backup_pick is 0.02 m further along x."
+    # v2: the prompt does not give the grasp poses; a model may ask or invent two distinct ones.
+    draft:
+      - node: {node_id: fallback, parent: pick_and_place, index: 1,
+               children_node_ids: [motion.move_to_pose, motion.move_to_pose]}
+      - node: {instance_id: primary_pick, node_id: motion.move_to_pose, parent_node_id: fallback}
+      - node: {instance_id: backup_pick, node_id: motion.move_to_pose, parent_node_id: fallback}
+      - differ: {instances: [primary_pick, backup_pick], parameter: goal}
+    unchanged: true
+    # v2: if the model leaves goal poses unset, the nodes stay incomplete until the operator fills them.
+    diagnostics: allow_incomplete
+    answer: {consistent: true}
+- id: FALLBACK_alternate_medium
+  category: tree_insert_fallback
+  detail_level: medium
+  intent: The operator wants a fallback just before the gripper close so the approach has two alternative paths.
+  prompt: add a fallback node before the gripper close that tries two alternate approach paths
+  outcome:
+    # v2: which paths is not stated, but a fallback holding two motions before close_gripper is a
+    # reasonable direct reading; asking is also fine.
+    clarify: allowed
+    clarification_answer: "Wrap the move to the pick and add one alternative approach to it as the second option."
+    draft:
+      # Both readings (insert a new fallback with two motions, or wrap move_to_pick together with an
+      # alternative) give a fallback right before close_gripper with two motion children.
+      - node: {node_id: fallback, parent: pick_and_place, before: close_gripper,
+               children_node_ids: [motion.move_to_pose, motion.move_to_pose], children_order: any}
+    # nodes moved into the new fallback (move_to_pick) count as matched for 'unchanged'.
+    unchanged: true
+    diagnostics: allow_incomplete
+    answer: {consistent: true}
+- id: FALLBACK_generic
+  category: tree_insert_fallback
+  detail_level: generic
+  intent: The operator wants a fallback node added, with no children or location given.
+  prompt: add a fallback
+  outcome:
+    # v2: same as PARALLEL_generic: an incomplete fallback is allowed in the Draft.
+    clarify: allowed
+    clarification_answer: "At the end of pick_and_place, trying a 1 second timer first and then a gripper status check."
+    draft:
+      - node: {node_id: fallback, parent: pick_and_place}
+    unchanged: true
+    diagnostics: allow_incomplete
+    answer: {consistent: true}
+- id: UPDATE_params_specific
+  category: tree_update_node_params
+  detail_level: specific
+  intent: The operator wants the speed of the move_to_pick_approach motion set to 0.3, for that node.
+  prompt: set the move_to_pick_approach node's velocity_scale parameter to 0.3
+  outcome:
+    clarify: none
+    draft:
+      # v2: the prompt names this node's velocity_scale, and the motion nodes bind it to the Program
+      # parameter velocity_scale. Only this node must change, so the effective value on it is 0.3
+      # (a literal replacing the binding) while the other motion nodes stay bound and the
+      # parameter keeps its default. Changing the Program parameter would slow every move: fails.
+      - node: {instance_id: move_to_pick_approach, effective_parameters: {velocity_scale: 0.3}}
+      # merge: dropped the value_sources check on move_to_pick; unchanged: true already requires it to stay bound.
+      - parameter: {id: velocity_scale, present: true, default: 0.5}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: UPDATE_params_medium
+  category: tree_update_node_params
+  detail_level: medium
+  intent: The operator wants move_to_pick_approach to run at half its current speed.
+  prompt: slow down move_to_pick_approach by half
+  outcome:
+    clarify: none
+    draft:
+      # v2: current speed of this node is the Program parameter (0.5), so half is 0.25, on this node only.
+      - node: {instance_id: move_to_pick_approach, effective_parameters: {velocity_scale: 0.25}}
+      # merge: dropped the value_sources check on move_to_pick; unchanged: true already requires it to stay bound.
+      - parameter: {id: velocity_scale, present: true, default: 0.5}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: UPDATE_params_generic
+  category: tree_update_node_params
+  detail_level: generic
+  intent: The operator wants the robot to move slower overall.
+  prompt: make the robot move slower
+  outcome:
+    # v2: vague but answerable. In this Program all moves share the velocity_scale parameter, so
+    # "the robot moves slower" most naturally lowers it. Either lowering the parameter default or
+    # lowering the effective speed of every motion node is accepted. A question is accepted too.
+    clarify: allowed
+    clarification_answer: "All the motions, down to a quarter of the maximum speed."
+    draft:
+      - any_of:
+          - - parameter: {id: velocity_scale, present: true, default: {max_exclusive: 0.5}}
+          # merge: all_nodes rewritten as one node check per motion node (same intent).
+          - - node: {instance_id: move_to_pick_approach, effective_parameters: {velocity_scale: {max_exclusive: 0.5}}}
+            - node: {instance_id: move_to_pick, effective_parameters: {velocity_scale: {max_exclusive: 0.5}}}
+            - node: {instance_id: pick_retreat, effective_parameters: {velocity_scale: {max_exclusive: 0.5}}}
+            - node: {instance_id: move_to_drop_approach, effective_parameters: {velocity_scale: {max_exclusive: 0.5}}}
+            - node: {instance_id: move_to_drop, effective_parameters: {velocity_scale: {max_exclusive: 0.5}}}
+            - node: {instance_id: drop_retreat, effective_parameters: {velocity_scale: {max_exclusive: 0.5}}}
+            - node: {instance_id: return_rest, effective_parameters: {velocity_scale: {max_exclusive: 0.5}}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: DELETE_named_specific
+  category: tree_delete_node
+  detail_level: specific
+  intent: The operator wants the move_to_pick_approach node removed.
+  prompt: delete the node named move_to_pick_approach
+  outcome:
+    clarify: none
+    draft:
+      - node_absent: {instance_id: move_to_pick_approach}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: DELETE_kind_medium
+  category: tree_delete_node
+  detail_level: medium
+  intent: The operator wants the step that closes the gripper removed.
+  prompt: remove the gripper-close step
+  outcome:
+    clarify: none
+    draft:
+      # v2: only close_gripper closes the gripper (0.66 rad); the other two gripper.command_position
+      # nodes open it. Removing it leaves attach_graspable in place: the operator owns that logic.
+      - node_absent: {instance_id: close_gripper}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: DELETE_generic
+  category: tree_delete_node
+  detail_level: generic
+  intent: The operator wants the last node of the sequence removed.
+  prompt: drop the last node
+  outcome:
+    # v2: "the last node" is answerable here (the tree is flat, so return_rest is last), but
+    # deleting is destructive, so a confirming question is acceptable; acting must delete exactly it.
+    clarify: allowed
+    clarification_answer: "Yes, the last step of pick_and_place, return_rest."
+    draft:
+      - node_absent: {instance_id: return_rest}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: MOVE_swap_specific
+  category: tree_move_node
+  detail_level: specific
+  intent: The operator wants pick_retreat moved so it is the second step of the main sequence.
+  prompt: move pick_retreat to be the second child of pick_and_place
+  outcome:
+    clarify: none
+    draft:
+      - node: {instance_id: pick_retreat, parent: pick_and_place, index: 1,
+               after: command_gripper, before: move_to_pick_approach}
+    # the other children keep their relative order (unchanged covers it).
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: MOVE_reorder_medium
+  category: tree_move_node
+  detail_level: medium
+  intent: The operator wants pick_retreat and move_to_drop_approach to exchange places.
+  prompt: swap the order of pick_retreat and move_to_drop_approach
+  outcome:
+    clarify: none
+    draft:
+      - node: {instance_id: move_to_drop_approach, parent: pick_and_place, after: attach_graspable,
+               before: pick_retreat}
+      - node: {instance_id: pick_retreat, parent: pick_and_place, after: move_to_drop_approach,
+               before: move_to_drop}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: MOVE_generic
+  category: tree_move_node
+  detail_level: generic
+  intent: The operator wants a step moved earlier but never says which step.
+  prompt: move that step earlier
+  outcome:
+    # v2: "that step" has no referent in a fresh conversation, so any move is arbitrary.
+    clarify: required
+    clarification_answer: "pick_retreat, move it before attach_graspable."
+    draft:
+      # judged after the clarification turn
+      - node: {instance_id: pick_retreat, parent: pick_and_place, before: attach_graspable,
+               after: close_gripper}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: REPLACE_subtree_specific
+  category: tree_replace_subtree
+  detail_level: specific
+  intent: The operator wants the pick moves grouped into one pick_routine fallback node that keeps the same steps.
+  prompt: 'replace the pick step (children of pick_and_place from ''descend'' to
+  
+    ''attach'') with a single ''pick_routine'' subtree that wraps the same
+  
+    nodes inside a fallback for retry-on-failure semantics
+  
+    '
+  preconditions:
+    chain_timeout_s: 240
+  outcome:
+    # v2: the prompt names 'descend' and 'attach', which do not exist in this Program (they came from
+    # the v1 pick-and-place build). The pick step here is move_to_pick, close_gripper and
+    # attach_graspable; acting on that reading is accepted when the answer says so, and a question
+    # is accepted too because a replace of a named range is destructive.
+    clarify: allowed
+    clarification_answer: "From move_to_pick to attach_graspable, keeping those three nodes in the same order inside pick_routine."
+    draft:
+      - node: {instance_id: pick_routine, node_id: fallback, parent: pick_and_place,
+               after: move_to_pick_approach, before: pick_retreat}
+      - node: {instance_id: move_to_pick, ancestor: pick_routine}
+      - node: {instance_id: close_gripper, ancestor: pick_routine}
+      - node: {instance_id: attach_graspable, ancestor: pick_routine}
+      - subtree_order: {root: pick_routine, order: [move_to_pick, close_gripper, attach_graspable]}
+    # the three nodes keep their parameters (count as matched but not edited).
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: REPLACE_simple_medium
+  category: tree_replace_subtree
+  detail_level: medium
+  intent: The operator wants the gripper close step replaced by a 1 second delay.
+  prompt: replace the close_gripper action with a 1 second timer
+  outcome:
+    clarify: none
+    draft:
+      - node_absent: {instance_id: close_gripper}
+      - node: {node_id: timer, parent: pick_and_place, after: move_to_pick, before: attach_graspable,
+               parameters: {duration_s: 1.0}}
+    # v2: replace-subtree, change-kind, or delete plus insert at the same place give the same tree.
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: CUR_wrap_existing_motion_with_retry
+  category: current_tree_control
+  detail_level: specific
+  intent: The operator wants the move_to_pick motion retried on failure, up to 2 retries.
+  prompt: retry the move_to_pick step up to 2 times before failing
+  outcome:
+    clarify: none
+    draft:
+      # v2: "retry up to 2 times" is 2 retries = num_attempts 3 (num_attempts counts total runs);
+      # num_attempts 2 is also accepted as the common loose reading. Wrap vs insert-and-move give the same tree.
+      - any_of:
+          - - node: {node_id: retry, parent: pick_and_place, after: move_to_pick_approach,
+                     before: close_gripper, children_node_ids: [motion.move_to_pose],
+                     parameters: {num_attempts: 3}}
+          - - node: {node_id: retry, parent: pick_and_place, after: move_to_pick_approach,
+                     before: close_gripper, children_node_ids: [motion.move_to_pose],
+                     parameters: {num_attempts: 2}}
+      - node: {instance_id: move_to_pick, parent_node_id: retry}
+    # move_to_pick keeps its parameters and binding (counts as matched, not edited).
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+- id: CUR_update_existing_motion_speed
+  category: current_tree_update
+  detail_level: specific
+  intent: The operator wants move_to_pick_approach at velocity_scale 0.25 with the rest of its motion settings untouched.
+  prompt: set move_to_pick_approach velocity_scale to 0.25 and keep the rest of its motion parameters
+  outcome:
+    clarify: none
+    draft:
+      # v2: the prompt names this node's velocity_scale; only this node changes (effective value 0.25).
+      # Other motion nodes stay bound to the Program parameter, whose default stays 0.5.
+      - node: {instance_id: move_to_pick_approach, effective_parameters: {velocity_scale: 0.25},
+               parameters: {target_mode: relative, goal.position_m: [0.0, 0.0, 0.1],
+                            target_reference.scene_resource_id: graspable,
+                            target.component_id: ur10e_robot, tcp_endpoint.kind: current}}
+      # merge: dropped the value_sources check on move_to_pick; unchanged: true already requires it to stay bound.
+      - parameter: {id: velocity_scale, present: true, default: 0.5}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ===== fragment g3.yaml =====
+# Group 3 of the v2 (outcome form) corpus: scene, parameters, blackboard, clarification and
+# runtime-scene cases. Start Program: mock_ur10e_assistant_scene_authoring.scenario/program.yaml
+# (tree pick_and_place; scene resources graspable (box 0.1x0.01x0.01 at 0.3,-0.3,0.15, role pick_object)
+# and ground; Program parameter velocity_scale float64 = 0.5; empty blackboard).
+# Harness extension used in several cases: `scene_resource: {new: true, ...}` matches a resource that
+# was not in the Draft before the conversation, for prompts that do not name an id.
+# `preconditions` is the v1 `precondition` key, contents unchanged.
+
+- id: P2_scene_add_specific
+  category: scene_add
+  detail_level: specific
+  intent: "The operator wants a new box obstacle of given size and position in the static scene."
+  prompt: add a box of size 1.0, 0.02, 0.25 in position 0.0, -0.15, 0.125
+  outcome:
+    clarify: none
+    draft:
+      - scene_resource:
+          new: true
+          shape: {type: box, box_dimensions_m: [1.0, 0.02, 0.25]}
+          pose: {position_m: [0.0, -0.15, 0.125]}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: SCENE_add_generic
+  category: scene_add
+  detail_level: generic
+  intent: "The operator wants some small box added to the scene, without size or place."
+  prompt: add a small box to the scene
+  outcome:
+    # v2: v1 demanded a tool call; a vague prompt is answerable by choosing sensible defaults or asking.
+    clarify: allowed
+    clarification_answer: "A 5 cm cube at x=0.4, y=0.0, z=0.025 in the cell frame."
+    draft:
+      # "small" is not measured: any box counts. The harness may report the chosen size.
+      - scene_resource:
+          new: true
+          shape: {type: box}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: SCENE_add_medium
+  category: scene_add
+  detail_level: medium
+  intent: "The operator wants a sphere of radius 0.05 m placed in front of the robot."
+  prompt: add a sphere of radius 0.05 in front of the robot
+  outcome:
+    # v2: "in front of the robot" gives no coordinates; a direct reading or a question are both fine.
+    clarify: allowed
+    clarification_answer: "At x=0.5, y=0.0, z=0.05 in the cell frame."
+    draft:
+      # Pose is not checked: the front direction is not defined for the model, so the radius is what counts.
+      - scene_resource:
+          new: true
+          shape: {type: sphere, sphere_radius_m: 0.05}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: SCENE_update_pose_specific
+  category: scene_update
+  detail_level: specific
+  intent: "The operator wants the graspable scene object moved to a given position."
+  prompt: move graspable to position (0.5, 0.1, 0.05)
+  outcome:
+    clarify: none
+    draft:
+      - scene_resource:
+          id: graspable
+          present: true
+          shape: {type: box, box_dimensions_m: [0.1, 0.01, 0.01]}   # moved, not replaced
+          pose: {position_m: [0.5, 0.1, 0.05]}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: SCENE_update_size_medium
+  category: scene_update
+  detail_level: medium
+  intent: "The operator wants the graspable object made twice as wide."
+  prompt: make the graspable twice as wide
+  outcome:
+    # v2: graspable is a 0.1 x 0.01 x 0.01 box, so "wide" has several readings; a direct reading or a question both fulfil it.
+    clarify: allowed
+    clarification_answer: "Double all three dimensions."
+    draft:
+      # T1 decision: the uniform reading (also the clarification answer) is one alternative among the direct readings.
+      - any_of:
+          - - scene_resource: {id: graspable, present: true, shape: {type: box, box_dimensions_m: [0.2, 0.01, 0.01]}}   # long side doubled
+          - - scene_resource: {id: graspable, present: true, shape: {type: box, box_dimensions_m: [0.1, 0.02, 0.01]}}   # width (y) doubled
+          - - scene_resource: {id: graspable, present: true, shape: {type: box, box_dimensions_m: [0.2, 0.02, 0.02]}}   # uniform scale
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: SCENE_remove_specific
+  category: scene_remove
+  detail_level: specific
+  intent: "The operator wants the graspable object removed from the static scene."
+  prompt: remove graspable from the scene
+  outcome:
+    clarify: none
+    draft:
+      - scene_resource: {id: graspable, present: false}
+      - scene_resource: {id: ground, present: true}
+    unchanged: true          # the tree is not edited; it still references graspable
+    # v2: the tree's motion and attach nodes reference graspable, so the Draft shows dangling-reference
+    # diagnostics after the removal the operator asked for. The answer should say so, not hide it.
+    diagnostics: allow_incomplete
+    answer: {consistent: true}
+
+- id: SCENE_remove_generic
+  category: scene_remove
+  detail_level: generic
+  intent: "The operator wants unused obstacles cleaned out of the scene."
+  prompt: clean up unused obstacles
+  outcome:
+    # v2: v3 scene has only the floor (ground) and graspable, which the tree uses; no unused obstacle exists.
+    # Reading the scene and reporting "nothing to remove" is right; removing either resource would be harmful.
+    clarify: allowed
+    clarification_answer: "Keep the floor and anything the program uses; if nothing else qualifies, change nothing."
+    draft:
+      - scene_resource: {id: graspable, present: true}
+      - scene_resource: {id: ground, present: true}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: PARAM_add_specific
+  category: parameters_add
+  detail_level: specific
+  intent: "The operator wants a new float Program parameter with a default."
+  prompt: add a program parameter named max_velocity of type float with default 0.5
+  outcome:
+    clarify: none
+    draft:
+      - parameter: {id: max_velocity, present: true, type: float64, default: 0.5}
+      - parameter: {id: velocity_scale, present: true}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: PARAM_modify_medium
+  category: parameters_modify
+  detail_level: medium
+  intent: "The operator wants the default of velocity_scale changed to 0.25."
+  prompt: change the velocity_scale parameter default to 0.25
+  outcome:
+    clarify: none
+    draft:
+      - parameter: {id: velocity_scale, present: true, type: float64, default: 0.25}
+    unchanged: true          # the tree still reads velocity_scale; no duplicate parameter
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: PARAM_delete_specific
+  category: parameters_delete
+  detail_level: specific
+  intent: "The operator wants the seeded legacy_offset parameter removed."
+  prompt: remove the parameter named legacy_offset
+  preconditions:
+    fixtures:
+    - tool: program_draft_upsert_parameters
+      arguments:
+        parameters:
+        - parameter_id: legacy_offset
+          type: float64
+          default: 0.0
+          description: Seed parameter inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - parameter: {id: legacy_offset, present: false}
+      - parameter: {id: velocity_scale, present: true}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: BB_add_specific
+  category: blackboard_add
+  detail_level: specific
+  intent: "The operator wants a new pose blackboard key."
+  prompt: add a blackboard key named target_pose of type pose
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: target_pose, present: true, type: stored_pose}   # v3 pose key type is stored_pose
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: BB_modify_medium
+  category: blackboard_modify
+  detail_level: medium
+  intent: "The operator wants the seeded grip_force key changed from integer to float."
+  prompt: change the type of grip_force to float
+  preconditions:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: grip_force
+          type: int64
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: grip_force, present: true, type: float64}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: BB_delete_specific
+  category: blackboard_delete
+  detail_level: specific
+  intent: "The operator wants the seeded scratch_value key deleted."
+  prompt: delete the blackboard key called scratch_value
+  preconditions:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: scratch_value
+          type: string
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: scratch_value, present: false}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: CUR_scene_add_static_fixture_not_runtime
+  category: current_scene_tool_routing
+  detail_level: medium
+  intent: "The operator wants a fixed safety wall as a static scene fixture, not a runtime tree node."
+  prompt: add a fixed 0.4 by 0.02 by 0.2 meter safety wall at x=0.2 y=-0.45 z=0.1
+  outcome:
+    clarify: none
+    draft:
+      # "Fixed" means a static fixture: it belongs in the Draft scene.
+      - scene_resource:
+          new: true
+          shape: {type: box, box_dimensions_m: [0.4, 0.02, 0.2]}
+          pose: {position_m: [0.2, -0.45, 0.1]}
+    unchanged: true          # includes: the tree gains no scene.upsert_object node (v1 forbidden tree_draft_insert_node)
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: CUR_scene_update_graspable_pose
+  category: current_scene_update
+  detail_level: specific
+  intent: "The operator wants the static graspable moved in the Draft scene, not changed at runtime."
+  prompt: move the static scene object graspable to [0.35, -0.25, 0.15] in the cell frame
+  original_prompt: move the static scene object graspable to [0.35, -0.25, 0.15] in the universe frame
+  port_notes:
+  - 'prompt ported: ''universe'' frame is gone; v3 scene poses use frame_ref cell_frame'
+  outcome:
+    clarify: none
+    draft:
+      - scene_resource:
+          id: graspable
+          present: true
+          shape: {type: box, box_dimensions_m: [0.1, 0.01, 0.01]}
+          pose: {frame_ref: {kind: cell_frame}, position_m: [0.35, -0.25, 0.15]}
+    unchanged: true          # includes: no scene.update_object_pose node added to the tree
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: CUR_runtime_remove_then_restore_graspable
+  category: current_runtime_scene_mutation
+  detail_level: specific
+  intent: "The operator wants the Program itself to remove graspable from the runtime scene at the end and upsert it back at its initial pose and size."
+  prompt: 'at the end of pick_and_place, remove graspable from the runtime scene
+
+    and then upsert it again at its initial scene pose and size
+
+    '
+  outcome:
+    clarify: none
+    draft:
+      # Runtime change: it belongs in the Program tree, as two scene nodes at the end of pick_and_place.
+      - node:
+          node_id: scene.remove_object
+          parent: pick_and_place
+          after: return_rest
+          parameters: {scene_resource_id: graspable}
+      - node:
+          node_id: scene.upsert_object
+          parent: pick_and_place
+          last_child: true
+          parameters:
+            scene_resource_id: graspable
+            shape.type: box
+            shape.box_dimensions_m: [0.1, 0.01, 0.01]
+            pose.position_m: [0.3, -0.3, 0.15]
+      - any_of:     # initial orientation is -45 deg yaw; quaternion or rpy both fulfil it
+          - - node: {node_id: scene.upsert_object, parent: pick_and_place, parameters: {pose.orientation.xyzw: [0.0, 0.0, -0.3826834, 0.9238795]}}
+          - - node: {node_id: scene.upsert_object, parent: pick_and_place, parameters: {pose.orientation.rpy_deg: [0.0, 0.0, -45.0]}}
+      # The static scene is not edited: graspable stays in the Draft scene as it was.
+      - scene_resource:
+          id: graspable
+          present: true
+          shape: {type: box, box_dimensions_m: [0.1, 0.01, 0.01]}
+          pose: {position_m: [0.3, -0.3, 0.15]}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true, must_contain: [runtime]}
+
+- id: CUR_runtime_update_graspable_pose_each_cycle
+  category: current_runtime_scene_mutation
+  detail_level: medium
+  intent: "The operator wants the Program to reset graspable's runtime pose to its start position after each cycle."
+  prompt: after each cycle, set graspable's runtime pose back to [0.3, -0.3, 0.15]
+  outcome:
+    # v2: the Program has no loop; one run of pick_and_place is the cycle, so the reset goes at its end.
+    # Wrapping in a repeat was not asked for. A question about "cycle" is acceptable.
+    clarify: allowed
+    clarification_answer: "Yes, at the end of the pick_and_place sequence."
+    draft:
+      - any_of:
+          - - node:
+                node_id: scene.update_object_pose
+                parent: pick_and_place
+                last_child: true
+                parameters: {scene_resource_id: graspable, pose.position_m: [0.3, -0.3, 0.15]}
+          - - node:
+                node_id: scene.upsert_object
+                parent: pick_and_place
+                last_child: true
+                parameters: {scene_resource_id: graspable, pose.position_m: [0.3, -0.3, 0.15]}
+      # Runtime change: the static Draft scene keeps graspable where it was.
+      - scene_resource:
+          id: graspable
+          present: true
+          pose: {position_m: [0.3, -0.3, 0.15]}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true, must_contain: [pose]}
+
+- id: CLARIFY_scene_remove_pronoun
+  category: clarification
+  detail_level: generic
+  intent: "The operator says 'remove it' with no referent; two scene objects are candidates."
+  prompt: remove it from the scene
+  outcome:
+    # v2: graspable and ground are both candidates; removing either would be arbitrary and lose work.
+    clarify: required
+    clarification_answer: "The graspable."
+    draft:
+      # After the answer: graspable gone, ground untouched.
+      - scene_resource: {id: graspable, present: false}
+      - scene_resource: {id: ground, present: true}
+    unchanged: true
+    diagnostics: allow_incomplete     # dangling graspable references in the tree after the requested removal
+    answer: {consistent: true}
+
+- id: CLARIFY_tree_wrap_pronoun
+  category: clarification
+  detail_level: generic
+  intent: "The operator wants some step wrapped in a retry but does not say which."
+  prompt: wrap that step in a retry
+  outcome:
+    # v2: the tree has twelve steps and no "that" from context; wrapping any one is arbitrary.
+    clarify: required
+    clarification_answer: "The close_gripper step."
+    draft:
+      - node:
+          node_id: retry
+          parent: pick_and_place
+          after: move_to_pick
+          children_node_ids: [gripper.command_position]
+      - node: {instance_id: close_gripper, node_id: gripper.command_position, parent_node_id: retry}
+      - scene_resource: {id: graspable, present: true}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: CLARIFY_motion_generic
+  category: clarification
+  detail_level: generic
+  intent: "The operator wants the robot to move 'over there' with no target given."
+  prompt: make the robot move over there
+  outcome:
+    # v2: no target is known; any motion node or scene change would be arbitrary and moves a robot.
+    # No clarification_answer: the next turn would need a real target and a scripted pose adds nothing.
+    clarify: required
+    draft:
+      - scene_resource: {id: graspable, present: true}
+      - scene_resource: {id: ground, present: true}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}

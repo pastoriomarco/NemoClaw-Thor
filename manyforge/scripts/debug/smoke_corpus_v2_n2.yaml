@@ -1,0 +1,1182 @@
+# ManyForge assistant smoke corpus v2: outcome form (ASSISTANT_CONTEXT_AND_OUTCOME_TESTS_PLAN.md, part B).
+# Rewritten from smoke_corpus_v021.yaml (same ids and intent); a case passes when the Draft shows the
+# requested result. Runner: smoke_corpus_v2.py (scorer: outcome_scorer.py). Merged from fragments g1-g3(+g4).
+schema_version: manyforge.assistant_smoke_corpus.v2
+ported_from: smoke_corpus.yaml (schema v0, baseline iter-32 2026-06-09)
+target: 'ManyForge 0.2.1 direct bridge: Program manyforge.program.v3, node catalog 3.0.0'
+scenario: examples/mock_ur10e_assistant_scene_authoring.scenario
+fresh_program_fixture:
+  tree:
+    node_id: sequence
+    instance_id: pick_and_place
+    parameters: {}
+    children:
+    - node_id: timer
+      instance_id: scaffold
+      parameters:
+        duration_s: 0.1
+      children: []
+  remove_scene_resources: all
+cases:
+
+# ===== fragment g4-new.yaml =====
+# Group g4: NEW cases (N2_*), outcome form (manyforge.assistant_smoke_corpus.v2).
+#
+# Scenario (default): examples/mock_ur10e_assistant_scene_authoring.scenario, extended 2026-11-09 into a
+# Mock pick-and-place workcell. Program unchanged: sequence pick_and_place with 12 flat children
+#   command_gripper, move_to_pick_approach, move_to_pick, close_gripper, attach_graspable, pick_retreat,
+#   move_to_drop_approach, move_to_drop, open_gripper, detach_graspable, drop_retreat, return_rest.
+#   Moves bind velocity_scale to the Program parameter velocity_scale (0.5). Scene: graspable, ground.
+#   No blackboard keys, no contact policies.
+# Deployment additions: Mock I/O device cell_io (command target io)
+#   inputs : part_present (pick-table part sensor, starts true), clamp_pressure_ok (drop-fixture clamp
+#            pressure switch, follows clamp_valve after 300 ms), touch_probe, start_button, zone_occupied
+#            (area scanner)
+#   outputs: clamp_valve, alarm_light, ready_light
+#   rule   : zone_intrusion (all_motion stop while zone_occupied is true, active at start)
+# Targets: arm = {component_id: ur10e_robot, command_target_id: arm} (base frame "base");
+#   gripper = {component_id: robotiq_2f_140, command_target_id: gripper} (frame "tcp").
+# Robotiq 2F-140 positions: open = named_preset open or angular 0.0 rad; closed = named_preset closed or
+#   angular 0.66 rad (as in the demo Program); both encodings are accepted where the prompt says open/closed.
+#
+# scenario: sim -> examples/sim_ur10e_assistant_scene_authoring.scenario (unchanged; root sequence
+#   isaac_light_cycle: set_cheese_initial_pose, play_simulation, wait_for_simulation, open_gripper_start, ...
+#   return_rest, reset_simulation, wait_after_reset (timer 3 s), pause_simulation).
+#
+# Check forms beyond the plan appendix. Forms from g2 reused: node.parent: null; node_id as a list (any of);
+# node.ancestor; node.value_sources; node.effective_parameters; {max_exclusive: x}; subtree_order;
+# children_order: any. Forms NEW in g4 (the scorer must support or reject them):
+#   node.ancestor_node_id: X        some ancestor of the node has node_id X (X may be a list: any of).
+#   subtree_order.root_node_id: X   the root is the (single) new node with node_id X, instead of an instance id.
+#   subtree_order.order entries     may be a node match {node_id, parameters?, value_sources?} (first
+#                                   pre-order match) as well as an instance id; the entries must appear in
+#                                   this pre-order (other nodes may sit between them).
+#   parameters keys with list index 'path[-2].position_m', 'path[-1].position_m'.
+#   {min_exclusive: x}              in place of a number.
+#   blackboard_key without key      any new key of that type is present (model chooses the name).
+#   parameter without id            any new parameter matching type/default is present.
+#   outcome.allow_new_node_ids      with unchanged: true, extra NEW nodes with these node_ids (control-flow
+#                                   glue such as sequence/fallback) are tolerated beyond the checked ones.
+#   scenario: sim                   the case runs on the sim scenario below instead of the default.
+# Fixtures use the Draft mutation tools as in v1 (blackboard_draft_upsert_keys,
+# program_draft_upsert_parameters, program_draft_upsert_contact_policies; Composer computes the contact
+# policy version).
+
+# ---------------------------------------------------------------- I/O ---------------------------------------
+- id: N2_IO_check_input_specific
+  category: n2_io
+  detail_level: specific
+  intent: "Check that the pick-table part sensor is on right before the robot approaches the pick."
+  prompt: right before move_to_pick_approach, check that the part_present input on cell_io is on
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: io.check_input, parent: pick_and_place, before: move_to_pick_approach,
+               parameters: {signal.component_id: cell_io, signal.signal_name: part_present, expected_value: true}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_IO_get_input_specific
+  category: n2_io
+  detail_level: specific
+  intent: "Record the start button state in a new bool key at the start of the cycle."
+  prompt: at the start of pick_and_place, read the start_button input into a new bool blackboard key called start_pressed
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: start_pressed, present: true, type: bool}
+      - node: {node_id: io.get_input, parent: pick_and_place, index: 0,
+               parameters: {signal.component_id: cell_io, signal.signal_name: start_button, output_key: start_pressed}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_IO_wait_for_input_medium
+  category: n2_io
+  detail_level: medium
+  intent: "The cycle starts only after the operator presses the start button, waiting at most 30 s."
+  prompt: make the cycle begin by waiting up to 30 seconds for the operator to press the start button
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: io.wait_for_input, parent: pick_and_place, index: 0,
+               parameters: {signal.component_id: cell_io, signal.signal_name: start_button, expected_value: true,
+                            timeout_s: 30.0}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_IO_clear_outside_change_specific
+  category: n2_io
+  detail_level: specific
+  intent: "Clear the changed-outside flag of the clamp valve output at the start of each cycle."
+  prompt: someone sometimes switches the clamp valve by hand from the I/O panel; at the start of the cycle, clear the changed-outside flag of the clamp_valve output
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: io.clear_outside_change, parent: pick_and_place, index: 0,
+               parameters: {signal.component_id: cell_io, signal.signal_name: clamp_valve}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_IO_part_check_generic
+  category: n2_io
+  detail_level: generic
+  intent: "Check the part sensor somewhere before the grasp."
+  prompt: check the part sensor before picking
+  preconditions: {}
+  outcome:
+    # Acting directly is fine: a check (or wait) of part_present == true anywhere before the gripper closes.
+    clarify: allowed
+    clarification_answer: Check that part_present on cell_io is on, right before move_to_pick_approach.
+    draft:
+      - any_of:
+          - - node: {node_id: [io.check_input, io.wait_for_input], parent: pick_and_place, before: move_to_pick_approach,
+                     parameters: {signal.component_id: cell_io, signal.signal_name: part_present, expected_value: true}}
+          - - node: {node_id: [io.check_input, io.wait_for_input], parent: pick_and_place, before: move_to_pick,
+                     parameters: {signal.component_id: cell_io, signal.signal_name: part_present, expected_value: true}}
+          - - node: {node_id: [io.check_input, io.wait_for_input], parent: pick_and_place, before: close_gripper,
+                     parameters: {signal.component_id: cell_io, signal.signal_name: part_present, expected_value: true}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- logic -------------------------------------
+- id: N2_LOGIC_set_value_specific
+  category: n2_logic
+  detail_level: specific
+  intent: "Mark the cycle as done by writing true to cycle_ok at the end."
+  prompt: at the end of pick_and_place, set the blackboard key cycle_ok to true
+  preconditions:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: cycle_ok
+          type: bool
+          access: read_write
+          persistence: run
+          initial: false
+          description: Seed blackboard key inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: logic.set_value, parent: pick_and_place, last_child: true,
+               parameters: {key: cycle_ok, value: true}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_LOGIC_check_condition_specific
+  category: n2_logic
+  detail_level: specific
+  intent: "Gate the cycle on the bool Program parameter enable_cycle."
+  prompt: at the start of pick_and_place, add a condition check that passes only when the Program parameter enable_cycle is true
+  preconditions:
+    fixtures:
+    - tool: program_draft_upsert_parameters
+      arguments:
+        parameters:
+        - parameter_id: enable_cycle
+          type: bool
+          default: true
+          description: Seed parameter inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: logic.check_condition, parent: pick_and_place, index: 0,
+               value_sources: {condition: {kind: program_parameter, reference: enable_cycle}}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_LOGIC_cell_enabled_generic
+  category: n2_logic
+  detail_level: generic
+  intent: "Run the cycle only when the cell_enabled Program parameter is true."
+  prompt: only run the cycle when the cell is enabled
+  preconditions:
+    fixtures:
+    - tool: program_draft_upsert_parameters
+      arguments:
+        parameters:
+        - parameter_id: cell_enabled
+          type: bool
+          default: true
+          description: Seed parameter inserted by the smoke harness.
+  outcome:
+    clarify: allowed
+    clarification_answer: Use the Program parameter cell_enabled and check it as the first step of pick_and_place.
+    draft:
+      - any_of:
+          - - node: {node_id: logic.check_condition, parent: pick_and_place, index: 0,
+                     value_sources: {condition: {kind: program_parameter, reference: cell_enabled}}}
+          # the check as the first child of a new root sequence above pick_and_place is the same behaviour
+          - - node: {node_id: sequence, parent: null, children_node_ids: [logic.check_condition, sequence]}
+            - node: {node_id: logic.check_condition, parent_node_id: sequence,
+                     value_sources: {condition: {kind: program_parameter, reference: cell_enabled}}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- control flow ------------------------------
+- id: N2_CTRL_inverter_specific
+  category: n2_control
+  detail_level: specific
+  intent: "Fail the cycle at the start if the gripper reports the failed state."
+  prompt: at the start of pick_and_place, make sure the Robotiq gripper is not in the failed state by checking its status for failed and inverting the result
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: inverter, parent: pick_and_place, index: 0, children_node_ids: [gripper.check_status]}
+      - node: {node_id: gripper.check_status, parent_node_id: inverter,
+               parameters: {expected_state: failed, target.component_id: robotiq_2f_140, target.command_target_id: gripper}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_CTRL_zone_not_occupied_medium
+  category: n2_control
+  detail_level: medium
+  intent: "The cycle fails at once when the area scanner reports the zone occupied."
+  prompt: fail the cycle right at the start if the area scanner reports the zone occupied
+  preconditions: {}
+  outcome:
+    # an inverted check of zone_occupied == true and a plain check of zone_occupied == false are equivalent
+    clarify: allowed
+    clarification_answer: Check zone_occupied on cell_io as the first step and fail if it is on.
+    draft:
+      - any_of:
+          - - node: {node_id: inverter, parent: pick_and_place, index: 0, children_node_ids: [io.check_input]}
+            - node: {node_id: io.check_input, parent_node_id: inverter,
+                     parameters: {signal.component_id: cell_io, signal.signal_name: zone_occupied, expected_value: true}}
+          - - node: {node_id: io.check_input, parent: pick_and_place, index: 0,
+                     parameters: {signal.component_id: cell_io, signal.signal_name: zone_occupied, expected_value: false}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- motion ------------------------------------
+- id: N2_MOTION_cartesian_path_medium
+  category: n2_motion
+  detail_level: medium
+  intent: "After the pick retreat, move in a straight line through two given base-frame points."
+  prompt: after pick_retreat, add one straight-line Cartesian move of the UR10e through (0.3, 0.0, 0.3) and then (0.3, 0.3, 0.3) in its base frame, keeping the tool pointing down
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      # the last two waypoints are the stated points (a leading start waypoint is allowed); orientation is
+      # not checked because "pointing down" leaves the yaw open.
+      - node:
+          node_id: motion.follow_cartesian_path
+          parent: pick_and_place
+          after: pick_retreat
+          parameters:
+            target.component_id: ur10e_robot
+            target.command_target_id: arm
+            base_frame.frame_id: base
+            'path[-2].position_m': [0.3, 0.0, 0.3]
+            'path[-1].position_m': [0.3, 0.3, 0.3]
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_MOTION_move_until_signal_specific
+  category: n2_motion
+  detail_level: specific
+  intent: "Descend toward the part and stop softly when the touch probe turns on."
+  prompt: after move_to_pick_approach, add a move of the UR10e down to (0.3, -0.3, 0.17) in its base frame, tool pointing down (rpy 180, 0, -180), that stops with soft_on_path as soon as the touch_probe input on cell_io turns on
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node:
+          node_id: motion.move_until_signal
+          parent: pick_and_place
+          after: move_to_pick_approach
+          parameters:
+            target.component_id: ur10e_robot
+            goal.position_m: [0.3, -0.3, 0.17]
+            goal.orientation.rpy_deg: [180.0, 0.0, -180.0]
+            stop_mode: soft_on_path
+            interrupt_condition.compare.operand.signal.component_id: cell_io
+            interrupt_condition.compare.operand.signal.signal_name: touch_probe
+            interrupt_condition.compare.value: true
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_MOTION_probe_search_specific
+  category: n2_motion
+  detail_level: specific
+  intent: "Probe toward the part top under the grasp contact policy, stopping on the touch probe."
+  prompt: after move_to_pick_approach, add a probe search of the UR10e toward (0.3, -0.3, 0.14) in its base frame, tool pointing down (rpy 180, 0, -180), using contact policy grasp_contact on graspable; it stops with soft_on_path when touch_probe on cell_io turns on
+  preconditions:
+    fixtures: &grasp_contact_fixtures
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: pick_target
+          type: scene_resource
+          access: read_write
+          persistence: run
+          initial: graspable
+          description: Seed blackboard key inserted by the smoke harness.
+    - tool: program_draft_upsert_contact_policies
+      arguments:
+        contact_policies:
+        - api_version: manyforge.contact_policy.v1
+          policy_id: grasp_contact
+          mode: contact_grasp
+          sensing_mode: geometry_only
+          default_unmatched_response: hard_stop
+          zones:
+          - zone_id: fingertips
+            body_pairs:
+            - body_a: {kind: motion_endpoint}
+              body_b: {kind: runtime_object, runtime_object_id: pick_target}
+            max_penetration_m: 0.002
+            terminal_window_start_fraction: 0.8
+            violation_response: hard_stop
+  outcome:
+    clarify: none
+    draft:
+      - node:
+          node_id: motion.probe_search
+          parent: pick_and_place
+          after: move_to_pick_approach
+          parameters:
+            target.component_id: ur10e_robot
+            goal.position_m: [0.3, -0.3, 0.14]
+            goal.orientation.rpy_deg: [180.0, 0.0, -180.0]
+            contact_policy_id: grasp_contact
+            contact_scene_resource_id: graspable
+            stop_mode: soft_on_path
+            interrupt_condition.compare.operand.signal.component_id: cell_io
+            interrupt_condition.compare.operand.signal.signal_name: touch_probe
+            interrupt_condition.compare.value: true
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_MOTION_set_tcp_specific
+  category: n2_motion
+  detail_level: specific
+  intent: "Make the gripper's default TCP the arm's active TCP at the start."
+  prompt: at the start of pick_and_place, make the Robotiq gripper's default TCP the active TCP of the UR10e arm
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: motion.set_tcp, parent: pick_and_place, index: 0,
+               parameters: {target.component_id: ur10e_robot, target.command_target_id: arm,
+                            tcp.kind: default_of_target, tcp.target.component_id: robotiq_2f_140,
+                            tcp.target.command_target_id: gripper}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_MOTION_probe_top_generic
+  category: n2_motion
+  detail_level: generic
+  intent: "Find the top of the part with the touch probe between the approach and the grasp."
+  prompt: before grasping, feel for the top of the part with the touch probe
+  preconditions: {}
+  outcome:
+    # Acting directly: a signal-stopped move on touch_probe between the approach and close_gripper; the goal
+    # pose is the model's choice then. (probe_search would need a contact policy, which this Program lacks.)
+    clarify: allowed
+    clarification_answer: Use a move from the approach down to (0.3, -0.3, 0.14) in the UR10e base frame, tool pointing down, that stops when touch_probe turns on; put it right after move_to_pick_approach.
+    draft:
+      - any_of:
+          - - node: {node_id: motion.move_until_signal, parent: pick_and_place, after: move_to_pick_approach,
+                     parameters: {interrupt_condition.compare.operand.signal.signal_name: touch_probe,
+                                  interrupt_condition.compare.value: true}}
+          - - node: {node_id: motion.move_until_signal, parent: pick_and_place, before: close_gripper,
+                     parameters: {interrupt_condition.compare.operand.signal.signal_name: touch_probe,
+                                  interrupt_condition.compare.value: true}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- scene -------------------------------------
+- id: N2_SCENE_add_object_runtime_specific
+  category: n2_scene
+  detail_level: specific
+  intent: "At the end of the cycle the Program adds a spare tote box to the planning scene."
+  prompt: the operator puts a spare tote at (0.0, 0.5, 0.05) during each cycle; at the end of pick_and_place, add it to the scene as a 0.3 x 0.2 x 0.1 m box called spare_tote, in the cell frame
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: scene.add_object, parent: pick_and_place, last_child: true,
+               parameters: {scene_resource_id: spare_tote, shape.type: box, shape.box_dimensions_m: [0.3, 0.2, 0.1],
+                            pose.position_m: [0.0, 0.5, 0.05]}}
+      # the Program declares every resource a node names (as in sim_ur10e_runtime_collision_stop), so the
+      # Draft scene also holds spare_tote; without it the Draft shows an error diagnostic.
+      - scene_resource: {id: spare_tote, present: true, shape: {type: box, box_dimensions_m: [0.3, 0.2, 0.1]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_SCENE_get_object_pose_specific
+  category: n2_scene
+  detail_level: specific
+  intent: "Store graspable's current pose in a new pose key at the start of the cycle."
+  prompt: at the start of pick_and_place, store the current pose of graspable in a new blackboard key graspable_pose
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: graspable_pose, present: true, type: stored_pose}
+      - node: {node_id: scene.get_object_pose, parent: pick_and_place, index: 0,
+               parameters: {scene_resource_id: graspable, output_key: graspable_pose}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_SCENE_remember_pick_generic
+  category: n2_scene
+  detail_level: generic
+  intent: "Keep the part's pose from before the pick in a pose key."
+  prompt: remember where the part was before we picked it
+  preconditions: {}
+  outcome:
+    clarify: allowed
+    clarification_answer: Store graspable's pose in a new key called pick_pose right before close_gripper.
+    draft:
+      - blackboard_key: {present: true, type: stored_pose}
+      - node: {node_id: scene.get_object_pose, parent: pick_and_place, parameters: {scene_resource_id: graspable}}
+      - subtree_order: {root: pick_and_place, order: [{node_id: scene.get_object_pose}, attach_graspable]}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- rules -------------------------------------
+- id: N2_RULES_set_active_specific
+  category: n2_rules
+  detail_level: specific
+  intent: "Make sure the area-scanner rule is active when the cycle starts."
+  prompt: at the start of pick_and_place, make sure the zone_intrusion rule is active
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: rules.set_active, parent: pick_and_place, index: 0,
+               parameters: {rule_id: zone_intrusion, active: true}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_RULES_mute_at_drop_generic
+  category: n2_rules
+  detail_level: generic
+  intent: "Mute the area-scanner rule while the robot works at the drop station, and re-arm it afterwards."
+  prompt: the area scanner should not stop the robot while it is at the drop station
+  preconditions: {}
+  outcome:
+    clarify: allowed
+    clarification_answer: Deactivate zone_intrusion right before move_to_drop_approach and activate it again right after drop_retreat.
+    draft:
+      - any_of:
+          - - node: {node_id: rules.set_active, parent: pick_and_place, before: move_to_drop_approach,
+                     parameters: {rule_id: zone_intrusion, active: false}}
+          - - node: {node_id: rules.set_active, parent: pick_and_place, before: move_to_drop,
+                     parameters: {rule_id: zone_intrusion, active: false}}
+      - any_of:
+          - - node: {node_id: rules.set_active, parent: pick_and_place, after: drop_retreat,
+                     parameters: {rule_id: zone_intrusion, active: true}}
+          - - node: {node_id: rules.set_active, parent: pick_and_place, after: detach_graspable,
+                     parameters: {rule_id: zone_intrusion, active: true}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- geometry ----------------------------------
+- id: N2_GEOM_offset_pose_specific
+  category: n2_geometry
+  detail_level: specific
+  intent: "Compute a pose 5 cm along the z axis of the stored pick pose into a new key."
+  prompt: after command_gripper, offset the pose in pick_pose by 5 cm along its z axis with no rotation and store the result in a new key above_pick_pose
+  preconditions:
+    fixtures:
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: pick_pose
+          type: stored_pose
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: above_pick_pose, present: true, type: stored_pose}
+      - node: {node_id: geometry.offset_pose, parent: pick_and_place, after: command_gripper,
+               value_sources: {pose: {kind: blackboard_key, reference: pick_pose}},
+               parameters: {offset.position_m: [0.0, 0.0, 0.05], offset.rpy_deg: [0.0, 0.0, 0.0],
+                            output_key: above_pick_pose}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_GEOM_check_pose_bounds_specific
+  category: n2_geometry
+  detail_level: specific
+  intent: "Check that the stored part pose lies inside the pick-table box before the approach."
+  prompt: right before move_to_pick_approach, check that the pose in graspable_pose is inside the pick-table area x 0.1 to 0.5 m, y -0.5 to -0.1 m, z 0.0 to 0.3 m in the cell frame
+  preconditions:
+    fixtures: &graspable_pose_fixture
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: graspable_pose
+          type: stored_pose
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: geometry.check_pose_bounds, parent: pick_and_place, before: move_to_pick_approach,
+               value_sources: {pose: {kind: blackboard_key, reference: graspable_pose}},
+               parameters: {frame_ref.kind: cell_frame, min_position_m: [0.1, -0.5, 0.0],
+                            max_position_m: [0.5, -0.1, 0.3]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_GEOM_check_pose_distance_specific
+  category: n2_geometry
+  detail_level: specific
+  intent: "Check the measured part pose is within 2 cm and 5 degrees of the taught pose."
+  prompt: right before move_to_pick_approach, check that graspable_pose is within 2 cm and 5 degrees of taught_pick_pose
+  preconditions:
+    fixtures: &two_pose_fixture
+    - tool: blackboard_draft_upsert_keys
+      arguments:
+        keys:
+        - key: graspable_pose
+          type: stored_pose
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+        - key: taught_pick_pose
+          type: stored_pose
+          access: read_write
+          persistence: run
+          description: Seed blackboard key inserted by the smoke harness.
+  outcome:
+    clarify: none
+    draft:
+      # 5 degrees = 0.0873 rad; the two keys may be given in either order.
+      - any_of:
+          - - node: {node_id: geometry.check_pose_distance, parent: pick_and_place, before: move_to_pick_approach,
+                     parameters: {pose_key_a: graspable_pose, pose_key_b: taught_pick_pose,
+                                  translation_threshold_m: 0.02, rotation_threshold_rad: 0.0873}}
+          - - node: {node_id: geometry.check_pose_distance, parent: pick_and_place, before: move_to_pick_approach,
+                     parameters: {pose_key_a: taught_pick_pose, pose_key_b: graspable_pose,
+                                  translation_threshold_m: 0.02, rotation_threshold_rad: 0.0873}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_GEOM_part_where_taught_generic
+  category: n2_geometry
+  detail_level: generic
+  intent: "Compare the measured part pose with the taught pose before the grasp; thresholds are open."
+  prompt: make sure the part is where we taught it before picking
+  preconditions:
+    fixtures: *two_pose_fixture
+  outcome:
+    clarify: allowed
+    clarification_answer: Compare graspable_pose with taught_pick_pose, within 1 cm and 3 degrees, right before move_to_pick_approach.
+    draft:
+      - any_of:
+          - - node: {node_id: geometry.check_pose_distance, parent: pick_and_place,
+                     parameters: {pose_key_a: graspable_pose, pose_key_b: taught_pick_pose}}
+          - - node: {node_id: geometry.check_pose_distance, parent: pick_and_place,
+                     parameters: {pose_key_a: taught_pick_pose, pose_key_b: graspable_pose}}
+      - subtree_order: {root: pick_and_place, order: [{node_id: geometry.check_pose_distance}, close_gripper]}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- kernel ------------------------------------
+- id: N2_KERNEL_stop_operation_specific
+  category: n2_kernel
+  detail_level: specific
+  intent: "When the drop retreat fails, stop whatever the arm is still doing."
+  prompt: if drop_retreat fails, stop whatever the UR10e arm is still doing
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: fallback, parent: pick_and_place, after: detach_graspable,
+               children_node_ids: [motion.move_to_pose, kernel.stop_operation]}
+      - node: {instance_id: drop_retreat, parent_node_id: fallback}
+      - node: {node_id: kernel.stop_operation, parent_node_id: fallback,
+               parameters: {target.component_id: ur10e_robot, target.command_target_id: arm}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_KERNEL_reset_operation_specific
+  category: n2_kernel
+  detail_level: specific
+  intent: "Reset the arm's current operation right before the return-to-rest move."
+  prompt: right before return_rest, reset the UR10e arm's current operation so the return move starts clean
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: kernel.reset_operation, parent: pick_and_place, before: return_rest,
+               parameters: {target.component_id: ur10e_robot, target.command_target_id: arm}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_KERNEL_halt_on_drop_failure_generic
+  category: n2_kernel
+  detail_level: generic
+  intent: "Halt when the drop move fails."
+  prompt: halt the cell if the drop move fails
+  preconditions: {}
+  outcome:
+    # Acting directly may use a full stop or a stop of the arm's operation; the scripted answer asks for
+    # the full stop.
+    clarify: allowed
+    clarification_answer: Do a full stop of the whole cell when move_to_drop fails.
+    draft:
+      - node: {node_id: fallback, parent: pick_and_place, after: move_to_drop_approach}
+      - node: {instance_id: move_to_drop, parent_node_id: fallback}
+      - node: {node_id: [kernel.full_stop, kernel.stop_operation], parent_node_id: fallback}
+    unchanged: true
+    allow_new_node_ids: [sequence]
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- planning ----------------------------------
+- id: N2_PLAN_pick_sequence_specific
+  category: n2_planning
+  detail_level: specific
+  intent: "Plan, without moving, a pick of graspable and keep the plan in pick_plan."
+  prompt: at the start of pick_and_place, plan (without moving) a pick of graspable for the UR10e arm with the Robotiq gripper; carry it on the Robotiq tcp frame, close the gripper to its closed preset, use contact policy grasp_contact, and store the plan in a new key pick_plan
+  preconditions:
+    fixtures: *grasp_contact_fixtures
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: pick_plan, present: true, type: pick_planning_result}
+      - any_of:
+          - - node:
+                node_id: planning.plan_pick_sequence
+                parent: pick_and_place
+                index: 0
+                parameters: {target.component_id: ur10e_robot, tool_target.component_id: robotiq_2f_140,
+                             carrier_frame_ref.component_id: robotiq_2f_140, carrier_frame_ref.frame_id: tcp,
+                             selected_object_id: graspable, contact_policy_id: grasp_contact, output_key: pick_plan,
+                             tool_position.kind: named_preset, tool_position.name: closed}
+          - - node:
+                node_id: planning.plan_pick_sequence
+                parent: pick_and_place
+                index: 0
+                parameters: {target.component_id: ur10e_robot, tool_target.component_id: robotiq_2f_140,
+                             carrier_frame_ref.component_id: robotiq_2f_140, carrier_frame_ref.frame_id: tcp,
+                             selected_object_id: graspable, contact_policy_id: grasp_contact, output_key: pick_plan,
+                             tool_position.kind: angular_rad, tool_position.value_rad: 0.66}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_PLAN_place_sequence_specific
+  category: n2_planning
+  detail_level: specific
+  intent: "Plan, without moving, placing graspable at the drop pose and keep the plan in place_plan."
+  prompt: after pick_retreat, plan (without moving) placing graspable at (0.3, 0.3, 0.05) in the UR10e base frame with the tool pointing down (rpy 180, 0, -180), opening the gripper to its open preset; carry it on the Robotiq tcp frame and store the plan in a new key place_plan
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: place_plan, present: true, type: pick_planning_result}
+      - any_of:
+          - - node:
+                node_id: planning.plan_place_sequence
+                parent: pick_and_place
+                after: pick_retreat
+                parameters: {target.component_id: ur10e_robot, tool_target.component_id: robotiq_2f_140,
+                             carrier_frame_ref.frame_id: tcp, selected_object_id: graspable,
+                             place_pose.position_m: [0.3, 0.3, 0.05], place_pose.orientation.rpy_deg: [180.0, 0.0, -180.0],
+                             output_key: place_plan, tool_position.kind: named_preset, tool_position.name: open}
+          - - node:
+                node_id: planning.plan_place_sequence
+                parent: pick_and_place
+                after: pick_retreat
+                parameters: {target.component_id: ur10e_robot, tool_target.component_id: robotiq_2f_140,
+                             carrier_frame_ref.frame_id: tcp, selected_object_id: graspable,
+                             place_pose.position_m: [0.3, 0.3, 0.05], place_pose.orientation.rpy_deg: [180.0, 0.0, -180.0],
+                             output_key: place_plan, tool_position.kind: angular_rad, tool_position.value_rad: 0.0}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_PLAN_feasible_first_generic
+  category: n2_planning
+  detail_level: generic
+  intent: "Plan the pick of graspable before the arm moves, to know up front that it is feasible."
+  prompt: check that the pick is feasible before the robot starts moving
+  preconditions:
+    fixtures: *grasp_contact_fixtures
+  outcome:
+    clarify: allowed
+    clarification_answer: Plan the pick of graspable at the start of pick_and_place with the grasp_contact policy, closing the gripper to its closed preset, carried on the Robotiq tcp frame, and store the plan in pick_plan.
+    draft:
+      - blackboard_key: {present: true, type: pick_planning_result}
+      - node: {node_id: planning.plan_pick_sequence, parent: pick_and_place,
+               parameters: {selected_object_id: graspable, contact_policy_id: grasp_contact}}
+      - subtree_order: {root: pick_and_place, order: [{node_id: planning.plan_pick_sequence}, move_to_pick_approach]}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- recovery ----------------------------------
+- id: N2_RECOVERY_apply_specific
+  category: n2_recovery
+  detail_level: specific
+  intent: "On a failed descent to the pick, ask the Kernel to retry the motion from the current state."
+  prompt: if move_to_pick fails, submit the retry_motion_from_current_state recovery action for the UR10e arm
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: fallback, parent: pick_and_place, after: move_to_pick_approach,
+               children_node_ids: [motion.move_to_pose, recovery.apply_offered_action]}
+      - node: {instance_id: move_to_pick, parent_node_id: fallback}
+      - node: {node_id: recovery.apply_offered_action, parent_node_id: fallback,
+               parameters: {target.component_id: ur10e_robot, target.command_target_id: arm,
+                            recovery_action: retry_motion_from_current_state}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_RECOVERY_replan_generic
+  category: n2_recovery
+  detail_level: generic
+  intent: "When the drop move is stopped, replan it from where it stopped."
+  prompt: when the drop move gets stopped, let it replan from where it stopped
+  preconditions: {}
+  outcome:
+    clarify: allowed
+    clarification_answer: Yes, if move_to_drop fails, apply the replan_from_stopped_state recovery to the UR10e arm.
+    draft:
+      - node: {node_id: fallback, parent: pick_and_place, after: move_to_drop_approach}
+      - node: {instance_id: move_to_drop, parent_node_id: fallback}
+      - node: {node_id: recovery.apply_offered_action, parent_node_id: fallback,
+               parameters: {target.component_id: ur10e_robot, recovery_action: replan_from_stopped_state}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ---------------------------------------------------------------- simulation (sim scenario) -----------------
+- id: N2_SIM_step_specific
+  category: n2_simulation
+  detail_level: specific
+  scenario: sim
+  intent: "After the reset, advance the simulator 180 steps instead of waiting 3 seconds."
+  prompt: after reset_simulation, replace the 3-second wait_after_reset with stepping the simulator 180 steps
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node_absent: {instance_id: wait_after_reset}
+      - node: {node_id: simulation.step, parent: isaac_light_cycle, after: reset_simulation, parameters: {steps: 180}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_SIM_set_entity_pose_specific
+  category: n2_simulation
+  detail_level: specific
+  scenario: sim
+  intent: "Also place the soup can at a given upright pose in the simulator at the start."
+  prompt: right after set_cheese_initial_pose, also put the soup can in the simulator at (-0.35, 0.25, 0.08) in the cell frame, upright (rpy 0, 0, 0)
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: simulation.set_entity_pose, parent: isaac_light_cycle, after: set_cheese_initial_pose,
+               parameters: {scene_resource_id: isaac_soup_can, pose.frame_ref.kind: cell_frame,
+                            pose.position_m: [-0.35, 0.25, 0.08], pose.orientation.rpy_deg: [0.0, 0.0, 0.0]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_SIM_set_state_specific
+  category: n2_simulation
+  detail_level: specific
+  scenario: sim
+  intent: "Pause the simulator before it is reset at the end of the cycle."
+  prompt: pause the simulator right before reset_simulation
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: simulation.set_state, parent: isaac_light_cycle, before: reset_simulation,
+               parameters: {state: pause}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_SIM_clean_start_generic
+  category: n2_simulation
+  detail_level: generic
+  scenario: sim
+  intent: "Reset the simulation at the very start, so an aborted run never leaves a dirty simulation behind."
+  prompt: make sure each run starts from a clean simulation, even if the last run was aborted halfway
+  preconditions: {}
+  outcome:
+    # The reset at the end does not run after an abort, so a reset is needed first; it must come before
+    # set_cheese_initial_pose, which a later reset would undo.
+    clarify: allowed
+    clarification_answer: Reset the simulation as the very first step of isaac_light_cycle.
+    draft:
+      - node: {node_id: simulation.reset, parent: isaac_light_cycle, index: 0}
+      - node: {instance_id: reset_simulation, parent: isaac_light_cycle}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+# ================================================================ operator tasks ============================
+- id: N2_TASK_part_gate_alarm
+  category: n2_task
+  detail_level: medium
+  intent: "Pick only when a part is present: wait up to 10 s for the part sensor, otherwise raise the alarm instead of picking."
+  prompt: only pick if the part sensor sees a part; otherwise wait up to 10 s for one, and if none arrives, raise the alarm output instead of picking
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: io.wait_for_input, ancestor: pick_and_place, ancestor_node_id: fallback,
+               parameters: {signal.component_id: cell_io, signal.signal_name: part_present, expected_value: true,
+                            timeout_s: 10.0}}
+      - node: {node_id: io.set_output, ancestor: pick_and_place, ancestor_node_id: fallback,
+               parameters: {signal.component_id: cell_io, signal.signal_name: alarm_light, value: true}}
+      - subtree_order: {root: pick_and_place,
+                        order: [{node_id: io.wait_for_input}, {node_id: io.set_output}, move_to_pick_approach]}
+    # Whether the alarm branch then ends the cycle (no pick) is part of the intent; with the free structure
+    # it is judged from the answer and the evidence review, not by a static check.
+    unchanged: true
+    allow_new_node_ids: [sequence, fallback, inverter, io.check_input, logic.check_condition, kernel.full_stop,
+                         kernel.stop_operation]
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_clamp_retry
+  category: n2_task
+  detail_level: medium
+  intent: "Clamp the part at the drop fixture and confirm the clamp pressure, retrying the clamp step once."
+  prompt: 'at the drop, right before open_gripper: switch the clamp valve on, then check the clamp pressure switch; if the pressure is not ok, try once more'
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      # "try once more" = 2 attempts in total (retry.num_attempts counts total child runs)
+      - node: {node_id: retry, parent: pick_and_place, before: open_gripper, parameters: {num_attempts: 2}}
+      - node: {node_id: io.set_output, ancestor_node_id: retry,
+               parameters: {signal.component_id: cell_io, signal.signal_name: clamp_valve, value: true}}
+      - node: {node_id: [io.check_input, io.wait_for_input], ancestor_node_id: retry,
+               parameters: {signal.component_id: cell_io, signal.signal_name: clamp_pressure_ok, expected_value: true}}
+      - subtree_order: {root_node_id: retry, order: [{node_id: io.set_output}, {node_id: [io.check_input, io.wait_for_input]}]}
+    unchanged: true
+    allow_new_node_ids: [sequence, timer]
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_slow_final_approach
+  category: n2_task
+  detail_level: medium
+  intent: "Run only the final descent to the pick at 30% speed; the other moves keep their speed."
+  prompt: slow down to 30% for the final approach to the pick
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {instance_id: move_to_pick, effective_parameters: {velocity_scale: 0.3}}
+      - node: {instance_id: move_to_pick_approach, value_sources: {velocity_scale: {kind: program_parameter, reference: velocity_scale}}}
+      - parameter: {id: velocity_scale, present: true, default: 0.5}
+      # a new float64 parameter (default 0.3) bound to move_to_pick is fine too; first alternative wins
+      - any_of:
+          - - parameter: {present: true, type: float64, default: 0.3}
+          - []
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_straight_line_drop
+  category: n2_task
+  detail_level: medium
+  intent: "The descent from the drop approach to the drop pose becomes a straight-line Cartesian move."
+  prompt: make the move down to the drop a straight-line move
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      # The Cartesian path takes the place of move_to_drop (immediately between the approach and
+      # open_gripper, so no joint-space move_to_pose remains there) and ends at the drop pose
+      # (0.3, 0.3, 0.05) in the base frame, stated absolutely or relative to that pose.
+      - node: {node_id: motion.follow_cartesian_path, parent: pick_and_place, after: move_to_drop_approach,
+               before: open_gripper}
+      # move_to_drop is removed, or kept as the same instance with its kind changed
+      - any_of:
+          - - node_absent: {instance_id: move_to_drop}
+          - - node: {instance_id: move_to_drop, node_id: motion.follow_cartesian_path}
+      - any_of:
+          - - node: {node_id: motion.follow_cartesian_path, parameters: {'path[-1].position_m': [0.3, 0.3, 0.05]}}
+          - - node: {node_id: motion.follow_cartesian_path,
+                     parameters: {target_mode: relative, target_reference.pose.position_m: [0.3, 0.3, 0.05],
+                                  'path[-1].position_m': [0.0, 0.0, 0.0]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_offset_pick_up_5cm
+  category: n2_task
+  detail_level: medium
+  intent: "Raise the grasp point 5 cm above its current relative offset from graspable."
+  prompt: offset the pick pose 5 cm up
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      # move_to_pick is relative to graspable at z 0.025 (graspable's z is up), so 5 cm up is z 0.075.
+      - node: {instance_id: move_to_pick,
+               parameters: {target_mode: relative, target_reference.scene_resource_id: graspable,
+                            goal.position_m: [0.0, 0.0, 0.075]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_fingers_hit_table_generic
+  category: n2_task
+  detail_level: generic
+  intent: "The fingers hit the table at the grasp; raise the grasp point."
+  prompt: the fingers hit the table when picking
+  preconditions: {}
+  outcome:
+    clarify: allowed
+    clarification_answer: Raise the pick point by 1 cm.
+    draft:
+      # only the height above graspable goes up (relative offset, graspable's z is up)
+      - node: {instance_id: move_to_pick, parameters: {goal.position_m: [0.0, 0.0, {min_exclusive: 0.025}]}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_hover_from_scene_pose
+  category: n2_task
+  detail_level: specific
+  intent: "Before the approach, hover 10 cm above graspable's measured pose with the tool pointing down."
+  prompt: before move_to_pick_approach, read where graspable actually is into part_pose, compute a hover pose 10 cm above it with the tool flipped to point down (roll 180 degrees) into hover_pose, and move the UR10e there
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: part_pose, present: true, type: stored_pose}
+      - blackboard_key: {key: hover_pose, present: true, type: stored_pose}
+      - node: {node_id: scene.get_object_pose, ancestor: pick_and_place,
+               parameters: {scene_resource_id: graspable, output_key: part_pose}}
+      - node: {node_id: geometry.offset_pose, ancestor: pick_and_place,
+               value_sources: {pose: {kind: blackboard_key, reference: part_pose}},
+               parameters: {offset.position_m: [0.0, 0.0, 0.1], offset.rpy_deg: [180.0, 0.0, 0.0], output_key: hover_pose}}
+      - node: {node_id: motion.move_to_pose, ancestor: pick_and_place,
+               value_sources: {goal: {kind: blackboard_key, reference: hover_pose}},
+               parameters: {target.component_id: ur10e_robot}}
+      - subtree_order:
+          root: pick_and_place
+          order: [{node_id: scene.get_object_pose}, {node_id: geometry.offset_pose},
+                  {node_id: motion.move_to_pose, value_sources: {goal: {kind: blackboard_key, reference: hover_pose}}},
+                  move_to_pick_approach]
+    unchanged: true
+    allow_new_node_ids: [sequence]
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_box_left_table_full_stop
+  category: n2_task
+  detail_level: specific
+  intent: "Before the pick, full-stop the cell when the box is outside the table area."
+  prompt: 'stop the cell if the box has left the table area before we pick it: read the box pose into box_pose first; the table area is x and y from -0.5 to 0.5 m and z from 0.0 to 0.5 m in the cell frame'
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: box_pose, present: true, type: stored_pose}
+      - node: {node_id: scene.get_object_pose, ancestor: pick_and_place,
+               parameters: {scene_resource_id: graspable, output_key: box_pose}}
+      - node: {node_id: geometry.check_pose_bounds, ancestor: pick_and_place,
+               value_sources: {pose: {kind: blackboard_key, reference: box_pose}},
+               parameters: {frame_ref.kind: cell_frame, min_position_m: [-0.5, -0.5, 0.0], max_position_m: [0.5, 0.5, 0.5]}}
+      # the full stop runs only when the bounds check fails, so it sits under a fallback
+      - node: {node_id: kernel.full_stop, ancestor: pick_and_place, ancestor_node_id: fallback}
+      - subtree_order: {root: pick_and_place,
+                        order: [{node_id: scene.get_object_pose}, {node_id: geometry.check_pose_bounds},
+                                move_to_pick_approach]}
+    unchanged: true
+    allow_new_node_ids: [sequence, fallback, inverter]
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_reset_sim_between_cycles
+  category: n2_task
+  detail_level: medium
+  scenario: sim
+  intent: "Run the Isaac cycle 5 times with the simulation reset between cycles."
+  prompt: run the cycle 5 times and reset the simulation between cycles
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      # reset_simulation already ends every cycle; the repeat around the root is the needed change.
+      - node: {node_id: repeat, parent: null, parameters: {num_cycles: 5}, children_node_ids: [sequence]}
+      - node: {instance_id: isaac_light_cycle, parent_node_id: repeat}
+      - node: {instance_id: reset_simulation, parent: isaac_light_cycle}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_mute_scanner_while_feeding
+  category: n2_task
+  detail_level: specific
+  intent: "Mute the area-scanner rule while the operator feeds parts, and re-arm it before any motion."
+  prompt: parts are fed through the scanner zone while the robot waits, so at the start of the cycle turn the zone_intrusion rule off, wait for the operator to press the start button, then turn the rule back on before the robot moves
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: rules.set_active, ancestor: pick_and_place, parameters: {rule_id: zone_intrusion, active: false}}
+      - node: {node_id: io.wait_for_input, ancestor: pick_and_place,
+               parameters: {signal.component_id: cell_io, signal.signal_name: start_button, expected_value: true}}
+      - node: {node_id: rules.set_active, ancestor: pick_and_place, parameters: {rule_id: zone_intrusion, active: true}}
+      - subtree_order:
+          root: pick_and_place
+          order: [{node_id: rules.set_active, parameters: {active: false}}, {node_id: io.wait_for_input},
+                  {node_id: rules.set_active, parameters: {active: true}}, command_gripper]
+    unchanged: true
+    allow_new_node_ids: [sequence]
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_probe_fixture_surface
+  category: n2_task
+  detail_level: specific
+  intent: "Find the drop fixture surface with the touch probe and record the TCP pose there."
+  prompt: use the touch probe to find the drop fixture surface - after move_to_drop_approach, move the UR10e slowly down toward (0.3, 0.3, 0.0) in its base frame until touch_probe on cell_io turns on, stopping softly on the path, then store the gripper TCP pose in a new key fixture_touch_pose
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      # "slowly" is open (velocity_scale or a TCP speed cap); the goal orientation is open too.
+      - blackboard_key: {key: fixture_touch_pose, present: true, type: stored_pose}
+      - node: {node_id: motion.move_until_signal, parent: pick_and_place, after: move_to_drop_approach,
+               parameters: {target.component_id: ur10e_robot, goal.position_m: [0.3, 0.3, 0.0], stop_mode: soft_on_path,
+                            interrupt_condition.compare.operand.signal.signal_name: touch_probe,
+                            interrupt_condition.compare.value: true}}
+      - node: {node_id: model.get_frame_pose, parent: pick_and_place,
+               parameters: {frame.component_id: robotiq_2f_140, output_key: fixture_touch_pose}}
+      - subtree_order: {root: pick_and_place,
+                        order: [{node_id: motion.move_until_signal}, {node_id: model.get_frame_pose}, move_to_drop]}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_alarm_on_pick_failure
+  category: n2_task
+  detail_level: medium
+  intent: "If the approach, descent or grasp fails, light the alarm and full-stop the cell."
+  prompt: if any part of the pick (approach, descent or closing the gripper) fails, turn the alarm light on and do a full stop of the cell
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {instance_id: move_to_pick_approach, ancestor_node_id: fallback}
+      - node: {instance_id: move_to_pick, ancestor_node_id: fallback}
+      - node: {instance_id: close_gripper, ancestor_node_id: fallback}
+      - node: {node_id: io.set_output, ancestor_node_id: fallback,
+               parameters: {signal.component_id: cell_io, signal.signal_name: alarm_light, value: true}}
+      - node: {node_id: kernel.full_stop, ancestor_node_id: fallback}
+      - subtree_order: {root: pick_and_place,
+                        order: [command_gripper, move_to_pick_approach, move_to_pick, close_gripper, attach_graspable]}
+      - subtree_order: {root: pick_and_place, order: [{node_id: io.set_output}, {node_id: kernel.full_stop}]}
+    unchanged: true
+    # one fallback around the three steps, or one per step (each with its own alarm + stop), are both fine
+    allow_new_node_ids: [sequence, fallback, io.set_output, kernel.full_stop]
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_ready_light
+  category: n2_task
+  detail_level: medium
+  intent: "The green ready light is off during the cycle and on again once the robot is at rest."
+  prompt: turn the green ready light off while the cycle runs and back on when the robot is back at rest
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: io.set_output, parent: pick_and_place, index: 0,
+               parameters: {signal.component_id: cell_io, signal.signal_name: ready_light, value: false}}
+      - node: {node_id: io.set_output, parent: pick_and_place, after: return_rest, last_child: true,
+               parameters: {signal.component_id: cell_io, signal.signal_name: ready_light, value: true}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_plan_or_alarm
+  category: n2_task
+  detail_level: specific
+  intent: "Plan the pick first; when no plan is feasible, light the alarm and full-stop instead of pausing."
+  prompt: before the robot moves, plan the pick of graspable (UR10e arm, Robotiq gripper closing to its closed preset, carried on the Robotiq tcp frame, contact policy grasp_contact, plan stored in a new key pick_plan); if no plan is feasible, turn the alarm light on and do a full stop instead of pausing for the operator
+  preconditions:
+    fixtures: *grasp_contact_fixtures
+  outcome:
+    clarify: none
+    draft:
+      - blackboard_key: {key: pick_plan, present: true, type: pick_planning_result}
+      - node: {node_id: planning.plan_pick_sequence, ancestor: pick_and_place, ancestor_node_id: fallback,
+               parameters: {selected_object_id: graspable, contact_policy_id: grasp_contact, output_key: pick_plan,
+                            no_feasible_plan_policy: condition_failure}}
+      - node: {node_id: io.set_output, ancestor_node_id: fallback,
+               parameters: {signal.component_id: cell_io, signal.signal_name: alarm_light, value: true}}
+      - node: {node_id: kernel.full_stop, ancestor_node_id: fallback}
+      - subtree_order: {root: pick_and_place,
+                        order: [{node_id: planning.plan_pick_sequence}, {node_id: io.set_output},
+                                {node_id: kernel.full_stop}, move_to_pick_approach]}
+    unchanged: true
+    allow_new_node_ids: [sequence, fallback]
+    diagnostics: no_new_errors
+    answer: {consistent: true}
+
+- id: N2_TASK_clamp_release
+  category: n2_task
+  detail_level: specific
+  intent: "After the part is released, open the fixture clamp and wait up to 2 s for the pressure to drop."
+  prompt: after detach_graspable, release the fixture clamp and wait up to 2 seconds until the clamp pressure switch shows no pressure
+  preconditions: {}
+  outcome:
+    clarify: none
+    draft:
+      - node: {node_id: io.set_output, parent: pick_and_place, after: detach_graspable,
+               parameters: {signal.component_id: cell_io, signal.signal_name: clamp_valve, value: false}}
+      - node: {node_id: io.wait_for_input, parent: pick_and_place, before: drop_retreat,
+               parameters: {signal.component_id: cell_io, signal.signal_name: clamp_pressure_ok, expected_value: false,
+                            timeout_s: 2.0}}
+    unchanged: true
+    diagnostics: no_new_errors
+    answer: {consistent: true}
