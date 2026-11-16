@@ -50,7 +50,7 @@ for (n, k) in [(2560, 2560), (13952, 2560), (2560, 6144), (2560, 640)]:
     w = (torch.randn(n, k) * 0.02).to(torch.bfloat16).float()
     x = torch.randn(4, 4, k).to(torch.bfloat16).float()   # [T, hc, K] like fc_hidden
     y = x @ w.t(); yq = mx(x.reshape(-1, k)).reshape(x.shape) @ mx(w).t()
-    print(f"MTP dense MXFP8 W8A8 {n}x{k}: weight rel err {rel(mx(w), w):.4f}, output rel err {rel(yq, y):.4f}")
+    print(f"MTP dense (mxfp8 format) W8A8 {n}x{k}: weight rel err {rel(mx(w), w):.4f}, output rel err {rel(yq, y):.4f}")
 
 # sanity: e8m0 scale exactness / zero block / dequant identity on representable values
 z = torch.zeros(2, 64); assert torch.equal(mx(z), z)

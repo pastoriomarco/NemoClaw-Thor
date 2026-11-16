@@ -38,6 +38,14 @@ def ple_disk_enabled() -> bool:
     return os.environ.get(ENV_ENABLE, "0").lower() in ("1", "true", "yes")
 
 
+def ple_cache_requested() -> bool:
+    """Whether a slot-pool cache switch is set (``ple_disk_cache.py``)."""
+    return any(
+        os.environ.get(name, "0") not in ("", "0")
+        for name in ("VLLM_PLE_DISK_CACHE_GB", "VLLM_PLE_DISK_CACHE_SLOTS")
+    )
+
+
 def env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
@@ -64,6 +72,23 @@ STATS_ZERO = {
     "launch_ms": 0.0,
     "rows": 0,
     "unique": 0,
+    # Slot-pool cache (VLLM_PLE_DISK_CACHE_GB, ple_disk_cache.py): unique rows
+    # served from the pool or read from disk, evicted rows, pread calls and
+    # bytes (page-aligned, so more than the useful row bytes).
+    "cache_hits": 0,
+    "cache_misses": 0,
+    "evictions": 0,
+    "read_calls": 0,
+    "read_bytes": 0,
+    "disk_reads": 0,  # planned reads not in the page cache (RWF_NOWAIT)
+    "mmap_rows": 0,  # missed rows gathered through the mmap (large steps)
+    # Early row fetch (VLLM_PLE_DISK_EARLY): tokens fetched ahead of their
+    # verify batch, rows read for them, reads of those that waited for the
+    # disk, prefetch-thread time after the token's ids arrived.
+    "early_tokens": 0,
+    "early_rows": 0,
+    "early_disk_reads": 0,
+    "early_ms": 0.0,
 }
 STATS = dict(STATS_ZERO)
 
@@ -112,6 +137,7 @@ class PLEDiskRowTable:
         # np.take per shard.
         files: dict[str, int] = {}
         self.files: list[np.memmap] = []
+        self.paths: list[str] = []  # checkpoint file of each self.files entry
         shard_file = []
         shard_base = []
         for index in range(num_shards):
@@ -137,6 +163,7 @@ class PLEDiskRowTable:
                 if madv_random:
                     flat._mmap.madvise(mmap.MADV_RANDOM)
                 self.files.append(flat)
+                self.paths.append(path)
             shard_file.append(files[path])
             shard_base.append(offset)
         self.shard_file = np.asarray(shard_file, dtype=np.int64)
@@ -320,6 +347,42 @@ class PLEDiskLookup:
             wait()
             STATS["id_sync_ms"] += (time.perf_counter() - start_time) * 1e3
             return self.stage(ids, staging)
+
+        return self.prefetcher.submit(job)
+
+    def warm(self, ids: np.ndarray) -> None:
+        """Read the rows of ``ids`` and drop them; no lookup state changes.
+
+        Early row fetch (``VLLM_PLE_DISK_EARLY``): the ids of one token of the
+        next verify batch, known while the later tokens are still drafted. A
+        later ``stage`` of the batch then finds these rows' pages in the page
+        cache instead of waiting for the disk. Staging itself is unchanged, so
+        its bytes are the same with or without this call.
+        """
+        start_time = time.perf_counter()
+        ids = ids.reshape(-1)
+        rows = np.unique(ids[(ids >= self.vocab_start) & (ids < self.vocab_end)])
+        STATS["early_rows"] += self._read_early(rows)
+        STATS["early_tokens"] += 1
+        STATS["early_ms"] += (time.perf_counter() - start_time) * 1e3
+
+    def _read_early(self, rows: np.ndarray) -> int:
+        """Read ``rows`` (sorted, unique, owned) into scratch; return the count."""
+        for table in self.tables:
+            table.gather_into(rows, np.empty((rows.size, table.row_bytes), np.uint8))
+        return rows.size
+
+    def warm_async(self, ids: np.ndarray, wait: Callable[[], None]) -> Future:
+        """``warm`` on the prefetch thread, after ``wait()`` makes ``ids`` valid.
+
+        The one prefetch thread runs it in order with the staging jobs, so it
+        never overlaps a ``stage`` and the next batch's staging job runs after
+        it. The caller keeps ``ids`` untouched until that staging job is done.
+        """
+
+        def job() -> None:
+            wait()
+            self.warm(ids)
 
         return self.prefetcher.submit(job)
 

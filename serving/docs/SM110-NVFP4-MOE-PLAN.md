@@ -1,6 +1,13 @@
 # SM110 NVFP4 MoE kernels for Qwen3.8-Flash-Next in vLLM: investigation plan
 
-Status: **Proposed — to investigate** (2026-11-14). Nothing executed yet. Next step: Stage 0a (no GPU).
+Status: **Stages 0a, 0b and 1 done (2026-11-15); main route works.** Stage 0a: only four one-line Python checks block
+sm_110 (FC1/FC2 wrapper `major != 10`, `moe_utils` JIT arch list, vLLM `_supports_current_device`); CuTe DSL 4.8.0
+targets sm_110a natively. Stage 0b spike (`serving/benchmarks/sm110-moe-spike/`): every variant passes G0 (n128 fused:
+−2.68 ms per decode step, −241 ms per 7.5K chunk). Stage 1: overlay `~/fn-cutedsl-moe/` in R8b — decode step
+49.3–50.0 → 46.6–47.0 ms, prefill 3.04 → 2.67 s, Tool Eval 92/100 (no measurable cost), also used for the NVIDIA
+NVFP4 checkpoint (N1–N3). Results: `QWEN38-FLASH-NEXT-FP4-LOCAL-THOR.md` (R8, N1–N3). Open: Stage 2 tuning and
+Stage 3 upstream. New finding: FP4-Local's FC2 `input_scale` varies per expert (collapsed to the layer maximum by
+vLLM).
 
 Goal: bring NVIDIA's tcgen05 NVFP4 MoE kernels (the fused gather + grouped GEMM + SwiGLU + requant FC1 and the
 grouped GEMM + router-weight + scatter-reduce FC2, the "D2" route of

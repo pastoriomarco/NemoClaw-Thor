@@ -3,6 +3,7 @@
 """Inference-only Qwen4Exp model."""
 
 from collections.abc import Iterable
+import os  # [hc-fp8]
 from itertools import islice
 
 import torch
@@ -82,13 +83,39 @@ from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
 from vllm.v1.kv_cache_interface import MambaSpec
 
 from ..common.hyperconnection import is_hc_sequence_parallel_enabled
-from .draft_head import make_lm_head  # [draft-head]
+from .draft_head import (  # [draft-head]
+    log_side_layers,
+    make_lm_head,
+    maybe_quantize_side_layers,
+    maybe_unfuse_qsa_indexer,
+    qsa_unfuse_indexer,
+)
 from .screened_head import ScreenedLMHead, screened_head_settings  # [screened-head]
 from .hyperconnection import GatedResidual, HyperConnectionConfig
 from .low_latency_gemm import enable_qwen4_exp_low_latency_gemm
 from .ops.cute_dsl.hc_down_silu import request_hc_down_silu_warmup
 from .ple_layer import Qwen4ExpPLELayer
 from .qsa import Qwen4ExpQSAAttention
+
+
+class _Qwen4ExpQSAUnfusedIndexerInit(Qwen4ExpQSAAttention):
+    """[qsa-unfuse] Builds a Qwen4ExpQSAAttention on qsa.py's unfused (LoRA)
+    path without LoRA: its __init__ assigns fuse_indexer_projection = (no LoRA),
+    which this class turns into False, so indexer.index_qk_proj stays its own
+    ReplicatedLinear, load_weights uses no indexer mapper and forward runs it
+    separately. build() returns the module as the stock class."""
+
+    def __setattr__(self, name: str, value) -> None:
+        if name == "fuse_indexer_projection":
+            value = False
+        super().__setattr__(name, value)
+
+    @classmethod
+    def build(cls, **kwargs) -> Qwen4ExpQSAAttention:
+        attn = cls(**kwargs)
+        attn.__class__ = Qwen4ExpQSAAttention  # runtime: the stock class
+        return attn
+
 
 # Transformers v5.18 renamed `qwen_sparse_attention` to `indexed_attention`
 # TODO: Delete qwen_... once Transformers 5.18.0 is the minimum required version.
@@ -245,7 +272,14 @@ class Qwen4ExpDecoderLayer(nn.Module):
                     reduce_results=not self.use_hc_sequence_parallel,
                 )
             else:
-                self.self_attn = Qwen4ExpQSAAttention(
+                # [qsa-unfuse] QWEN4EXP_QSA_UNFUSE_INDEXER: target layers only,
+                # the drafter ("mtp.layers.N") keeps the fused GEMM.
+                qsa_cls = (
+                    _Qwen4ExpQSAUnfusedIndexerInit.build
+                    if qsa_unfuse_indexer() and "mtp" not in prefix.split(".")
+                    else Qwen4ExpQSAAttention
+                )
+                self.self_attn = qsa_cls(
                     vllm_config=vllm_config,
                     config=config,
                     layer_id=self.layer_idx,
@@ -725,9 +759,25 @@ class Qwen4ExpForCausalLM(
         self.quant_config = vllm_config.quant_config
         self.config = config
         self.scheduler_config = vllm_config.scheduler_config
+        # [qsa-unfuse] QWEN4EXP_QSA_UNFUSE_INDEXER: the quant config's qkv_proj
+        # shards without the indexer; must precede the decoder layers.
+        maybe_unfuse_qsa_indexer(self.quant_config)
+        # [side-fp8] QWEN4EXP_SIDE_FP8: online FP8 for the BF16 dense side
+        # layers; must precede the decoder layers, which resolve their methods.
+        side_fp8 = maybe_quantize_side_layers(self.quant_config)
         self.model = Qwen4ExpModel(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model")
         )
+        if side_fp8:
+            log_side_layers(self.model)  # [side-fp8]
+        # [hc-fp8] QWEN4EXP_HC_FP8: the HC layers chose their method while
+        # Qwen4ExpModel was built (hyperconnection.py); one summary line.
+        # Imported here so that, with the switch off, the overlay works
+        # without the hc_fp8.py / hyperconnection.py mounts.
+        if os.environ.get("QWEN4EXP_HC_FP8", "0") not in ("", "0"):
+            from .hc_fp8 import log_hc_fp8
+
+            log_hc_fp8(self.model)
         # [draft-head] Online MXFP8 when QWEN4EXP_LM_HEAD_MXFP8 is set.
         self.lm_head = make_lm_head(
             config.vocab_size,

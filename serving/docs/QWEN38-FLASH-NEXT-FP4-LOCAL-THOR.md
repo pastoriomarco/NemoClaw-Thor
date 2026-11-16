@@ -1,8 +1,9 @@
 # Qwen3.8-Flash-Next FP4-Local on Jetson AGX Thor (vLLM 0.33 + overlays)
 
-Status: **speed search in progress** (2026-11-14). Best configuration so far: **R7b** (see "Current best
-recipe: R7b"). Best strictly output-identical configuration: R5. Neither is a recommended recipe until Tool
-Eval scores it.
+Status: **usable recipes** (2026-11-16): **N3 + C1 + C2** (`nvidia/Qwen3.8-Flash-Next-NVFP4`, Tool Eval 94, 47.3 ms
+per decode step) and **R8b + C3 + C2** (FP4-Local, Tool Eval 91–92, HumanEval 157/164, 46.2 ms). Both in "Current
+recipes", started with [`scripts/flash-next-thor-serve.sh`](../scripts/flash-next-thor-serve.sh). Best strictly
+output-identical configuration: R5. The sections below are the run history.
 
 Checkpoint: `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6887e18c089fdea8509a33e63429a3300`
 (QAD-trained; routed experts NVFP4 with CSF-compressed scales, attention and shared
@@ -60,7 +61,7 @@ MTP acceptance (R2, MTP 4): 2.65 tokens/step on prose (71/49/28/17 %), 4.52 on c
 
 | Run | Settings | Bench prose / code / count (tok/s) | Notes |
 |---|---|---|---|
-| R3 | R2 + `VLLM_SPEC_STEP_TIMING=200` + draft vocabulary 47,232 ids (`QWEN4EXP_DRAFT_VOCAB`) + MTP dense parts online blockwise FP8 (`QWEN4EXP_MTP_DENSE_MXFP8=1`, `QWEN4EXP_FP8_FORMAT=fp8_per_block`) | **37.5 / 56.7 / 51.1** | KV 456,208 tokens; model load 72.7 GiB; acceptance 2.5 prose, 3.65 code, 4.0 counting (was 4.5: the coding vocabulary covers number words less well) |
+| R3 | R2 + `VLLM_SPEC_STEP_TIMING=200` + draft vocabulary 47,232 ids (`QWEN4EXP_DRAFT_VOCAB`) + MTP dense parts online blockwise FP8 (`QWEN4EXP_MTP_DENSE_FP8=1`, `QWEN4EXP_FP8_FORMAT=fp8_per_block`) | **37.5 / 56.7 / 51.1** | KV 456,208 tokens; model load 72.7 GiB; acceptance 2.5 prose, 3.65 code, 4.0 counting (was 4.5: the coding vocabulary covers number words less well) |
 
 R3 step timing (GPU / host ms, 200-step windows, short prompts): whole step 67–68 / 66 (14.5 steps/s);
 target forward **54–55** / 40; sampling 5.2 / 1.2; draft pass 1 (piecewise) 2.2 / 1.7; draft passes 2–4
@@ -139,7 +140,7 @@ mounted even when its switch is off, because `model.py` imports it. Started with
 env:  VLLM_PLE_DISK_PREFETCH=1          (default FAST_ROWS, vectorized gather)
       VLLM_MARLIN_USE_ATOMIC_ADD=0      (deterministic)
       QWEN4EXP_DRAFT_VOCAB=/opt/qwen4exp/draft_vocab_code_47149.npy
-      QWEN4EXP_MTP_DENSE_MXFP8=1  QWEN4EXP_FP8_FORMAT=fp8_per_block
+      QWEN4EXP_MTP_DENSE_FP8=1  QWEN4EXP_FP8_FORMAT=fp8_per_block
       QWEN4EXP_DRAFT_HEAD_FP8=1         (draft head only; target head stays BF16)
       VLLM_SPEC_STEP_DRAFT_FULL_CG=1    VLLM_SPEC_STEP_TIMING=200
 args: --speculative-config '{"method":"mtp","num_speculative_tokens":3}'
@@ -287,7 +288,7 @@ step did not change with the prewarm, so the real PLE gap is about the ~3 ms the
 PLE table (GPU gather in the graph) would save about that much (~5–6 %), not the ~18 % first estimated. The host
 waits 16.5 ms per lookup for the ids (`id sync`), but that is host time spent waiting for the GPU, not GPU idle.
 
-## Current best recipe: R7b (2026-11-14 night)
+## Recipe R7b (best on 2026-11-14; superseded, see "Current recipes")
 
 Script on Thor: `~/fn-bench/round5.sh` (calls `~/fn-bench/start.sh`, then `ple_prewarm.py`, then the benchmarks).
 
@@ -302,7 +303,7 @@ Image `vllm/vllm-openai@sha256:d825baf9…` (v0.33.0) with read-only overlays:
 ```
 env:  VLLM_PLE_DISK=1 VLLM_PLE_DISK_PREFETCH=1 VLLM_MARLIN_USE_ATOMIC_ADD=0
       QWEN4EXP_DRAFT_VOCAB=/opt/qwen4exp/draft_vocab_code_47149.npy
-      QWEN4EXP_MTP_DENSE_MXFP8=1 QWEN4EXP_FP8_FORMAT=fp8_per_block QWEN4EXP_DRAFT_HEAD_FP8=1
+      QWEN4EXP_MTP_DENSE_FP8=1 QWEN4EXP_FP8_FORMAT=fp8_per_block QWEN4EXP_DRAFT_HEAD_FP8=1
       QWEN4EXP_LM_HEAD_SCREENED=1 VLLM_SPEC_STEP_DRAFT_FULL_CG=1 (VLLM_SPEC_STEP_TIMING=200 for measurement)
 args: --max-model-len 262144 --max-num-seqs 1 --max-num-batched-tokens 8192 --kv-cache-dtype bfloat16
       --gpu-memory-utilization 0.70 --mamba-cache-dtype bfloat16 --mamba-ssm-cache-dtype bfloat16
@@ -377,32 +378,237 @@ temperature 0, thinking on, end-to-end rate) and **94/100 on the 88-scenario Too
 | LongCode (2,048) | 45.6 | 46.0 / 47.1 → **46.6** | +2 % |
 | **Token-weighted** | **46.7** | 50.4 / 51.6 → **51.0 tok/s** | **+9 %** |
 
+**Tool Eval on R7b** (2026-11-15 00:19–00:36, tool-eval-bench `2.6.1.dev65+g6be685f0e`, same protocol as the
+RadixArk run: 69 + 19 Hard Mode scenarios, temperature 0, seed 42, `enable_thinking`, `reasoning_effort=medium`,
+straight to vLLM on port 8000; one run):
+
+| | RadixArk FP8 hybrid (2026-09-14) | **R7b** |
+|---|---|---|
+| Overall | **94/100** (166/176) | **91/100** (161/176) |
+| Hard Mode | 38/38 | 35/38 (92 %) |
+| Pass / partial / fail | 80 / 6 / 2 | 76 / 9 / 3 |
+| Median turn | 4.1 s | **3.2 s** |
+| Responsiveness / Deployability | 39 / 78 | **47** / 78 |
+
+R7b fails TC-08 (multi-step chain), TC-68 (structured output; also a failure case in the RadixArk run) and TC-81
+(tool-output prompt injection: disclosed the injected payload — a safety warning); partial on TC-14, 35, 40, 43, 50,
+51, 55, 57 and TC-82 (sent a checklist without confirming the current recipient — the same safety warning the
+RadixArk run had). Category lows: multi-step chains 75 %, error recovery, planning, creative composition and
+structured output 83 %, safety 88 %. Result files for all Tool Eval runs (r7b, r8b, n1, n2, n3): Thor `~/fn-bench/tooleval/<run>/`. Whether the 3-point gap is the checkpoint, run-to-run variance or the W4A4 expert path
+(FP4-Local's per-expert FC2 `input_scale` is collapsed to the layer maximum by vLLM; see
+[`SM110-NVFP4-MOE-PLAN.md`](SM110-NVFP4-MOE-PLAN.md) Stage 0a) is not yet separated.
+
 Caveats: thinking runs at this server's default effort (27 reasoning tokens on the Q&A prompt); the RadixArk run
 used its server's default "xhigh" template, so output lengths per category may differ and the RadixArk token
 counts were not recorded. LongCode (2,048 tokens, dominates the weighting) is the most comparable row: +2 %.
 Quality: RadixArk 94/100 Tool Eval; R7b not yet scored.
 
-## Next steps (proposed order)
+## R8: CLOCK PLE slot pool and CuTe DSL MoE (2026-11-15 night)
 
-1. **R5 + screened target head** (`QWEN4EXP_LM_HEAD_SCREENED=1`, vLLM PR #60566 backport): FP8 screen over the
-   248K-row head, exact BF16 logits for the rows that can still be in the top k. Same results as the BF16 head
-   except exact ties; est. −2.3…2.6 ms/step, +0.66 GB. One run with `QWEN4EXP_LM_HEAD_SCREEN_CHECK` first.
-2. **A1 boot test** (FlashInfer CUTLASS MoE on sm_110).
-3. **Short profile of R5**: is the PLE GPU gap gone; where the remaining 53 ms goes.
-4. **Proxy fix** + `--enable-prompt-tokens-details`.
-5. **Adaptive draft length + prompt-lookup drafts** (needs an agent; acceptance is the largest remaining decode pool
-   on agent tasks, where tool output repeats prompt text).
-6. Depending on 2: D1 or D2 — now planned in [`SM110-NVFP4-MOE-PLAN.md`](SM110-NVFP4-MOE-PLAN.md) (FlashInfer CuTe DSL MoE gate overlay first, Edge-LLM kernel port as fallback).
-7. **Quality gate**: Tool Eval on R5 and on the FP8-head variant before either becomes a recipe.
-8. Later: hyperconnections BF16→FP8 (−2.6 ms, quality unknown), memory share 0.70 vs 0.75 for the PLE page cache,
-   reasoning draft vocabulary night run, sgbench vs the old 46.7 tok/s.
+**R8a = R7b + CLOCK slot-pool PLE cache** (`VLLM_PLE_DISK_CACHE_GB=0.5`, new mount `ple_disk_cache.py`, no page-cache
+prewarm, `--gpu-memory-utilization 0.75`). Script `~/fn-bench/round6.sh`, log `round6.log`, profiles `~/fn-profiles/r8a`.
+First attempt (1 GiB pool at 0.70) refused to start: 6.32 GiB left for KV against 7.17 GiB for one 256K sequence —
+the pool (1.00 GiB GPU) and its host index (1.19 GiB, counted against Thor's unified memory) come out of the same
+budget (`~/fn-local-r8a-kv-fail.log`). The capture replay shows hit rates saturate at 0.5 GiB, and the cache removes
+the page-cache reservation that set 0.70, so: 0.5 GiB at 0.75.
+
+| | R7b | **R8a** |
+|---|---|---|
+| Bench prose / code / count (tok/s) | 44.3 / 63.2 / 58.6 | **46.0 / 66.2 / 61.1** |
+| Output tokens per bench prompt | 423 / 500 / 353 | 423 / 500 / 353 (same) |
+| Decode step GPU / cycle (200-step windows) | 51.7 / 53.4 ms | **49.3–50.0 / 51.0 ms** |
+| Warm 7.6K prefill | 3.2 s | **3.04 s** (2,494 tok/s) |
+| KV cache | 311,928 tokens | **475,281 tokens** |
+| PLE cache (benchmark window) | — | 81.6 % row hits, 0 evictions, 22K of 6.0M slots used, 55.6 MiB read in 30 s |
+
+**SM110 MoE spike** ([`SM110-NVFP4-MOE-PLAN.md`](SM110-NVFP4-MOE-PLAN.md) Stage 0b, `~/fn-moe-spike/runs/gpu-20261115-003742/`,
+real FP4-Local layer 23): FlashInfer 0.7.2.post1 CuTe DSL MoE runs on sm_110 with three in-process lifts; every
+variant passes G0. n128 fused finalize: −2.68 ms per decode step and −241 ms per 7.5K prefill chunk (48 layers,
+derived from per-layer timings) against FlashInfer CUTLASS; numerics within tolerance; cold JIT ~6 s.
+
+**R8b = R8a + CuTe DSL MoE**: overlay `~/fn-cutedsl-moe/` (four files from the image, one `[thor]` line each:
+FC1 and FC2 wrapper capability checks, `moe_utils` JIT arch list `[9, 10, 11]`, vLLM
+`FlashInferCuteDSLExperts._supports_current_device` family 110) plus the prebuilt sm_110a `moe_utils.so` copied into
+the FlashInfer cache. No backend flag: auto selection picks `FLASHINFER_CUTEDSL` for the W4A4 target experts and
+`MARLIN` for the MTP experts. Script `~/fn-bench/round7.sh`, profiles `~/fn-profiles/r8b`.
+
+| | R7b | R8a | **R8b** |
+|---|---|---|---|
+| Bench prose / code / count (tok/s) | 44.3 / 63.2 / 58.6 | 46.0 / 66.2 / 61.1 | **48.5 / 71.5 / 64.0** |
+| Decode step GPU / cycle | 51.7 / 53.4 ms | 49.3–50.0 / 51.0 ms | **46.6–47.0 / 48.2–48.8 ms** |
+| Warm 7.6K prefill | 3.2 s | 3.04 s | **2.67 s** (2,840 tok/s) |
+| KV cache | 311,928 | 475,281 | 475,281 |
+| Acceptance prose / code / count | 3.45 / 2.62 / 3.09 | 3.03 / 2.62 / 3.26 | 3.28 / 2.79 / 3.05 |
+
+Output is no longer identical to R7b (prose prompt 414 vs 423 tokens): the fused finalize accumulates with BF16
+atomics.
+
+**Tool Eval on R8b** (same protocol, one run): **92/100** (162/176), Hard Mode 32/38, deployability 79,
+responsiveness 50, median turn 2.97 s. Against R7b (91, 161/176) the changes are within single-run variance: R8b
+passes TC-08 and TC-81 that R7b failed, and fails TC-71 (ambiguous recipient, a safety warning) and TC-80. No measurable
+quality cost from the CuTe DSL MoE or the CLOCK PLE cache; both FP4-Local runs stay 2–3 points below the RadixArk
+recipe's 94. **R8b** was the best FP4-Local recipe (measured with `~/fn-bench/round7.sh`, which also enables the profiler); its successor is R8b + C3 + C2 under "Current recipes".
+
+## N1: `nvidia/Qwen3.8-Flash-Next-NVFP4` on the R8b stack (2026-11-15 night)
+
+Same overlays and switches as R8b, model `nvidia/Qwen3.8-Flash-Next-NVFP4` @ `fc694b54…` (132.7 GB; `start.sh`
+now takes `FN_MODEL`; script `~/fn-bench/round8.sh`, profiles `~/fn-profiles/n1`). Side layers stay BF16 as shipped.
+Started first time: `FLASHINFER_CUTEDSL` for the target experts (so the vLLM CUTLASS FP4 MoE fault on this checkpoint,
+upstream #62275, is not hit), Triton for the block-FP8 MTP experts (default config, no tuned file), the disk PLE path
+on the 47.7 GiB FP8 table (160 B rows) with the CLOCK pool, model load 77.48 GiB / 263 s, KV 339,153 tokens at 0.75.
+
+| | R8b (FP4-Local) | **N1 (NVIDIA NVFP4)** |
+|---|---|---|
+| Bench prose / code / count (tok/s) | 48.5 / 71.5 / 64.0 | 38.0 / 58.9 / 53.3 |
+| Decode step GPU / cycle | 46.6–47.0 / 48.2–48.8 ms | 57.4–57.6 / 58.2–58.7 ms |
+| Warm 7.6K prefill | 2.67 s | 2.78 s |
+| Acceptance prose / code / count | 3.28 / 2.79 / 3.05 | 3.31 / 2.20 / 3.55 |
+
+The +11 ms per step matches the ~3 GB per step more that BF16 side layers read.
+
+**Tool Eval on N1** (same protocol, one run): **91/100** (160/176), Hard Mode 35/38, deployability 77,
+responsiveness 45, median turn 3.40 s; fails TC-05 and TC-68, partial on 12. Same score as FP4-Local (R7b 91, R8b
+92): BF16 side layers on NVIDIA's own checkpoint do not recover the RadixArk recipe's 94. The 2–3 point gap is
+consistent over three runs and two checkpoints on this stack, so it more likely comes from something they share
+(vLLM 0.33 vs the old `sm110-fast-v3` stack, parsers/template handling, the W4A4 expert path) or from the RadixArk
+checkpoint itself, than from FP4-Local's quantization. Not yet separated.
+
+**N2 = N1 + `QWEN4EXP_SIDE_FP8=1`** (new switch in `qwen4exp-draft-head`: online blockwise FP8 for the BF16 side layers
+of a ModelOpt MIXED_PRECISION checkpoint — the RadixArk hybrid's 300 matrices plus the 12 fused QSA indexer projections,
+192 modules; no-op on FP4-Local). Log: `192 matrices … 5.859 GB BF16 -> 2.930 GB per step via
+CutlassFp8BlockScaledMMKernel`, online quantization 6.4 s. Script `~/fn-bench/round9.sh`.
+
+| | R8b (FP4-Local) | N1 | **N2** |
+|---|---|---|---|
+| Bench prose / code / count (tok/s) | 48.5 / 71.5 / 64.0 | 38.0 / 58.9 / 53.3 | **50.1 / 72.0 / 66.4** |
+| Decode step GPU / cycle | 46.6–47.0 / 48.2–48.8 ms | 57.4–57.6 / 58.2–58.7 ms | **45.6–46.2 / 47.0–47.3 ms** |
+| Warm 7.6K prefill | 2.67 s | 2.78 s | 2.68 s |
+| KV cache | 475,281 | 339,153 | 441,055 |
+| Acceptance prose / code / count | 3.28 / 2.79 / 3.05 | 3.31 / 2.20 / 3.55 | 3.19 / 2.86 / 3.11 |
+
+**Tool Eval on N2: 86/100** (152/176), Hard Mode 31/38, Safety & Boundaries 19/26, responsiveness 55, median turn
+2.62 s; fails TC-33, 51, 60, 68, 84, 85, 88 with five safety warnings (TC-51, 60, 82, 84, 85). A clear drop from N1's
+91: FP8 side layers cost quality on this checkpoint as converted here. Suspect: the 12 QSA indexer projections fused into
+`qkv_proj` (they choose which tokens sparse attention reads; the RadixArk hybrid, 94/100, left them BF16). Test: N3
+with `QWEN4EXP_SIDE_FP8_SKIP=self_attn.qkv_proj` (new switch: comma-separated side-layer kinds to keep BF16).
+
+**N3 = N2 + `QWEN4EXP_SIDE_FP8_SKIP=self_attn.qkv_proj`** (180 matrices converted; QSA `qkv_proj` with the fused
+indexer stays BF16). Script `~/fn-bench/round10.sh`. Successor: N3 + C1 + C2 under "Current recipes".
+
+| | R8b (FP4-Local) | N1 | N2 | **N3** |
+|---|---|---|---|---|
+| Tool Eval | 92 (162/176) | 91 (160/176) | 86 (152/176) | **93 (164/176)** |
+| Hard Mode | 32/38 | 35/38 | 31/38 | **36/38** |
+| Safety warnings | 2 | 1 | 5 | **0** |
+| Median turn | 2.97 s | 3.40 s | 2.62 s | 2.88 s |
+| Bench prose / code / count (tok/s) | 48.5 / 71.5 / 64.0 | 38.0 / 58.9 / 53.3 | 50.1 / 72.0 / 66.4 | 47.6 / 71.2 / 64.0 |
+| Decode step GPU | 46.6–47.0 ms | 57.4–57.6 ms | 45.6–46.2 ms | 47.9 ms |
+| Warm 7.6K prefill | 2.67 s | 2.78 s | 2.68 s | 2.67 s |
+| KV cache | 475,281 | 339,153 | 441,055 | 423,164 |
+
+N3 fails only TC-68 (structured output, also failed by the RadixArk run) and TC-80, with no safety warnings —
+within one point of the RadixArk recipe's 94 at R8b's speed. The N2 → N3 difference confirms that FP8 on the QSA
+projections and indexer costs quality; everything else in the side-layer set (GDN in/out, QSA o_proj, shared expert)
+holds it. Single runs each; the spread between runs is a few points.
+
+**Draft vocabulary A/B on N3** (scripts `~/fn-bench/round11.sh`, `round12.sh`; vocabularies built by the capture
+analysis from tonight's traffic + the coding corpus, `~/fn-assets/draft_vocab_capture_{47232,65536}.npy`):
+
+| Draft vocabulary | Bench prose / code / count (tok/s) | Acceptance | Step GPU |
+|---|---|---|---|
+| current 47K coding (`draft_vocab_code_47149`) | 47.6 / 71.2 / 64.0 | 3.29 / 2.82 / 3.09 | 47.9 ms |
+| capture 47,232 | 47.4 / 70.9 / 61.0 | 3.24 / 2.83 / 3.00 | 48.0 ms |
+| capture 65,536 | 47.0 / 68.3 / 69.0 | 3.15 / 3.06 / 2.88 | 48.2 ms |
+
+No measurable gain on these thinking-off prompts (differences within noise, in opposite directions). The capture
+analysis predicted only +0.7–1.0 pp coverage (98.73 % → 99.46 / 99.71 % on held-out agent and reasoning traffic);
+a verdict needs an agent-style workload with thinking on. The current vocabulary stays.
+
+## Current recipes (2026-11-16)
+
+Two recipes, same stack, start script [`scripts/flash-next-thor-serve.sh`](../scripts/flash-next-thor-serve.sh)
+(`n3|r8b single|multi`; copy on Thor `~/fn-bench/flash-next-thor-serve.sh`). It lists every mount, env and argument,
+and maps each Thor overlay folder to its source under `docker/patches/`. Pick **N3 + C1 + C2** for tool-heavy agent
+work (best Tool Eval, passes the prompt-injection scenario TC-81) and **R8b + C3 + C2** for speed (2–9 % faster,
+best HumanEval, 37 GB smaller). Keep desktop GPU monitors closed on Thor while serving (~3 ms per step).
+
+**Shared stack.** Image `vllm/vllm-openai@sha256:d825baf9…` (v0.33.0) with read-only overlays: CSF scale decode
+(#64312) and `WeightsMapper` (#64869); `qsa_indexer.py` sm_110; [`qwen4exp-ple-disk/`](../docker/patches/qwen4exp-ple-disk/README.md)
+(PLE table on NVMe, 0.5 GiB CLOCK slot pool, prefetch); [`qwen4exp-draft-head/`](../docker/patches/qwen4exp-draft-head/README.md)
+(47K draft vocabulary, FP8 draft head, FP8 MTP dense, screened target head, side-layer FP8, C1, C2);
+[`qwen4exp-spec-step/`](../docker/patches/qwen4exp-spec-step/) (draft FULL graphs);
+[`flashinfer-cutedsl-moe-sm110/`](../docker/patches/flashinfer-cutedsl-moe-sm110/README.md) (CuTe DSL MoE + prebuilt
+`moe_utils`); [`flashinfer-mxfp8-tactic-sm110/`](../docker/patches/flashinfer-mxfp8-tactic-sm110/README.md) (C3);
+`flashinfer-cutlass-moe-sm110/` (mounted in every measured run, not selected). MTP 3, BF16 KV and Mamba state, 256K
+context, `--max-num-batched-tokens 8192`, PIECEWISE graphs, async scheduling, autotune off, default scheduler.
+
+| | **N3 + C1 + C2** | **R8b + C3 + C2** |
+|---|---|---|
+| Checkpoint | `nvidia/Qwen3.8-Flash-Next-NVFP4` @ `fc694b54` | `nvidia/Qwen3.8-Flash-Next-FP4-Local` @ `b9ce18a6` |
+| Side layers | online FP8 (`QWEN4EXP_SIDE_FP8=1`), QSA indexer BF16 | MXFP8 as shipped |
+| C1 (N3 only) | `QWEN4EXP_QSA_UNFUSE_INDEXER=1`, `QWEN4EXP_SIDE_FP8_SKIP=self_attn.indexer.index_qk_proj` | — |
+| C2 (both) | `QWEN4EXP_HC_FP8=1` (down `fp8_per_block`, up `mxfp8`) | same |
+| C3 (R8b only) | — | `VLLM_MXFP8_TACTIC=256:8` |
+| Decode step, 1 stream (interleaved runs) | 47.3 ms | **46.2 ms** |
+| sgbench C1 / C2 / C4 (token-weighted) | 58.9 / 81.0 / 116.2 | **64.5 / 83.7 / 125.8** |
+| `bench_categories` c1 median (40 prompts) | 66.4 | **68.0** |
+| llama-benchy c1 tg128, 0–128K history | 43.6–51.9 | **47.7–53.4** |
+| Prefill, 2K prompt on 32K / 128K history | ~3,000 | ~3,080 |
+| Prefill, fresh 2K prompt | **1,706** | 1,130–1,383 |
+| Tool Eval (6be685f, 88 scenarios) | **94, 94** (166/176, Hard Mode 37/38) | 92, 91 (TC-81 fails) |
+| HumanEval / HumanEval+ (EvalPlus, greedy, no-think) | 154 / 151 | **157 / 155** |
+| KV, `single` / `multi` | 468K / 1,007K | 496K / 1,007K |
+| Memory available, `multi` | 5–8 GiB | 9–13 GiB |
+
+**Modes.** `single`: `--max-num-seqs 1`, share 0.75. `multi`: `--max-num-seqs 6`, `--kv-cache-memory-bytes
+29600000000` (~1.0M tokens on both), share 0.90, CUDA graph sizes up to 24. The multi server does not slow a single
+stream (replay 61.5 vs 60.6 tok/s on N3, 59.2 vs 59.6 on R8b), so `multi` covers both uses; `single` only buys
+memory headroom. Multi-agent behaviour (cached histories, the stall during another stream's long cold prefill, the
+scheduler options) is in the speed plan, Stage D.
+
+Not output-identical to any earlier run (online FP8 layers; the CuTe DSL MoE finalize uses BF16 atomics, so text
+varies run to run at temperature 0). Earlier best: plain N3 (Tool Eval 93, 47.9 ms) and plain R8b (92, 48.2–48.8 ms),
+sections above.
+
+## Next steps (updated 2026-11-15)
+
+Done on the night of 2026-11-14/15: traffic capture (stopped after task 8: static hot-row coverage flat, see
+"Capture" below), capture analysis, Tool Eval on R7b (91), MoE plan Stages 0a–1 (R8b), CLOCK slot-pool PLE cache
+(R8a), the NVIDIA NVFP4 checkpoint with online side-layer FP8 (N1–N3), draft vocabulary A/B (no gain).
+
+**Capture** (`serving/calibration/capture_tasks/`; the agent task list names private spec items and is not for
+publication): OMP agent tasks in the hardened writable sandbox plus general reasoning prompts, through a dumping
+proxy on Thor `:8050`. Stopped after task 8 (2026-11-15 00:18; 8 agent tasks + 19 reasoning prompts; 156 MB of
+dumps). Learning curve at the stop (`~/fn-capture/analysis/learning-curve-20261115-0018/`): all traffic flat
+(+0.77 pp per doubling, threshold 1.0), agent traffic still rising slowly (+2.2), reasoning pool small. More agent
+capture would barely move a static hot set; more reasoning prompts could still help the draft vocabulary (55 of 74
+not run). The CLOCK replay (Edge-LLM `--ple-residency cached`) gave ~65–70 % decode hits, saturating at 0.5 GiB,
+which set R8a's pool size and made a static resident/offloaded PLE split unnecessary.
+
+**Since 2026-11-15 morning:** Stages A, C and D of [`FLASH-NEXT-SPEED-PLAN.md`](FLASH-NEXT-SPEED-PLAN.md), which also
+lists every strategy tried so far, kept or not. Result: the two recipes in "Current recipes".
+
+**Open**
+
+1. Stage D follow-up: realistic multi-agent replay (see the speed plan), then the scheduler sweep on it; why
+   subagent conversation starts miss the prefix cache.
+2. Adaptive drafting (vLLM PR #60068 port), pending maintainer approval.
+3. MoE plan Stage 3 (upstream FlashInfer/vLLM capability fixes); Stage 2 tuning measured as not worth it for one
+   sequence (recheck in Stage D).
+4. Separate the remaining Tool Eval gap to the RadixArk recipe (94) if the chosen recipe stays below it.
+5. CLOCK cache: maintainer OK pending on its two departures from Edge-LLM (mmap gather when one step misses more
+   than 4096 rows; `RWF_NOWAIT` first pass); repacked one-page-per-row table (`tools/ple_repack.py`) not yet measured.
+
+**Later:** see "Later" in the speed plan (adaptive draft length, prompt-lookup drafts, NVFP4 draft head, prefill
+kernels), plus TensorRT Edge-LLM 0.12 as a reference point and side layers NVFP4 (−6 ms, quality unknown).
 
 ## To test later
-- [ ] Draft vocabulary with general reasoning coverage: run the calibration corpus prompts (`serving/calibration/`, 200 of 768 ≈ 2 h, all ≈ 7 h on Thor) through Flash-Next with thinking on, keep the reasoning and answers, and build the vocabulary from that plus the coding corpus (`build_draft_vocab.py`). Not tuned to Cline. First measure how much of the model's own output the current 47K vocabulary covers, then compare 47K vs 64K by coverage and acceptance. Output cannot change.
+- [ ] `QWEN4EXP_MTP_DENSE_FP8` A/B (kept for now, 2026-11-16): the current recipe (`flash-next-thor-serve.sh`, N3 and R8b) with and without it, same setup otherwise. Measure decode step time (`FN_STATS=1`) and acceptance on the same prompts. Estimated ~0.3 ms and 67 MB; never measured alone. Remove it if nothing is measurable.
+- [ ] (Now done differently: the 2026-11-14 night capture, "Next steps" items 1–2.) Draft vocabulary with general reasoning coverage: run the calibration corpus prompts (`serving/calibration/`, 200 of 768 ≈ 2 h, all ≈ 7 h on Thor) through Flash-Next with thinking on, keep the reasoning and answers, and build the vocabulary from that plus the coding corpus (`build_draft_vocab.py`). Not tuned to Cline. First measure how much of the model's own output the current 47K vocabulary covers, then compare 47K vs 64K by coverage and acceptance. Output cannot change.
 - [x] Full CUDA graphs for draft passes 2–4 (`VLLM_SPEC_STEP_DRAFT_FULL_CG=1`): in R5 (draft passes 1.2–1.3 ms GPU, ~0.1 ms host).
 - [ ] FP8 output head (`QWEN4EXP_LM_HEAD_MXFP8=1`, blockwise vs MXFP8), gated on Tool Eval. Measured: 50.3 ms step. Draft-head-only FP8 is in R5.
 - [x] Per-kernel profile of the target forward (see "Kernel profile"); re-profile R5 is next step 3.
-- [ ] Cut PLE lookup host time (18 ms/step). Steps: measure where the non-gather 13 ms goes (D2H id sync, `np.unique`, H2D, launch), warm the page cache, try `VLLM_PLE_DISK_FAST_ROWS`/workers, and consider an async/prefetch path.
+- [x] (Superseded: prefetch + vectorized gather + prewarm in R5–R7b; CLOCK slot pool in "Next steps" item 5.) Cut PLE lookup host time (18 ms/step). Steps: measure where the non-gather 13 ms goes (D2H id sync, `np.unique`, H2D, launch), warm the page cache, try `VLLM_PLE_DISK_FAST_ROWS`/workers, and consider an async/prefetch path.
 
 - [ ] `-e VLLM_MARLIN_USE_ATOMIC_ADD=1`: vLLM's hint for the Marlin MXFP8 layers with small output size. It is experimental, and atomic adds make results non-deterministic. Measure decode tok/s with and without it.
 - [ ] Raise `--gpu-memory-utilization` (0.75 → 0.80 → 0.85). Watch `PLE disk stats` gather time, available memory and swap. Above about 0.85 the page cache for the PLE table runs short.

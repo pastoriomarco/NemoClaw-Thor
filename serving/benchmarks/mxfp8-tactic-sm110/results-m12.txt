@@ -1,0 +1,32 @@
+device sm_110, SMs 20, 32 CUTLASS tactics
+gdn.in_proj_qkvz   N=16384 K=2560 M=   12: default    200.3 us  best t8:128x64x128/c2x2    168.7 us  [bit]  failed=0
+gdn.in_proj_qkvz   N=16384 K=2560 M=  384: default    225.4 us  best t6:128x64x128/c1x2    225.2 us  [bit]  failed=0
+out_proj+o_proj    N= 2560 K=6144 M=   12: default     67.4 us  best t8:128x64x128/c2x2     65.5 us  [bit]  failed=0
+out_proj+o_proj    N= 2560 K=6144 M=  384: default    105.8 us  best t21:128x128x256/c1x2     76.6 us  [bit]  failed=0
+qsa.qkv_proj       N=13952 K=2560 M=   12: default    146.7 us  best t7:128x64x128/c2x1    143.2 us  [bit]  failed=0
+qsa.qkv_proj       N=13952 K=2560 M=  384: default    198.8 us  best t6:128x64x128/c1x2    193.4 us  [bit]  failed=0
+shexp.gate_up      N= 1280 K=2560 M=   12: default     17.0 us  best t8:128x64x128/c2x2     16.1 us  [bit]  failed=0
+shexp.gate_up      N= 1280 K=2560 M=  384: default     20.3 us  best t13:128x256x128/c1x2     19.9 us  [bit]  failed=0
+shexp.down         N= 2560 K= 640 M=   12: default     11.9 us  best t13:128x256x128/c1x2      9.9 us  [bit]  failed=0
+shexp.down         N= 2560 K= 640 M=  384: default     16.7 us  best t15:128x256x128/c2x2     14.7 us  [bit]  failed=0
+
+== per-tactic weighted totals (us per step = sum count*us); decode M=4 and M=1 ==
+M=12: default 13591 us; top5: t8:128x64x128/c2x2=12193, t3:128x64x128/c1x4=12235, t9:128x64x128/c2x4=12249, t6:128x64x128/c1x2=12256, t5:128x64x128/c1x1=12296
+M=12: best-per-shape total 12176 us (saving 1415 us)
+M=384: default 17355 us; top5: t21:128x128x256/c1x2=15971, t12:128x256x128/c1x1=16103, t3:128x64x128/c1x4=16125, t13:128x256x128/c1x2=16193, t1:128x128x256/c1x4=16242
+M=384: best-per-shape total 15765 us (saving 1590 us)
+
+== per-shape top 4 at each M (us/call, exactness vs default) ==
+gdn.in_proj_qkvz   M=   12 def=   200.3 | t8:128x64x128/c2x2 168.7 [bit] | t3:128x64x128/c1x4 168.8 [bit] | t22:128x128x256/c2x2 169.3 [bit] | t5:128x64x128/c1x1 169.5 [bit]
+gdn.in_proj_qkvz   M=  384 def=   225.4 | t6:128x64x128/c1x2 225.2 [bit] | t20:128x128x256/c1x1 225.2 [bit] | default(-1) 225.4 [bit] | t21:128x128x256/c1x2 225.4 [bit]
+out_proj+o_proj    M=   12 def=    67.4 | t8:128x64x128/c2x2 65.5 [bit] | t9:128x64x128/c2x4 65.6 [bit] | t7:128x64x128/c2x1 65.6 [bit] | t6:128x64x128/c1x2 66.2 [bit]
+out_proj+o_proj    M=  384 def=   105.8 | t21:128x128x256/c1x2 76.6 [bit] | t1:128x128x256/c1x4 78.0 [bit] | t27:128x256x256/c2x1 78.0 [bit] | t30:128x256x256/c4x2 78.1 [bit]
+qsa.qkv_proj       M=   12 def=   146.7 | t7:128x64x128/c2x1 143.2 [bit] | t8:128x64x128/c2x2 143.5 [bit] | t5:128x64x128/c1x1 143.7 [bit] | t6:128x64x128/c1x2 143.8 [bit]
+qsa.qkv_proj       M=  384 def=   198.8 | t6:128x64x128/c1x2 193.4 [bit] | t20:128x128x256/c1x1 194.7 [bit] | t21:128x128x256/c1x2 195.0 [bit] | t3:128x64x128/c1x4 196.0 [bit]
+shexp.gate_up      M=   12 def=    17.0 | t8:128x64x128/c2x2 16.1 [bit] | t9:128x64x128/c2x4 16.1 [bit] | t3:128x64x128/c1x4 16.1 [bit] | t7:128x64x128/c2x1 16.1 [bit]
+shexp.gate_up      M=  384 def=    20.3 | t13:128x256x128/c1x2 19.9 [bit] | t12:128x256x128/c1x1 20.2 [bit] | t0:128x128x256/c4x2 20.3 [bit] | default(-1) 20.3 [bit]
+shexp.down         M=   12 def=    11.9 | t13:128x256x128/c1x2 9.9 [bit] | t6:128x64x128/c1x2 9.9 [bit] | t3:128x64x128/c1x4 10.0 [bit] | t16:128x256x128/c1x4 10.0 [bit]
+shexp.down         M=  384 def=    16.7 | t15:128x256x128/c2x2 14.7 [bit] | t14:128x256x128/c2x1 15.1 [bit] | t18:128x256x128/c4x2 15.3 [bit] | t13:128x256x128/c1x2 15.6 [bit]
+
+non-bitwise or failed tactics (label, maxdiff/exception): []
+elapsed 131 s

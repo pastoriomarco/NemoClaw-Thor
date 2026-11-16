@@ -157,6 +157,7 @@ class UVA:
 class FakeStates:
     def __init__(self, temp, top_k, min_p):
         self.temperature, self.top_k, self.min_p = UVA(temp), UVA(top_k), UVA(min_p)
+        self.vocab_size = V
     def add_request(self, i, sp):
         self.temperature.np[i], self.top_k.np[i], self.min_p.np[i] = sp["t"], sp["k"], sp.get("min_p", 0.0)
         return sp["t"] != 0.0 and (sp["t"] != 1.0 or sp["k"] != V)

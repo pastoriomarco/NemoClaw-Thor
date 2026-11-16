@@ -8,18 +8,23 @@ Decode on this board is limited by the bytes read per step. The checkpoint keeps
 `lm_head` (248,320 x 2,560, 1.27 GB) and the dense MTP parts in BF16, and the lm_head
 is read on every target step and on every one of the K draft steps.
 
-This overlay adds four features. Each has its own env variable, all are off by
-default, and with none set the behaviour is stock 0.33.0.
+This overlay adds six features. Each has its own env variable, all are off by
+default, and with none set the behaviour is stock 0.33.0. Item 5 is for the
+`nvidia/Qwen3.8-Flash-Next-NVFP4` checkpoint, whose dense side layers are BF16;
+on FP4-Local it logs a no-op. Item 6 works the same on both checkpoints.
 
 | # | Variable | What it does | Target output |
 |---|---|---|---|
 | 1 | `QWEN4EXP_DRAFT_VOCAB=/path/ids.npy` | The MTP draft step scores only these token ids, using its own reduced copy of the lm_head rows. | Unchanged. Target verification keeps the full vocabulary, so only the acceptance length can drop. |
 | 2 | `QWEN4EXP_LM_HEAD_MXFP8=1` | Online MXFP8 for the target lm_head. The drafter shares that head. With item 1 set, the reduced draft head is MXFP8 too. | Changes slightly (see "Precision of item 2"). |
-| 3 | `QWEN4EXP_MTP_DENSE_MXFP8=1` | Online MXFP8 for the BF16 dense MTP projections: `fc_embedding`, `fc_hidden`, the QSA `qkv_proj` (which carries the indexer's `index_qk_proj`), `o_proj`, and `shared_expert.gate_up_proj` / `down_proj`. | Unchanged, because only the drafter changes. |
+| 3 | `QWEN4EXP_MTP_DENSE_FP8=1` (named `QWEN4EXP_MTP_DENSE_MXFP8` before 2026-11-16) | Online 8-bit (`QWEN4EXP_FP8_FORMAT`, default blockwise FP8) for the BF16 dense MTP projections: `fc_embedding`, `fc_hidden`, the QSA `qkv_proj` (which carries the indexer's `index_qk_proj`), `o_proj`, and `shared_expert.gate_up_proj` / `down_proj`. | Unchanged, because only the drafter changes. |
+| 5 | `QWEN4EXP_SIDE_FP8=1` | Online 8-bit (`QWEN4EXP_FP8_FORMAT`, default blockwise FP8) for the target's dense side layers that a ModelOpt MIXED_PRECISION checkpoint leaves in BF16: GDN `in_proj_qkvz` / `out_proj`, QSA `qkv_proj` (with the fused indexer `index_qk_proj`) / `o_proj`, shared-expert `gate_up_proj` / `down_proj`. The online form of the earlier RadixArk FP8 hybrid. No-op when the checkpoint already quantizes them (FP4-Local: MXFP8). `QWEN4EXP_SIDE_FP8_SKIP` (comma-separated kinds, e.g. `self_attn.qkv_proj`) keeps those kinds in BF16; unknown kinds refuse to start. On NVIDIA NVFP4, all kinds cost Tool Eval 5 points (86/100); skipping `self_attn.qkv_proj` (QSA projections + indexer) gave 93/100. With `QWEN4EXP_QSA_UNFUSE_INDEXER=1` the indexer is its own kind, `self_attn.indexer.index_qk_proj`, so the skip can keep only it in BF16 (see "Item 5: QSA indexer unfused"). | Changes slightly (FP8 W8A8 GEMMs in every layer). |
+| 6 | `QWEN4EXP_HC_FP8=1` | Online 8-bit (`QWEN4EXP_HC_FP8_FORMAT="<down>[,<up>]"`, default `fp8_per_block,mxfp8`) for the target's hyperconnection GEMMs: per layer the `attn_`/`mlp_hyper_connection` merged down+inject and up projections, plus the final mixer's down and up (194 matrices, 1.279 GB BF16 per step). Both checkpoints keep them in BF16. Measured on Thor: GPU −1.3…−1.4 ms per step, step −1.1 ms on R8b, unchanged on N3, prefill +0.13 s. See "Item 6". | Changes slightly (FP8 W8A8 GEMMs in every layer). |
 | 4 | `QWEN4EXP_LM_HEAD_SCREENED=1` | Screened target lm_head (backport of vLLM PR #60566): an FP8 copy scores all 248,320 rows with a rigorous error bound, and only the rows that can be in the top k get exact logits from the resident BF16 head. Used for greedy and top_k <= `QWEN4EXP_LM_HEAD_SCREEN_K` (default 32) batches; all other batches use the full BF16 head. Mutually exclusive with item 2. | Unchanged: the sampled token and every target probability that the sampler or rejection sampler reads come from the full head's top k, up to one-ulp summation-order differences (see "Item 4"). |
 
-None of this needs a new checkpoint snapshot. Items 2 and 3 use vLLM's stock
-online MXFP8 linear method (`Mxfp8OnlineLinearMethod`). It loads the BF16 rows onto
+None of this needs a new checkpoint snapshot. Item 2 uses vLLM's stock
+online MXFP8 linear method (`Mxfp8OnlineLinearMethod`); item 3 uses the stock online method of
+`QWEN4EXP_FP8_FORMAT` (`Fp8PerBlockOnlineLinearMethod` by default, or `Mxfp8OnlineLinearMethod`). It loads the BF16 rows onto
 a meta-device weight and quantizes each layer as soon as its rows have arrived, so
 the BF16 copy never stays resident. That suits unified memory. There is no offline
 conversion script, and no disk or conversion time is needed: the quantization runs
@@ -32,13 +37,21 @@ Every hunk is marked `[draft-head]`.
 
 | File | Base | Change |
 |---|---|---|
-| `vllm/models/qwen4_exp/nvidia/draft_head.py` | new | `make_lm_head()` builds a `ParallelLMHead`. With item 2 it passes `quant_method=Mxfp8OnlineLinearMethod()` and logs the kernel. `pad_draft_vocab()` / `load_draft_vocab()`: sorted unique ids from the `.npy`, topped up with the lowest unused ids to a multiple of 128, so there is no vocab padding and GEMM rows stay aligned; the result is a device tensor. `maybe_quantize_mtp_dense()` puts a stock `OnlineQuantizationConfig(targets={MTP_DENSE_TARGET: "mxfp8"})` on the drafter's quant config. `log_mtp_dense()` logs the matched layers. |
+| `vllm/models/qwen4_exp/nvidia/draft_head.py` | new | `make_lm_head()` builds a `ParallelLMHead`. With item 2 it passes `quant_method=Mxfp8OnlineLinearMethod()` and logs the kernel. `pad_draft_vocab()` / `load_draft_vocab()`: sorted unique ids from the `.npy`, topped up with the lowest unused ids to a multiple of 128, so there is no vocab padding and GEMM rows stay aligned; the result is a device tensor. `maybe_quantize_mtp_dense()` puts a stock `OnlineQuantizationConfig(targets={MTP_DENSE_TARGET: <QWEN4EXP_FP8_FORMAT>})` on the drafter's quant config. `log_mtp_dense()` logs the matched layers. |
 | `vllm/models/qwen4_exp/nvidia/model.py` | full copy of 0.33 (sha256 `e9d9c2a6…a1c0`) | `Qwen4ExpForCausalLM.__init__` (`:730-734`): `ParallelLMHead(...)` becomes `make_lm_head(...)` with the same arguments. The unused `ParallelLMHead` import is dropped (`:33`), and `make_lm_head` is imported. |
 | `vllm/models/qwen4_exp/nvidia/mtp.py` | full copy of 0.33 (sha256 `86126a83…a9e`) | (a) `_make_draft_vllm_config` (after `:154-160`): `maybe_quantize_mtp_dense(draft_quant_config)`. (b) `Qwen4ExpMultiTokenPredictor.__init__` (before `:231`): `log_mtp_dense(...)`. (c) `Qwen4ExpMTP.__init__` (after `:437`): registers the non-persistent buffer `draft_vocab_ids` (`None` when off). When it is set, the init also creates `draft_head = make_lm_head(len(ids), hidden)` and `draft_logits_processor = LogitsProcessor(len(ids))`. Only on the last PP rank, and only for untied embeddings. (d) `compute_logits` (`:465`): when ids are set, it computes logits with the reduced head, writes them into a `[T, 248320]` tensor filled with `-inf` (`index_copy_`), and returns that. (e) `load_weights` (`:471`): for checkpoint `lm_head.weight`, it also yields `draft_head.weight = lm_head.weight.index_select(0, ids)` and logs it. |
 | `build_draft_vocab.py` | port of `flash-next-fast-v2/build_draft_vocab.py` | Builds a vocabulary from a corpus (frequency ranking after byte, special and added tokens, then id-order fill). `--verify` checks an asset against a tokenizer. |
-| `vllm/models/qwen4_exp/nvidia/screened_head.py` | new `[screened-head]` | Item 4. `screened_head_settings()` (env, mutual exclusion, rows per call = `min(max_num_seqs * (1 + num_speculative_tokens), 64)`), the three Triton kernels and the bound of PR #60566 unchanged, `ScreenedLMHead` (FP8 copy, `required_top_k()`, `build()` with checks, kernel warm-up and log line), `ScreenCheck` (item 4 check mode), `_install_hooks()` (the PR's two runner hunks as wrappers, see "Item 4"). |
+| `vllm/models/qwen4_exp/nvidia/screened_head.py` | new `[screened-head]` | Item 4. `screened_head_settings()` (env, mutual exclusion, rows per call = `min(max_num_seqs * (1 + num_speculative_tokens), 64)`), the three Triton kernels and the bound of PR #60566 unchanged, `ScreenedLMHead` (FP8 copy, `required_top_k()` / `screen_decision()` with the fallback reason, `build()` with checks, kernel warm-up and log line), `ScreenCheck` (item 4 check mode), `ScreenStats` (item 4 stats), `_install_hooks()` (the PR's two runner hunks as wrappers, see "Item 4"). |
 | `vllm/models/qwen4_exp/nvidia/model.py` (item 4) | same copy | `[screened-head]` hunks: import (`:85`); `Qwen4ExpForCausalLM.__init__` (after `:736`): `screened_head = None`, `_screened_settings = screened_head_settings(vllm_config)` (raises on bad combinations at startup); `compute_logits` (`:903`): uses the screen while the sample hook has set `screened_head.top_k`, else stock; `load_weights` (`:917-925`): after the stock loader, `ScreenedLMHead.build(...)` from the loaded BF16 `lm_head`. `Qwen4ExpForConditionalGeneration` reaches both through `language_model`. |
-| `tests/test_vocab.py`, `tests/test_fp8.py`, `tests/test_screened.py`, `tests/test_screened_kernels.py`, `tests/_screened_common.py` | new | CPU tests (see "Tests"). |
+| `vllm/models/qwen4_exp/nvidia/draft_head.py` (item 5) | same new file | `[side-fp8]`: `side_fp8_target()` (the runtime-name regex minus `QWEN4EXP_SIDE_FP8_SKIP`), `maybe_quantize_side_layers()` (env, no-op checks, puts a stock `OnlineQuantizationConfig(targets={side_fp8_target(): format})` on the target's checkpoint quant config), `log_side_layers()` (the one-line summary). `[qsa-unfuse]`: `QSA_INDEXER_KIND`, `qsa_unfuse_indexer()`, `maybe_unfuse_qsa_indexer()`. |
+| `vllm/models/qwen4_exp/nvidia/model.py` (item 5) | same copy | `[side-fp8]` hunks: import; `Qwen4ExpForCausalLM.__init__`: `maybe_quantize_side_layers(self.quant_config)` before `Qwen4ExpModel(...)` is built, `log_side_layers(self.model)` after. `[qsa-unfuse]` hunks: `_Qwen4ExpQSAUnfusedIndexerInit` (after the imports); `Qwen4ExpDecoderLayer.__init__` builds target QSA layers with it when the switch is on; `maybe_unfuse_qsa_indexer(self.quant_config)` before `maybe_quantize_side_layers`. |
+| `tests/test_side_fp8.py` | new | Item 5 tests against the real vLLM 0.33 code (see "Tests"). |
+| `vllm/models/qwen4_exp/nvidia/hyperconnection.py` (item 6) | full copy of 0.33 (sha256 `9561e232…6f4a`) | `[hc-fp8]` hunks in `GatedResidual.__init__`: the three HC Linears take `quant_config=hc_fp8_quant_config(prefix)` instead of `None`; a converted merged down+inject layer gets its pad rows loaded as zeros (`load_hc_pad`) and `_use_hc_down_silu=False`. |
+| `vllm/models/qwen4_exp/nvidia/hc_fp8.py` (item 6) | new `[hc-fp8]` | `HC_FP8_TARGET` (runtime-name regex), `hc_fp8_quant_config()`, `load_hc_pad()`, `log_hc_fp8()` (the one-line summary). |
+| `vllm/models/qwen4_exp/nvidia/model.py` (item 6) | same copy | `[hc-fp8]`: `import os`; `Qwen4ExpForCausalLM.__init__`, after `Qwen4ExpModel(...)`: `log_hc_fp8(self.model)` when the switch is set (imported there, so the switch-off overlay needs no new mount). |
+| `vllm/models/qwen4_exp/nvidia/draft_head.py` (item 6) | same new file | `[hc-fp8]`: `log_side_layers` skips HC modules (they use the same method class). |
+| `tests/test_hc_fp8.py` | new | Item 6 tests against the real vLLM 0.33 code (see "Tests"). |
+| `tests/test_vocab.py`, `tests/test_fp8.py`, `tests/test_screened.py`, `tests/test_screened_kernels.py`, `tests/test_screen_stats.py`, `tests/_screened_common.py` | new | CPU tests (see "Tests"). |
 
 The `qwen4exp-spec-step` and `qwen4exp-ple-disk` overlays touch none of these files,
 so they combine. Neither do the overlays of `modelopt.py`, `nvfp4_utils.py`,
@@ -110,7 +123,7 @@ for qwen4_exp MTP on the V2 runner, but it does not give item 1 or item 2:
 Leave it unset. With item 2 it raises, because it needs an unquantized head. With
 item 1 its copy would never be used.
 
-**Item 3, MXFP8 MTP dense.** vLLM's stock way to quantize unquantized layers of a
+**Item 3, 8-bit MTP dense.** vLLM's stock way to quantize unquantized layers of a
 pre-quantized checkpoint online is `--quantization-config '{"targets": …}'`
 (composition in `model_executor/layers/quantization/base_config.py:295-352`). That
 flag does not reach the MTP drafter: `SpeculativeConfig` builds the draft
@@ -119,8 +132,8 @@ hook therefore attaches the same stock `OnlineQuantizationConfig` to the drafter
 own `ModelOptMixedPrecisionConfig`.
 
 The checkpoint's `ignore` patterns keep those layers BF16 (`UnquantizedLinearMethod`),
-and `resolve_quant_method` then swaps in `Mxfp8OnlineLinearMethod` for prefixes that
-match `MTP_DENSE_TARGET`. Target layers never match (they are `model.layers.N…` and
+and `resolve_quant_method` then swaps in the online method of `QWEN4EXP_FP8_FORMAT`
+(`Fp8PerBlockOnlineLinearMethod` by default) for prefixes that match `MTP_DENSE_TARGET`. Target layers never match (they are `model.layers.N…` and
 use the checkpoint's own MXFP8 anyway).
 
 Not converted:
@@ -128,6 +141,93 @@ Not converted:
   custom CuTeDSL kernels (`HcDownSiluMma`);
 - the router `mlp.gate` and `shared_expert_gate` (N=512 and N=1);
 - the norms.
+
+**Item 5, side-layer FP8 (NVIDIA NVFP4 checkpoint).** The checkpoint's
+`quantization_config` is ModelOpt `MIXED_PRECISION` (`modelopt_mixed`): only the
+routed experts (NVFP4), the PLE table (FP8) and the MTP experts (FP8 blocks) are in
+`quantized_layers`; `ignore` lists, per layer, `linear_attn*`, `self_attn*`,
+`mlp.shared_expert*`, `mlp.gate`, `mlp.shared_expert_gate` and the HC mixers, plus
+`embed_tokens` and `lm_head`. Every other dense linear is unquantized as well
+(`ModelOptMixedPrecisionConfig.get_quant_method` falls back to
+`UnquantizedLinearMethod`). So under 0.33 these target matrices are BF16:
+
+| Runtime module (per layer) | Layers | Shape (N x K) | BF16 | Item 5 |
+|---|---|---|---|---|
+| `linear_attn.in_proj_qkvz` (ckpt `in_proj_qkv` + `in_proj_z`) | 36 | 16384 x 2560 | 3.020 GB | FP8 |
+| `linear_attn.out_proj` | 36 | 2560 x 6144 | 1.132 GB | FP8 |
+| `self_attn.qkv_proj` (ckpt `q/k/v_proj` + `indexer.index_qk_proj`) | 12 | 13952 x 2560 | 0.857 GB | FP8 |
+| `self_attn.o_proj` | 12 | 2560 x 6144 | 0.377 GB | FP8 |
+| `mlp.shared_expert.gate_up_proj` | 48 | 1280 x 2560 | 0.315 GB | FP8 |
+| `mlp.shared_expert.down_proj` | 48 | 2560 x 640 | 0.157 GB | FP8 |
+| `linear_attn.in_proj_ba` (ckpt `in_proj_b` + `in_proj_a`) | 36 | 96 x 2560 | 0.018 GB | BF16 (N=96: no 128-blocks; small) |
+| `mlp.gate` (router) | 48 | 512 x 2560 | 0.126 GB | BF16 (routing precision) |
+| `mlp.shared_expert_gate` | 48 | 1 x 2560 | 0.0005 GB | BF16 (built with `quant_config=None`) |
+| HC mixers (`*_hyper_connection.input_mix_weight_down_block_inject` / `_up`, final mixer) | 97 x 2 | 324(+pad) x 10240, 10240 x 320 | 1.28 GB | BF16 (custom CuTeDSL kernels, precision); item 6 converts them |
+| `ple.kv_proj` (layer 1) | 1 | 12800 x 2560 | 0.066 GB | BF16 (not in the RadixArk class) |
+| `embed_tokens`, `lm_head` | 1 + 1 | 248320 x 2560 | 1.27 GB each | BF16 (the embedding is a gather; the head has items 2 and 4) |
+
+The 192 converted modules hold 312 checkpoint matrices: the 300 of the RadixArk FP8
+hybrid (`linear_attn.in_proj_qkv/in_proj_z/out_proj`, `self_attn.q/k/v/o_proj`,
+`mlp.shared_expert.gate/up/down_proj`; 5.42 GiB) plus the 12 indexer `index_qk_proj`
+(640 x 2560), which vLLM fuses into the QSA `qkv_proj` GEMM; a fused layer takes one
+method, so the indexer projection goes along. FP4-Local quantizes it too (MXFP8).
+
+The hook is the stock composition of item 3, on the target's quant config:
+`maybe_quantize_side_layers` sets `online_quantization_config` with
+`targets={side_fp8_target(): format}` at the start of `Qwen4ExpForCausalLM.__init__`.
+Each `LinearBase` then calls `resolve_quant_method`
+(`model_executor/layers/quantization/base_config.py:295-352`): the checkpoint method
+is `UnquantizedLinearMethod`, the prefix matches, so it gets
+`Fp8PerBlockOnlineLinearMethod` (or `Mxfp8OnlineLinearMethod`). The regex is anchored
+on `model.layers.N.`, so the drafter (`mtp.layers.N`, own quant config, item 3) and
+the experts never match. The online loader quantizes each layer once its shards
+have arrived; no BF16 copy stays resident.
+
+The stock `--quantization-config '{"targets": …}'` would reach the target too, but
+it does not check that the matched layers are unquantized: on FP4-Local it would
+requantize the MXFP8 side layers. The env switch makes that check. No-op cases (one
+log line, nothing changed):
+- the checkpoint is not ModelOpt `MIXED_PRECISION`;
+- the checkpoint's `quantized_layers` already lists any side matrix (FP4-Local lists
+  all 312 as MXFP8). Without this check the targets would *requantize* those layers
+  (dequantize MXFP8, then FP8), because `resolve_quant_method` applies an online
+  target to quantized layers too.
+With `--quantization-config` also set, startup raises.
+
+**Item 5: QSA indexer unfused (`QWEN4EXP_QSA_UNFUSE_INDEXER=1`, `[qsa-unfuse]`).**
+Without LoRA, 0.33 fuses the indexer projection into the QSA `qkv_proj` GEMM
+(`qsa.py:508-516`, `self.fuse_indexer_projection = vllm_config.lora_config is None`;
+`Qwen4ExpQSAQKVIndexerLinear`, 13,952 x 2,560 of which 640 indexer rows), so one
+method covers both. N3 keeps the whole GEMM in BF16 (3.35 ms per step) to keep the
+indexer exact. With the switch, the target's QSA layers take qsa.py's own unfused
+(LoRA) layout: `qkv_proj` is the stock `QKVParallelLinear` (q/gate, k, v: 13,312 x
+2,560) and `indexer.index_qk_proj` stays its own `ReplicatedLinear` (640 x 2,560),
+run separately in `forward` (`qsa.py:634-640`); `load_weights` then uses no indexer
+mapper, so the checkpoint's `self_attn.indexer.index_qk_proj.weight` loads into it
+by name and q/k/v stack into `qkv_proj` as usual. No `qsa.py` overlay:
+`Qwen4ExpDecoderLayer` builds those layers through `_Qwen4ExpQSAUnfusedIndexerInit`,
+a subclass whose `__setattr__` turns that one assignment into `False`, and resets
+the module's class to the stock `Qwen4ExpQSAAttention` right after `__init__`; at
+run time the module is the stock class on its unfused path. The drafter
+(`mtp.layers.N`) keeps the fused GEMM. `maybe_unfuse_qsa_indexer` also gives the
+target's quant config a `qkv_proj -> [q_proj, k_proj, v_proj]` packed mapping
+(it was `[…, indexer.index_qk_proj]`): the quant configs match a fused module by its
+shards, and with the stock mapping a target on the indexer without one on
+`qkv_proj` makes the online matcher refuse ("unmatched shards").
+
+The side-FP8 kind `self_attn.indexer.index_qk_proj` exists only with the switch on,
+so `QWEN4EXP_SIDE_FP8_SKIP=self_attn.indexer.index_qk_proj` keeps exactly the 12
+indexer projections in BF16 and `self_attn.qkv_proj` (now q/gate, k, v) goes to
+online FP8 with the other side layers. Naming that kind without the switch refuses
+to start (the indexer would otherwise silently go FP8 inside `qkv_proj`). The
+switch alone (side FP8 off) changes no values, only splits one GEMM in two. On
+FP4-Local, side FP8 stays a no-op and the unfused indexer and `qkv_proj` keep the
+checkpoint's MXFP8 method, so there the switch only costs the extra GEMM: leave it
+off.
+
+Bytes per target step for the side layers (weights only, `fp8_per_block`): N3 3.359
+GB, C1 (unfused, indexer skipped) 2.950 GB, i.e. -0.409 GB = -1.67 ms at 245 GB/s,
+minus 12 extra small GEMM launches; all kinds FP8 unfused 2.930 GB (= N2).
 
 **Item 4, screened lm_head.** A backport of vLLM PR #60566 ("[MRV2][Perf] Screened
 lm_head", open, not in 0.33). The bound, the three Triton kernels (`_screen_kernel`,
@@ -139,12 +239,13 @@ The changes are in how it is wired in:
 | `--screened-lm-head` (`ModelConfig.screened_lm_head`) | `QWEN4EXP_LM_HEAD_SCREENED=1`; no config or CLI file is patched. |
 | `ScreenedLMHead.from_model()` in `GPUModelRunner.load_model` | `ScreenedLMHead.build()` at the end of `Qwen4ExpForCausalLM.load_weights`, so the FP8 copy is in the model memory that vLLM profiles before sizing the KV cache. |
 | hunk in `GPUModelRunner.sample` (`model_runner.py:1655-1656`): screen instead of `compute_logits` | the same decision in a wrapper around `GPUModelRunner.sample`. It sets `screened_head.top_k` for the call, and `Qwen4ExpForCausalLM.compute_logits` then uses the screen. The wrapper is installed at load by `_install_hooks()`, because the `qwen4exp-spec-step` overlay already mounts its own full `model_runner.py`; with a wrapper both overlays combine. |
-| hunk in `Sampler.add_request` (`sampler.py:96-108`): new `uses_logits_processors` | the same body, installed the same way (it calls the same states in the same order and only adds that array). |
+| hunk in `Sampler.add_request` (`sampler.py:96-108`): new `uses_logits_processors` | the same body, installed the same way (it calls the same states in the same order and only adds that array; with `QWEN4EXP_LM_HEAD_SCREEN_STATS` also a per-request reason code). |
 | FP8 copy via `ops.scaled_fp8_quant` (per row) | the same per-row e4m3 scale in plain torch (`amax / 448`); the bound is computed from the stored values either way. |
 | `MAX_TOP_K = 32` | `QWEN4EXP_LM_HEAD_SCREEN_K` (default 32). |
 | kernel warm-up for 1, 17, 33 rows | every row count 1..max, so no Triton JIT happens on a live request. |
 | weight-transfer / `reload_weights` refresh | not wired (not used here); a reload through `load_weights` rebuilds it. |
 | — | `QWEN4EXP_LM_HEAD_SCREEN_CHECK=N`: in-server comparison on the same hidden states (below). |
+| — | `QWEN4EXP_LM_HEAD_SCREEN_STATS=<sec>`: per-reason counts of screened and full-head calls (below). |
 
 *How it works.* The FP8 copy (e4m3, one fp32 scale per row) scores every row as s_j.
 For each row an fp64 bound err_j is computed at load, so that
@@ -180,7 +281,8 @@ call, from host-side state only):
   rows;
 - the sampler is the plain `Sampler` (no NaN counting, trace replay or sampling mask).
 
-Otherwise that call uses the full BF16 head. With the `fly` rejection method, greedy
+Otherwise that call uses the full BF16 head (`QWEN4EXP_LM_HEAD_SCREEN_STATS` counts
+how often, and why). With the `fly` rejection method, greedy
 batches certify `fly_entropy_top_k` rows instead of 1, because that verifier reads the
 entropy of the target's top rows.
 
@@ -242,6 +344,112 @@ reduced head).
 - Net: about +0.66 GB against stock.
 - At load, the fp64 bound computation adds a transient 4,096-row chunk of about
   0.3 GB.
+
+## Item 6: hyperconnection FP8 (`QWEN4EXP_HC_FP8`)
+
+*What exists.* Every decoder layer has two `GatedResidual` modules
+(`attn_hyper_connection`, `mlp_hyper_connection`), and the model ends with one
+`hyper_connection_mixer` (`use_combine=False`). Shapes for this model (hidden 2,560,
+`hc_count` 4, `hc_lowrank` 320, so the multi-stream width is 10,240):
+
+| Runtime module | Count | Checkpoint matrices | Runtime shape (N x K) | Kind | BF16 per step |
+|---|---|---|---|---|---|
+| `layers.N.{attn,mlp}_hyper_connection.input_mix_weight_down_block_inject` (`MergedColumnParallelLinear`, `disable_tp`) | 96 | `input_mix_weight_down` 320 x 10240 + `block_inject_weight` 4 x 10240 (+ 12 pad rows, not in the checkpoint) | 336 x 10240 | GEMM; at M <= 48 the fused CuTeDSL down+SiLU kernel (`hc_down_silu`, BF16 weight), else the Linear + `hc_silu` | 0.637 GB (324 rows; the fused kernel skips the pad) |
+| `layers.N.{attn,mlp}_hyper_connection.input_mix_weight_up` (`ReplicatedLinear`) | 96 | `input_mix_weight_up` 10240 x 320 | 10240 x 320 | GEMM (Linear dispatch) | 0.629 GB |
+| `hyper_connection_mixer.input_mix_weight_down` / `_up` (`ReplicatedLinear`) | 1 + 1 | 320 x 10240, 10240 x 320 | same | GEMM | 0.013 GB |
+| `*.hc_norm.weight` | 97 | 10240 (BF16; FP32 in FP4-Local) | - | elementwise (`grouped_gemma_rmsnorm`, `hc_combine_norm`) | 2 MB |
+| combine, gate mix (`hc_combine`, `hc_gate_mix`, `hc_silu`) | - | - | - | elementwise on activations | no weights |
+
+All 290 target checkpoint matrices are BF16 in both NVIDIA NVFP4 and FP4-Local
+(`tests/test_hc_fp8.py` reads the headers), 1.279 GB read per target step. The stock
+model builds the three Linears with `quant_config=None`, so the checkpoint's quant
+config never reaches them. The drafter has the same modules (`mtp.layers.48.*`,
+`mtp.hyper_connection_mixer`, 0.040 GB per draft pass); item 6 leaves them BF16.
+Only the GEMM weights are worth converting; the norms are 2 MB and the elementwise
+kernels (most of the 490 ms at a 7.5K prefill chunk) read activations, not weights.
+
+*How it hooks in.* `hyperconnection.py` (full copy) passes
+`hc_fp8_quant_config(prefix)` as `quant_config`. With the switch off, or for a
+prefix that is not a target HC projection (the drafter), that is `None`: the stock
+code path. With it on, it is one stock `OnlineQuantizationConfig(targets=
+{HC_DOWN_TARGET: <down>, HC_UP_TARGET: <up>})` from `QWEN4EXP_HC_FP8_FORMAT`, and
+`LinearBase` resolves it to the stock `Fp8PerBlockOnlineLinearMethod` or
+`Mxfp8OnlineLinearMethod`: meta weight, online
+quantization once the layer's rows have arrived, no resident BF16 copy. Two hunks
+are needed beyond that:
+- The merged down+inject layer has 12 pad rows that the checkpoint never fills.
+  `load_hc_pad` feeds them zeros through the layer's own (online-wrapped) loader at
+  construction. Without it the layer would quantize only at the final
+  "delayed processing", from `torch.empty` rows that share a 128-row scale block
+  with real rows (rows 256..335 = 64 low-rank rows, the 4 injection rows and the pad).
+- `_use_hc_down_silu` is False for a converted layer: the fused CuTeDSL kernel takes
+  a BF16 weight. The layer runs as Linear (FP8 GEMM) + the stock `hc_silu` kernel,
+  the path stock already uses above M = 48.
+Nothing else changes: the same split, gate mix and combine kernels, no host syncs,
+and the FP8 linears are the ones the side layers already run inside PIECEWISE
+graphs. The online methods are independent of the checkpoint's quant config, so
+item 6 composes with item 5, `QWEN4EXP_QSA_UNFUSE_INDEXER` and `--quantization-config`.
+
+*Bytes and expected saving (target step).*
+
+| | Bytes per step | Saving at 245 GB/s |
+|---|---|---|
+| stock BF16 | 1.279 GB | - |
+| item 6, `fp8_per_block` (e4m3 + fp32 per 128x128; the pad rows are read) | 0.652 GB | -0.628 GB, -2.56 ms |
+| item 6, `mxfp8` (e4m3 + e8m0 per 32) | 0.672 GB | -0.607 GB, -2.48 ms |
+| item 6, default `fp8_per_block,mxfp8` (the only pair the GPU kernels accept) | 0.661 GB | -0.618 GB, -2.52 ms |
+
+Resident memory drops by the same ~0.63 GB. Costs that offset part of it at decode:
+one dynamic activation-quant kernel per converted GEMM (194 per step), the separate
+`hc_silu` (96 per step) and losing the fused split-K down+SiLU kernel. The stock
+up GEMM runs at ~170 GB/s (3.7 ms for 0.63 GB), so a better FP8 GEMM efficiency
+there would add to the saving. Expected net: about -1.5 to -2.8 ms per target step,
+so the C2 gate (>= -2.5 ms) is not certain. At prefill the down GEMM gains one extra
+pass over its activation for the quantization (~150 MB per call at 7,488 tokens), so
+a 7.5K chunk may get ~40-60 ms slower (estimate); measure it.
+
+*Precision (CPU, real weights).* Through the real online loader, every converted
+matrix has a weight relative error of 0.023-0.027 (e4m3, about half an ulp), the
+injection rows inside the shared 128-row block included. One mix on synthetic
+multi-stream states (unit RMS per stream, outlier channels, the real `hc_norm`
+weights) gives 1.7-4.7% relative error on the block input (`fp8_per_block`; `mxfp8`
+emulated: 1.9-4.2%), layers 0, 24, 47 and the final mixer of both checkpoints. That
+is the usual W8A8 level, but it applies to every layer's residual mixing: check Tool
+Eval before keeping it.
+
+*Server run (either checkpoint).*
+```bash
+  # the four mounts of "Docker mounts", plus
+  -v $P/vllm/models/qwen4_exp/nvidia/hyperconnection.py:$V/models/qwen4_exp/nvidia/hyperconnection.py:ro \
+  -v $P/vllm/models/qwen4_exp/nvidia/hc_fp8.py:$V/models/qwen4_exp/nvidia/hc_fp8.py:ro \
+  -e QWEN4EXP_HC_FP8=1 \
+```
+`QWEN4EXP_HC_FP8_FORMAT="<down>[,<up>]"` (one value = both; default
+`fp8_per_block,mxfp8`) is separate from `QWEN4EXP_FP8_FORMAT`. Only the default pair
+starts on sm_110: `fp8_per_block` needs K % 128 (the up layers have K = 320,
+`the last dimension of x 320 must be divisible by group_size 128`), `mxfp8` needs
+N % 32 (the down layers have N = 336, `Expected n to be divisible by 32`). Log line
+(one, at model construction):
+`[hc-fp8] Hyperconnection GEMMs: 194 matrices to online fp8_per_block (down) / mxfp8 (up) (attn_hyper_connection.input_mix_weight_down_block_inject 48, attn_hyper_connection.input_mix_weight_up 48, hyper_connection_mixer.input_mix_weight_down 1, hyper_connection_mixer.input_mix_weight_up 1, mlp_hyper_connection.input_mix_weight_down_block_inject 48, mlp_hyper_connection.input_mix_weight_up 48): 1.279 GB BF16 -> 0.661 GB per step via Cutlass`. `0 matrices`
+means `hyperconnection.py` is not mounted. `Model loading took … GiB` is about
+0.6 GiB lower.
+
+*Measured on Thor (2026-11-15, default formats, interleaved runs in one session).*
+GPU work per step −1.3 ms (N3 + C1) and −1.4 ms (R8b + C3); step time 47.3 -> 46.2 ms on
+R8b + C3, unchanged at 47.3 ms on N3 + C1 (the host gap grew); warm 7.6K prefill +0.13 s
+on both. Tool Eval in noise (R8b 92, 91; N3 + C1 94, 94). Details:
+`serving/docs/FLASH-NEXT-SPEED-PLAN.md` (Stage C).
+
+*Risks.*
+- **Kernel shapes.** The HC GEMMs are not 128-aligned: down N = 336, up K = 320.
+  Each GPU kernel rejects one of them (above), hence the per-projection default.
+- **Small-M speed.** Two quant kernels + an unfused SiLU per layer pair may eat a
+  third of the byte saving (above). Measure decode tok/s and the target GPU time.
+- **Quality.** New quantization (neither NVIDIA's QAD nor the RadixArk hybrid
+  touched these matrices); the error compounds through the residual streams of all
+  48 layers. Tool Eval decides.
+- **Drafter unchanged.** The MTP mixers stay BF16 with the fused kernel (its warm-up
+  still runs); converting them would only change the draft.
 
 ## Precision of item 2 (explicit)
 
@@ -324,6 +532,20 @@ Resident memory:
 | item 1 | +0.24 GB (BF16) or +0.125 GB (MXFP8) for `draft_head` |
 | item 3 | -0.067 GB |
 
+Item 5, target step (all six kinds, weights only; M = 1 + K tokens share one read):
+
+| | Bytes per target step |
+|---|---|
+| NVIDIA NVFP4, stock (BF16 side layers) | 5.859 GB |
+| NVIDIA NVFP4 + item 5, `fp8_per_block` (e4m3 + fp32 per 128x128) | 2.930 GB (-2.929 GB) |
+| NVIDIA NVFP4 + item 5, `mxfp8` (e4m3 + e8m0 per 32) | 3.021 GB |
+| FP4-Local (MXFP8 as shipped) | 3.021 GB, plus `in_proj_ba` 0.009 GB MXFP8 |
+
+With item 5 the NVIDIA checkpoint reads about what FP4-Local reads for these
+layers (the remaining `in_proj_ba` difference is 9 MB). At about 245 GB/s, -2.93 GB
+is about -12 ms per target step. Resident memory drops by the same 2.93 GB. The
+drafter steps do not change (item 3 covers the MTP dense layers).
+
 ## Docker mounts
 
 Mount the four model files together: `model.py` and `mtp.py` both import the new
@@ -347,7 +569,7 @@ V=/usr/local/lib/python3.12/dist-packages/vllm
 ```bash
   -e QWEN4EXP_DRAFT_VOCAB=/opt/qwen4exp/draft_vocab.npy \
   -e QWEN4EXP_LM_HEAD_MXFP8=1 \
-  -e QWEN4EXP_MTP_DENSE_MXFP8=1 \
+  -e QWEN4EXP_MTP_DENSE_FP8=1 \
   ... vllm serve /root/.cache/huggingface/linked/fn-fp4-local \
       --speculative-config '{"method":"mtp","num_speculative_tokens":4}' \
       <the usual flags>
@@ -365,18 +587,42 @@ V=/usr/local/lib/python3.12/dist-packages/vllm
     -e QWEN4EXP_DRAFT_VOCAB=/opt/qwen4exp/draft_vocab.npy \
     -e QWEN4EXP_DRAFT_HEAD_FP8=1 \
     -e QWEN4EXP_LM_HEAD_SCREENED=1 \
-    -e QWEN4EXP_MTP_DENSE_MXFP8=1 \
+    -e QWEN4EXP_MTP_DENSE_FP8=1 \
   ```
   `QWEN4EXP_LM_HEAD_SCREEN_K` (default 32) is the largest sampling top_k that the
   screen serves; requests with a larger or no top_k use the full head.
   `QWEN4EXP_LM_HEAD_SCREEN_CHECK=N` (debug) also computes the full BF16 logits for
   every screened batch and logs a comparison every N screened calls. The served
   logits stay the screened ones, the head is read twice, and there is one host sync
-  per log line. Item 4 also raises at startup with LoRA, TP > 1 or
+  per log line.
+  `QWEN4EXP_LM_HEAD_SCREEN_STATS=<sec>` (for example `60`) counts every target
+  `sample()` call and its logit rows as screened (by top_k) or full head (by the
+  first disqualifying reason) and logs the totals since load at most every `<sec>`
+  seconds, on the first call after the interval (no line while idle). Host-side
+  only: no GPU sync, no device read; unset or `0` records nothing. It needs
+  `QWEN4EXP_LM_HEAD_SCREENED=1` and raises at startup on a negative value.
+  Item 4 also raises at startup with LoRA, TP > 1 or
   `VLLM_BATCH_INVARIANT=1`. No vLLM flag changes; keep the sampling defaults
   (`temperature 1.0, top_p 0.95, top_k 20` from the generation config) or greedy,
   without logprobs, to get the screen.
 - `draft_sample_method` may be `greedy` (the default) or `probabilistic`.
+- Item 5 with the NVIDIA checkpoint (no new mount; it is in `draft_head.py` and
+  `model.py`):
+  ```bash
+    -e QWEN4EXP_SIDE_FP8=1 \
+    -e QWEN4EXP_FP8_FORMAT=fp8_per_block \
+    -e QWEN4EXP_SIDE_FP8_SKIP=self_attn.qkv_proj \
+  ```
+  C1 (NVIDIA only): `qkv_proj` FP8, only the QSA indexer projection BF16 (no new
+  mount; `draft_head.py` and `model.py`):
+  ```bash
+    -e QWEN4EXP_SIDE_FP8=1 \
+    -e QWEN4EXP_FP8_FORMAT=fp8_per_block \
+    -e QWEN4EXP_QSA_UNFUSE_INDEXER=1 \
+    -e QWEN4EXP_SIDE_FP8_SKIP=self_attn.indexer.index_qk_proj \
+  ```
+  It composes with items 1-4 and `QWEN4EXP_DRAFT_HEAD_FP8`; `QWEN4EXP_FP8_FORMAT`
+  applies to all of them. Do not pass `--quantization-config` with it.
 
 ## Verify from the server log
 
@@ -384,9 +630,11 @@ V=/usr/local/lib/python3.12/dist-packages/vllm
 |---|---|
 | 1 | `[draft-head] MTP draft vocabulary: 47232 of 248320 ids from /opt/qwen4exp/draft_vocab.npy`, then while loading the drafter `[draft-head] Loading 47232 draft_head rows from lm_head.` The spec-decode metrics should show a mean acceptance length close to the stock run; compare with the same prompts. |
 | 2 | `[draft-head] language_model.lm_head: online MXFP8 (248320 x 2560) via FlashInferCutlassMxfp8LinearKernel`. The prefix may read `lm_head`, depending on the wrapper class. With item 1 there is also `[draft-head] draft_head: online MXFP8 (47232 x 2560) via …`. `Model loading took … GiB` should be about 0.6 GiB lower than stock. |
-| 3 | `[draft-head] MTP dense projections: online MXFP8 (re:…)` and `[draft-head] MTP online MXFP8 layers: fc_embedding: 1 (from targets: …, mxfp8); fc_hidden: 1 …; mlp.shared_expert.down_proj: 1 …; mlp.shared_expert.gate_up_proj: 1 …; self_attn.o_proj: 1 …; self_attn.qkv_proj: 1 …` (6 layers). |
+| 3 | `[draft-head] MTP dense projections: online fp8_per_block (re:…)` and `[draft-head] MTP online fp8_per_block layers: mlp.shared_expert.down_proj: 1 (from targets: …, fp8_per_block); mlp.shared_expert.gate_up_proj: 1 …; mtp.fc_embedding: 1 …; mtp.fc_hidden: 1 …; self_attn.o_proj: 1 …; self_attn.qkv_proj: 1 …` (6 layers). |
 
-| 4 | Once at load: `[screened-head] lm_head 248320 x 2560: FP8 screen ready in … s (FP8 copy 0.636 GB, buffers … MB, BF16 head kept for the exact rows); screens greedy and top_k <= 32 batches of <= N rows.` `Model loading took … GiB` is about 0.66 GiB higher than stock. With `QWEN4EXP_LM_HEAD_SCREEN_CHECK=N`: `[screened-head] check after … calls: rows=… argmax_diff=a (strictly_lower=b) topk_screened_out=c kept_logits_differing=d of e (avg … exact rows per token)`. b and c must be 0. a counts only BF16 ties (both rows have the same full logit). d should be a small fraction (one-ulp summation-order differences). The average should be in the tens for greedy and in the low thousands for top-20; much larger values cost speed, not correctness. |
+| 5 | `[side-fp8] Target side layers: online fp8_per_block (re:…)`, then `[side-fp8] Target side layers: 192 matrices to online fp8_per_block (linear_attn.in_proj_qkvz 36, linear_attn.out_proj 36, mlp.shared_expert.down_proj 48, mlp.shared_expert.gate_up_proj 48, self_attn.o_proj 12, self_attn.qkv_proj 12): 5.859 GB BF16 -> 2.930 GB per step via CutlassFp8BlockScaledMMKernel`, and the stock `Online quantization as part of model loading took … seconds`. `Model loading took … GiB` is about 2.7 GiB lower. With `QWEN4EXP_SIDE_FP8_SKIP=self_attn.qkv_proj`: 180 matrices, without the `self_attn.qkv_proj 12` entry. With `QWEN4EXP_QSA_UNFUSE_INDEXER=1`, first `[side-fp8] QSA indexer unfused: target self_attn.qkv_proj holds q/gate, k, v; self_attn.indexer.index_qk_proj is its own linear.`; with `QWEN4EXP_SIDE_FP8_SKIP=self_attn.indexer.index_qk_proj` (C1) the regex has no `indexer` and the summary is `192 matrices to online fp8_per_block (linear_attn.in_proj_qkvz 36, linear_attn.out_proj 36, mlp.shared_expert.down_proj 48, mlp.shared_expert.gate_up_proj 48, self_attn.o_proj 12, self_attn.qkv_proj 12): 5.820 GB BF16 -> 2.911 GB per step via CutlassFp8BlockScaledMMKernel` (the 0.039 GB difference is the BF16 indexer); without a skip, 204 matrices with `self_attn.indexer.index_qk_proj 12`. On FP4-Local: `[side-fp8] QWEN4EXP_SIDE_FP8 is a no-op: the checkpoint already quantizes 312 side-layer matrices (MXFP8, e.g. language_model.model.layers.0.linear_attn.in_proj_qkv).` |
+| 6 | `[hc-fp8] Hyperconnection GEMMs: 194 matrices to online fp8_per_block (…): 1.279 GB BF16 -> 0.652 GB per step via CutlassFp8BlockScaledMMKernel` (see "Item 6"). |
+| 4 | Once at load: `[screened-head] lm_head 248320 x 2560: FP8 screen ready in … s (FP8 copy 0.636 GB, buffers … MB, BF16 head kept for the exact rows); screens greedy and top_k <= 32 batches of <= N rows.` `Model loading took … GiB` is about 0.66 GiB higher than stock. With `QWEN4EXP_LM_HEAD_SCREEN_CHECK=N`: `[screened-head] check after … calls: rows=… argmax_diff=a (strictly_lower=b) topk_screened_out=c kept_logits_differing=d of e (avg … exact rows per token)`. b and c must be 0. a counts only BF16 ties (both rows have the same full logit). d should be a small fraction (one-ulp summation-order differences). The average should be in the tens for greedy and in the low thousands for top-20; much larger values cost speed, not correctness. With `QWEN4EXP_LM_HEAD_SCREEN_STATS=<sec>`, at most every `<sec>` s: `[screened-head] stats <s>s calls/rows: all=C/R screened=C/R full=C/R \| screened by top_k: k1=C/R k20=C/R \| full by reason: presence_penalty=C/R logprobs=C/R …` (totals since load; C = `sample()` calls, R = their logit rows; entries sorted by rows; `-` when empty). Reasons, checked in this order, the first one counts: `structured_output`, `batch_sharder`, `sampler_subclass`, `compute_nans`, `trace_replay`, `sampling_mask`, `hook_missing`, `no_rows`, `rows_over_max`, then the first logits processor of any request in the batch in pipeline order (`allowed_token_ids`, `logit_bias`, `min_tokens` (stop ids masked while below `min_tokens`), `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `bad_words`, `custom_processor`, `thinking_budget`), then `logprobs` (also per-request logprob token ids), and for the sampled requests `no_top_k`, `top_k_over_max` (top_k > `SCREEN_K`), `min_p`. A request keeps its processor reason for its whole life (for example `min_tokens` also after the minimum is reached), as vLLM keeps the flag. |
 
 If an item is off, its line is absent.
 
@@ -432,7 +680,8 @@ Run with any Python that has torch and numpy, e.g.
 `python -B tests/test_vocab.py && python -B tests/test_fp8.py`. They use stubs for
 the vLLM imports. Item 4 tests also need `triton` (`pip install triton`): run
 `python -B tests/test_screened.py [rows]` (default 4,096 rows, about 13 min on 32 CPU
-cores) and `python -B tests/test_screened_kernels.py` (Triton CPU interpreter).
+cores), `python -B tests/test_screened_kernels.py` (Triton CPU interpreter) and
+`python -B tests/test_screen_stats.py` (seconds).
 
 - `test_vocab.py`:
   - checks the asset sha256;
@@ -471,6 +720,13 @@ cores) and `python -B tests/test_screened_kernels.py` (Triton CPU interpreter).
   - the env switches: off, rows formula, `SCREEN_K` parsing and range, LoRA, TP,
     and the MXFP8 mutual exclusion;
   - check-mode counters and the log line.
+- `test_screen_stats.py` (item 4, seconds): the stats counters through the real
+  hooks on stub classes named like vLLM's: switch off records nothing (and the
+  reason stays the generic `logits_processor`); per-request processor reasons for
+  each processor (pipeline order wins within a request and across the batch);
+  every runner and batch reason in check order; screened calls by top_k; rows
+  from `logits_indices`; `required_top_k` unchanged; the exact log line, at most
+  one per interval (fake clock); empty tables; the value check.
 - `test_screened_kernels.py` (item 4): runs the real Triton kernels under the
   Triton CPU interpreter (`TRITON_INTERPRET=1`) against the torch emulation, for
   rows 1..20 and k 1..32 on a 4,133 x 640 head with padded rows. The exact set and
@@ -478,6 +734,75 @@ cores) and `python -B tests/test_screened_kernels.py` (Triton CPU interpreter).
   the greedy argmax equal. The interpreter misreads bf16 and fp8 loads, so the test
   passes fp32 tensors that hold the exact bf16/fp8 values. The on-GPU dtype
   conversions are therefore not covered.
+- `test_side_fp8.py` (item 5): runs in the vLLM 0.33 image with the overlay
+  mounted, against the real `ModelOptMixedPrecisionConfig`, `resolve_quant_method`,
+  online-target matcher and model-class mappings, on the checkpoints' `config.json`,
+  index and safetensors headers (no tensor data):
+  - switch off (unset, `0`, empty): no online config;
+  - on, NVIDIA: every runtime linear prefix derived from the index resolves as
+    expected: exactly the 192 modules of the six kinds become
+    `Fp8PerBlockOnlineLinearMethod`, each was `UnquantizedLinearMethod`, all BF16
+    in the checkpoint and 128-divisible; all others keep their stock method
+    (in_proj_ba, router, shared_expert_gate, HC mixers, PLE kv_proj, embed_tokens,
+    lm_head); experts and every `mtp.*` prefix never match;
+  - 312 checkpoint matrices = 300 of the RadixArk class (5.42 GiB, as recorded)
+    + 12 indexer; bytes before/after; the summary line on the real names;
+  - `mxfp8` selects `Mxfp8OnlineLinearMethod`; a bad format and a second online
+    config raise; `quant_config=None` is a no-op;
+  - FP4-Local: no-op with the MXFP8 log line, and forcing the targets there would
+    requantize (so the check is needed);
+  - `model.py`: the hooks run before `Qwen4ExpModel` (`maybe_unfuse_qsa_indexer`,
+    then `maybe_quantize_side_layers`) and the log after it;
+  - `[qsa-unfuse]`: today's N3 (fused, skip `self_attn.qkv_proj`) is 180 matrices
+    and its regex has no indexer; unfused, the 12 `self_attn.indexer.index_qk_proj`
+    prefixes map to the checkpoint's BF16 640 x 2,560 tensors and each `qkv_proj`
+    holds exactly q/k/v (13,312 rows), the MTP keeps the fused layout; unfused + skip
+    indexer: the 192 modules of the six kinds go FP8 and the indexer resolves
+    `UnquantizedLinearMethod` (`ReplicatedLinear`); unfused + no skip: 204; unfused +
+    skip `self_attn.qkv_proj`: indexer alone FP8 (and, without the packed-mapping
+    change, vLLM's "unmatched shards" error, which is why it is there); the indexer
+    skip without the switch and unknown kinds refuse; switch off (unset, `0`, empty)
+    leaves the mapping untouched; bytes N3 vs C1 and the C1 summary line; FP4-Local
+    with the switch: still a no-op, indexer and `qkv_proj` keep the checkpoint's
+    `ModelOptLinearMethod`; the builder forces the flag off and returns the stock
+    class (stock `__init__` stubbed), and the image's `qsa.py` still has the one
+    fusion assignment, the `del`, and the unfused forward call.
+  ```bash
+  H=<overlay dir>; C=$HOME/fn-local-patch/vllm; V=/usr/local/lib/python3.12/dist-packages/vllm; N=$V/models/qwen4_exp/nvidia
+  docker run --rm --runtime runc -e NVIDIA_VISIBLE_DEVICES=void --network none --entrypoint python3 \
+   -v $C/model_executor/layers/quantization/modelopt.py:$V/model_executor/layers/quantization/modelopt.py:ro \
+   -v $C/model_executor/layers/quantization/utils/nvfp4_utils.py:$V/model_executor/layers/quantization/utils/nvfp4_utils.py:ro \
+   -v $C/model_executor/models/utils.py:$V/model_executor/models/utils.py:ro \
+   -v $H/vllm/models/qwen4_exp/nvidia/draft_head.py:$N/draft_head.py:ro -v $H/vllm/models/qwen4_exp/nvidia/model.py:$N/model.py:ro \
+   -v $H/vllm/models/qwen4_exp/nvidia/screened_head.py:$N/screened_head.py:ro -v $H/vllm/models/qwen4_exp/nvidia/mtp.py:$N/mtp.py:ro \
+   -v $H/tests:/t:ro -v $HOME/thor-hf-cache:/root/.cache/huggingface:ro <vllm-0.33.0-image> \
+   -B /t/test_side_fp8.py /root/.cache/huggingface/hub/models--nvidia--Qwen3.8-Flash-Next-NVFP4/snapshots/fc694b54fb0174e0913e6adf86691ef85a4ead47 \
+   /root/.cache/huggingface/linked/fn-fp4-local
+  ```
+- `test_hc_fp8.py` (item 6): same image and mounts as `test_side_fp8.py` plus
+  `hyperconnection.py` and `hc_fp8.py`; the real overlay `GatedResidual`, vLLM Linear
+  classes, online FP8 methods and online layer-wise loader; only the GEMM kernel
+  object is a torch emulation. Checks:
+  - headers of both checkpoints: the 290 target HC matrices (48 x 2 x down /
+    inject / up + final mixer down / up), all BF16, 1.279 GB;
+  - switch off (unset, `0`, empty): `quant_config=None`, `UnquantizedLinearMethod`,
+    fused down+SiLU kept, no pad load, no log line;
+  - on (default `fp8_per_block,mxfp8`, `fp8_per_block` for both, and
+    `mxfp8,fp8_per_block`) on the full set of real runtime prefixes: the 194 target
+    Linears get the down / up method, the drafter's (`mtp.*`) keep BF16 and
+    the fused kernel; converted down layers have the zero pad and the unfused path;
+    the summary line with the exact bytes; the side-layer summary ignores HC layers; bad
+    `QWEN4EXP_HC_FP8_FORMAT` values are refused;
+  - real tensors of layers 0, 24, 47 and the final mixer of both checkpoints through
+    the online loader with the model's shard ids: quantized at load (not deferred),
+    pad rows exactly 0, per-matrix error, and one mix through the real
+    `_down_and_inject` / up Linear against the BF16 reference (table above);
+  - `model.py` logs after `Qwen4ExpModel` and imports `hc_fp8` only under the switch;
+    `hyperconnection.py` has no `quant_config=None` left.
+  ```bash
+  # as for test_side_fp8.py, plus
+   -v $H/vllm/models/qwen4_exp/nvidia/hyperconnection.py:$N/hyperconnection.py:ro    -v $H/vllm/models/qwen4_exp/nvidia/hc_fp8.py:$N/hc_fp8.py:ro    ... -B /t/test_hc_fp8.py <NVIDIA snapshot> /root/.cache/huggingface/linked/fn-fp4-local
+  ```
 - `test_fp8.py`: round-trip error of MXFP8 (mirrors 0.33's
   `_mxfp8_e4m3_quantize_torch` scale rule), PTPC and per-tensor on lm_head-like and
   MTP-dense shapes, with outlier rows and channels.
@@ -486,6 +811,9 @@ Not tested here (no GPU, no weights):
 - the online loader path on the real checkpoint;
 - the FlashInfer CUTLASS MXFP8 GEMM on sm_110 at M ≤ 6 with N = 248,320 and 47,232;
 - the online fused QSA qkv+indexer linear (the target uses serialized MXFP8 for it);
+- `[qsa-unfuse]` on a real model: building `Qwen4ExpQSAAttention` (needs the
+  engine), the weight load into the unfused modules, the forward, online FP8 on the
+  QSA `qkv_proj` without the indexer, and the step time;
 - acceptance rates;
 - end-to-end speed;
 - `build_draft_vocab.py` (it needs transformers; it parses);
@@ -526,5 +854,16 @@ Not tested here (no GPU, no weights):
 - **Item 4: ties.** Greedy text can diverge from a BF16-head run at an exact BF16
   tie of the top two logits (12 in 1.36M rows upstream). This is summation order,
   not the screen; any GEMM change does the same.
+- **Item 5: new online paths.** Online FP8 on the GDN `in_proj_qkvz` (four
+  logical shards loaded from two checkpoint tensors, one with a tuple shard id) and
+  `out_proj` is new; the QSA fused `qkv_proj`, `o_proj` and shared expert already
+  run this way in the drafter (item 3). The summary line and the stock
+  "Online quantization … took" line show that it ran.
+- **Item 5: quality.** Every target layer changes (W8A8, per-token-group 128
+  activations). The RadixArk hybrid held 94/100 Tool Eval with the same 300
+  matrices; the 12 indexer projections are extra (they feed the QSA top-k
+  selection; NVIDIA's FP4-Local ships them as MXFP8). Re-run Tool Eval.
+- **Item 5: small-M kernel.** `CutlassFp8BlockScaledMMKernel` at M = 1 + K was
+  measured only through the RadixArk hybrid (whole recipe +34%); measure decode tok/s.
 - **Untested setups.** TP>1, PP>1 and tied embeddings are untested. Item 1 is skipped
   for tied embeddings.

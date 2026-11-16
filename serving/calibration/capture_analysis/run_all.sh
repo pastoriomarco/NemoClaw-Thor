@@ -41,7 +41,7 @@ FP8_ARGS=()
   && FP8_ARGS=(--fp8-model "$FP8_MODEL")
 
 run() {
-  docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  docker run --rm --runtime runc -e NVIDIA_VISIBLE_DEVICES=void --network none --user "$(id -u):$(id -g)" -e HOME=/tmp \
     --cpus "${CPUS:-4}" --memory "${MEMORY:-8g}" \
     -v "$S:/scripts:ro" "${DUMP_MOUNTS[@]}" -v "$HF:/hf:ro" -v "$ASSET:/assets/draft_vocab.npy:ro" \
     "${CORPUS_MOUNT[@]}" -v "$OUT:/out" \

@@ -167,7 +167,7 @@ def _make_draft_vllm_config(
                 "quantized_layers",
                 _remap_quantized_layers(quantized_layers, mtp_start_layer_idx),
             )
-        # [draft-head] Online MXFP8 for the BF16 dense MTP projections.
+        # [draft-head] Online 8-bit for the BF16 dense MTP projections.
         maybe_quantize_mtp_dense(draft_quant_config)
 
     draft_vllm_config = replace(

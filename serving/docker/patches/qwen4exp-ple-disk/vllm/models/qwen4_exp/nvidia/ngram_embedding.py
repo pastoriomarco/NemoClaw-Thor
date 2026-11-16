@@ -241,6 +241,8 @@ class Qwen4ExpNGramEmbedding(nn.Module):
             data_parallel_rank=data_parallel_rank,
             reduce_results=not self.use_reduce_scatter,
         )
+        if ple_disk_enabled():  # [ple-disk] early row fetch reuses this hash
+            self.ngram_embedding.attach_early_fetch(self)
         if self.ngram_embedding.supports_prefetch:
             # The side-stream lookup outlives eager-break args, whose
             # graph-pool storage later segments may reuse.

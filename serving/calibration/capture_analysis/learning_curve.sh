@@ -21,7 +21,7 @@ IMAGE="vllm/vllm-openai@sha256:d825baf9ce4b1b6bfc5ecc7b79880c7e6748c65a72d697ce3
 MODEL=/hf/linked/fn-fp4-local
 mkdir -p "$OUT"
 run() {
-  docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp --cpus "${CPUS:-4}" --memory "${MEMORY:-8g}" \
+  docker run --rm --runtime runc -e NVIDIA_VISIBLE_DEVICES=void --network none --user "$(id -u):$(id -g)" -e HOME=/tmp --cpus "${CPUS:-4}" --memory "${MEMORY:-8g}" \
     -v "$S:/scripts:ro" "${DUMP_MOUNTS[@]}" -v "$HOME/thor-hf-cache:/hf:ro" -v "$OUT:/out" \
     --entrypoint nice "$IMAGE" -n 10 python3 -I "$@"
 }

@@ -28,6 +28,9 @@ logger = init_logger(__name__)
 # [spec-step] Capture the draft decode steps as FULL graphs even when the
 # target runs PIECEWISE only (e.g. host-side eager breaks in the target).
 _DRAFT_FULL_CG = os.environ.get("VLLM_SPEC_STEP_DRAFT_FULL_CG", "0") == "1"
+# [spec-step] Early PLE row fetch (qwen4exp-ple-disk overlay): hash and fetch
+# each draft but the last as soon as its draft pass has produced it.
+_PLE_EARLY = os.environ.get("VLLM_PLE_DISK_EARLY", "0") == "1"
 
 
 class TargetDependentARSpeculator(DraftModelSpeculator):
@@ -318,6 +321,10 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
                 skip_sample=num_speculative_tokens == 0,
             )
         self.on_prefill_end(num_reqs)
+        if _PLE_EARLY and num_speculative_tokens > 1:  # [spec-step] d1, not last
+            from vllm.models.qwen4_exp.common.ple_disk import ple_early_token
+
+            ple_early_token(self.draft_tokens[:1, 0])
         if SPEC_STEP_TIMER is not None:  # [spec-step]
             SPEC_STEP_TIMER.mark(f"draft0_{prefill_batch_desc.cg_mode.name}")
 
@@ -571,6 +578,10 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
                     cudagraph_runtime_mode=batch_desc.cg_mode,
                     num_speculative_steps=num_speculative_steps,
                 )
+            if _PLE_EARLY and step < num_speculative_steps - 1:  # [spec-step]
+                from vllm.models.qwen4_exp.common.ple_disk import ple_early_token
+
+                ple_early_token(self.draft_tokens[:1, step])
             if SPEC_STEP_TIMER is not None:  # [spec-step]
                 SPEC_STEP_TIMER.mark(f"draft{step}_{batch_desc.cg_mode.name}")
 

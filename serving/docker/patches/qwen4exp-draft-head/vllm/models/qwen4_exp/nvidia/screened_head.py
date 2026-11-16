@@ -25,6 +25,9 @@ outputs, no top_k, more rows than the buffers) use the full BF16 head. The
 rejection sampler applies the same top-k/top-p to the target logits before it
 reads target probabilities (spec_decode/rejection_sampler.py:264), so a draft
 token outside the top k has target probability 0 with either head.
+
+QWEN4EXP_LM_HEAD_SCREEN_STATS=<sec> counts screened and full-head calls, the
+latter by the first disqualifying reason, and logs the totals periodically.
 """
 
 import functools
@@ -42,6 +45,26 @@ logger = init_logger(__name__)
 SCREENED_ENV = "QWEN4EXP_LM_HEAD_SCREENED"
 SCREEN_K_ENV = "QWEN4EXP_LM_HEAD_SCREEN_K"
 SCREEN_CHECK_ENV = "QWEN4EXP_LM_HEAD_SCREEN_CHECK"
+SCREEN_STATS_ENV = "QWEN4EXP_LM_HEAD_SCREEN_STATS"
+
+# Logits-processor reasons for a full-head call, in sampler pipeline order
+# (sampler.py:254-260); a batch reports the first one any of its requests has.
+# Code 0 means none. Only recorded while QWEN4EXP_LM_HEAD_SCREEN_STATS is set.
+PROCESSOR_REASONS = (
+    None,
+    "allowed_token_ids",
+    "logit_bias",
+    "min_tokens",
+    "repetition_penalty",
+    "frequency_penalty",
+    "presence_penalty",
+    "bad_words",
+    "custom_processor",
+    "thinking_budget",
+)
+_REASON_CODE = {r: i for i, r in enumerate(PROCESSOR_REASONS)}
+# Set by ScreenedLMHead.build() when QWEN4EXP_LM_HEAD_SCREEN_STATS is set.
+_STATS: "ScreenStats | None" = None
 
 # Largest sampling top_k served by the screen. Qwen's recommended sampling uses
 # top_k=20; PR #60566 measured top-32 still 23% faster than the BF16 head at 64
@@ -278,22 +301,42 @@ class ScreenedLMHead:
     def required_top_k(self, sampler, idx_mapping_np: np.ndarray, num_tokens: int):
         """How many top logits sampling this batch reads (1 when all greedy),
         or None when it needs more than the screen certifies."""
+        return self.screen_decision(sampler, idx_mapping_np, num_tokens)[0]
+
+    def screen_decision(
+        self, sampler, idx_mapping_np: np.ndarray, num_tokens: int, detail=False
+    ) -> tuple[int | None, str | None]:
+        """(top_k, None) for a screened batch, else (None, first disqualifying
+        reason). With detail, the logits-processor reason is the specific one
+        (needs the per-request codes recorded while stats are on)."""
         states = sampler.sampling_states
-        if (
-            not 0 < num_tokens <= self.max_num_tokens
-            or np.any(sampler.uses_logits_processors[idx_mapping_np])
-            or sampler.get_logprobs_dims(idx_mapping_np) is not None
-        ):
-            return None
+        if num_tokens <= 0:
+            return None, "no_rows"
+        if num_tokens > self.max_num_tokens:
+            return None, "rows_over_max"
+        uses = sampler.uses_logits_processors[idx_mapping_np]
+        if np.any(uses):
+            reason = "logits_processor"
+            codes = getattr(sampler, "screen_processor_reason", None)
+            if detail and codes is not None:
+                code = codes[idx_mapping_np][uses]
+                code = code[code > 0]
+                if code.size:
+                    reason = PROCESSOR_REASONS[int(code.min())]
+            return None, reason
+        if sampler.get_logprobs_dims(idx_mapping_np) is not None:
+            return None, "logprobs"
         sampled = idx_mapping_np[states.temperature.np[idx_mapping_np] != 0.0]
         if sampled.size == 0:
-            return self.min_top_k
+            return self.min_top_k, None
         # Without top-k, top-p reads the whole distribution; min-p is applied
         # before top-k.
         top_k = int(states.top_k.np[sampled].max())
-        if top_k > self.max_top_k or np.any(states.min_p.np[sampled] != 0.0):
-            return None
-        return max(top_k, self.min_top_k)
+        if top_k > self.max_top_k:
+            return None, "no_top_k" if top_k >= states.vocab_size else "top_k_over_max"
+        if np.any(states.min_p.np[sampled] != 0.0):
+            return None, "min_p"
+        return max(top_k, self.min_top_k), None
 
     def __call__(self, x: torch.Tensor, top_k: int = 1) -> torch.Tensor:
         num_tokens = x.shape[0]
@@ -392,6 +435,9 @@ class ScreenedLMHead:
         torch.cuda.synchronize()
         if os.environ.get(SCREEN_CHECK_ENV, "0") not in ("", "0"):
             head.check = ScreenCheck(int(os.environ[SCREEN_CHECK_ENV]))
+        if os.environ.get(SCREEN_STATS_ENV, "0") not in ("", "0"):
+            global _STATS
+            _STATS = ScreenStats(float(os.environ[SCREEN_STATS_ENV]))
         _install_hooks()
         logger.info(
             "[screened-head] lm_head %d x %d: FP8 screen ready in %.1f s "
@@ -457,6 +503,78 @@ class ScreenCheck:
             )
 
 
+class ScreenStats:
+    """QWEN4EXP_LM_HEAD_SCREEN_STATS=<sec>: count target sample() calls and
+    their logit rows, screened (by top_k) or full head (by the first
+    disqualifying reason), and log the totals since load at most every <sec>
+    seconds, on the first call after the interval. Host-side only: no GPU
+    sync, no device tensor read."""
+
+    clock = staticmethod(time.monotonic)
+
+    def __init__(self, every_s: float):
+        if not every_s > 0:
+            raise ValueError(f"{SCREEN_STATS_ENV} must be > 0 seconds, got {every_s}")
+        self.every_s = every_s
+        self.start = self.clock()
+        self.next_log = self.start + every_s
+        self.calls = 0
+        self.rows = 0
+        # top_k -> [calls, rows]; reason -> [calls, rows]
+        self.screened: dict[int, list[int]] = {}
+        self.full: dict[str, list[int]] = {}
+
+    def count(self, top_k: int | None, reason: str | None, rows: int) -> None:
+        self.calls += 1
+        self.rows += rows
+        table, key = (self.screened, top_k) if top_k is not None else (self.full, reason)
+        entry = table.get(key)
+        if entry is None:
+            table[key] = [1, rows]
+        else:
+            entry[0] += 1
+            entry[1] += rows
+        now = self.clock()
+        if now >= self.next_log:
+            self.next_log = now + self.every_s
+            logger.info("%s", self.line(now))
+
+    def line(self, now: float) -> str:
+        def total(table):
+            return [sum(v[0] for v in table.values()), sum(v[1] for v in table.values())]
+
+        def items(table, fmt):
+            ordered = sorted(table.items(), key=lambda kv: (-kv[1][1], str(kv[0])))
+            return " ".join(f"{fmt(k)}={c}/{r}" for k, (c, r) in ordered)
+
+        sc, sr = total(self.screened)
+        fc, fr = total(self.full)
+        return (
+            f"[screened-head] stats {now - self.start:.0f}s calls/rows: "
+            f"all={self.calls}/{self.rows} screened={sc}/{sr} full={fc}/{fr} "
+            f"| screened by top_k: {items(self.screened, lambda k: f'k{k}') or '-'} "
+            f"| full by reason: {items(self.full, str) or '-'}"
+        )
+
+
+def _processor_reason(processor, sampling_params) -> str:
+    """The specific reason a vLLM 0.33 logits processor flagged a request
+    (logit_bias.py:57-116, penalties.py:301-306, bad_words.py:40-72)."""
+    name = type(processor).__name__
+    sp = sampling_params
+    if name == "LogitBiasState":
+        if sp.allowed_token_ids:
+            return "allowed_token_ids"
+        return "logit_bias" if sp.logit_bias else "min_tokens"
+    if name == "PenaltiesState":
+        if sp.repetition_penalty != 1.0:
+            return "repetition_penalty"
+        return "frequency_penalty" if sp.frequency_penalty != 0.0 else "presence_penalty"
+    if name == "BadWordsState":
+        return "bad_words"
+    return "custom_processor"
+
+
 def find_screened_head(model) -> ScreenedLMHead | None:
     get_language_model = getattr(model, "get_language_model", None)
     language_model = get_language_model() if get_language_model else model
@@ -480,8 +598,20 @@ def _install_hooks() -> None:
         uses_processors = self.thinking_budget_state.add_request(
             req_idx, sampling_params
         )
+        stats = _STATS is not None
+        code = _REASON_CODE["thinking_budget"] if uses_processors else 0
         for processor in self.logits_processors:
-            uses_processors |= processor.add_request(req_idx, sampling_params)
+            flagged = processor.add_request(req_idx, sampling_params)
+            if flagged and stats:
+                c = _REASON_CODE[_processor_reason(processor, sampling_params)]
+                code = c if code == 0 else min(code, c)
+            uses_processors |= flagged
+        if stats:
+            if not hasattr(self, "screen_processor_reason"):
+                self.screen_processor_reason = np.zeros(
+                    self.needs_logits_processing.shape, dtype=np.int8
+                )
+            self.screen_processor_reason[req_idx] = code
         self.uses_logits_processors[req_idx] = uses_processors
         self.needs_logits_processing[req_idx] = needs_processing or uses_processors
         self.logprob_token_ids_state.add_request(req_idx, sampling_params)
@@ -489,6 +619,24 @@ def _install_hooks() -> None:
             self.trace_replay_state.add_request(req_idx, sampling_params)
 
     Sampler.add_request = add_request
+
+    def runner_reason(runner, sampler, grammar_output) -> str | None:
+        """Why this sample() call cannot use the screen at all, or None."""
+        if grammar_output is not None:
+            return "structured_output"
+        if runner.batch_sharder is not None:
+            return "batch_sharder"
+        if type(sampler) is not Sampler:
+            return "sampler_subclass"
+        if sampler.compute_nans:
+            return "compute_nans"
+        if sampler.trace_replay_state is not None:
+            return "trace_replay"
+        if sampler.return_sampling_mask:
+            return "sampling_mask"
+        if not hasattr(sampler, "uses_logits_processors"):
+            return "hook_missing"
+        return None
 
     orig_sample = GPUModelRunner.sample
 
@@ -498,21 +646,21 @@ def _install_hooks() -> None:
         # logits with self.model.compute_logits; the model's compute_logits uses
         # the screen while head.top_k is set.
         head = find_screened_head(self.model)
-        sampler = self.sampler
-        if (
-            head is None
-            or grammar_output is not None
-            or self.batch_sharder is not None
-            or type(sampler) is not Sampler
-            or sampler.compute_nans
-            or sampler.trace_replay_state is not None
-            or sampler.return_sampling_mask
-            or not hasattr(sampler, "uses_logits_processors")
-        ):
+        if head is None:
             return orig_sample(self, hidden_states, input_batch, grammar_output)
-        head.top_k = head.required_top_k(
-            sampler, input_batch.idx_mapping_np, input_batch.logits_indices.shape[0]
+        sampler = self.sampler
+        stats = _STATS
+        rows = input_batch.logits_indices.shape[0]  # host-side shape, no sync
+        reason = runner_reason(self, sampler, grammar_output)
+        if reason is not None:
+            if stats is not None:
+                stats.count(None, reason, rows)
+            return orig_sample(self, hidden_states, input_batch, grammar_output)
+        head.top_k, reason = head.screen_decision(
+            sampler, input_batch.idx_mapping_np, rows, detail=stats is not None
         )
+        if stats is not None:
+            stats.count(head.top_k, reason, rows)
         try:
             return orig_sample(self, hidden_states, input_batch, grammar_output)
         finally:

@@ -18,6 +18,7 @@ instead of embedding feature-specific logic directly.
 
 import functools
 import gc
+import os  # [spec-step]
 import time
 from collections.abc import Iterable
 from contextlib import AbstractContextManager
@@ -195,6 +196,10 @@ from vllm.v1.worker.utils import (
 from vllm.v1.worker.workspace import lock_workspace, use_workspace_lane
 
 logger = init_logger(__name__)
+
+# [spec-step] Early PLE row fetch (qwen4exp-ple-disk overlay): hash and fetch
+# the next verify batch's first token right after sampling.
+_PLE_EARLY = os.environ.get("VLLM_PLE_DISK_EARLY", "0") == "1"
 
 
 class GPUModelRunner(LoRAModelRunnerMixin):
@@ -2321,6 +2326,17 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if isinstance(self.sampler, GPUWatermarkSampler):
                 self.speculator.prepare_watermarking(
                     self.sampler, input_batch.idx_mapping
+                )
+            if _PLE_EARLY and input_batch.num_reqs == 1 and num_spec_tokens > 0:
+                # [spec-step] one sequence: its next verify batch starts with
+                # the token just sampled (postprocess_sampled has run).
+                from vllm.models.qwen4_exp.common.ple_disk import ple_early_begin
+
+                ple_early_begin(
+                    self.req_states.all_token_ids.gpu,
+                    self.req_states.num_computed_tokens.gpu,
+                    self.req_states.last_sampled_tokens,
+                    input_batch.idx_mapping,
                 )
             if SPEC_STEP_TIMER is not None:  # [spec-step]
                 SPEC_STEP_TIMER.mark("post")

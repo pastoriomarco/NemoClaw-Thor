@@ -5,14 +5,20 @@ Qwen3.8-Flash-Next ("Qwen4Exp") with the built-in MTP drafter on Jetson AGX Thor
 with breakable CUDA graphs. 0.33 turns breakable graphs on by itself for
 `Qwen4Exp*`: `config/vllm.py:76-112`, `:842-869`.
 
-This overlay adds two things. Both are off unless an env variable is set, and with
-neither variable set the behaviour is stock:
+This overlay adds three things. All are off unless an env variable is set, and with
+none of the variables set the behaviour is stock:
 
 1. **`VLLM_SPEC_STEP_DRAFT_FULL_CG=1`**: capture the MTP draft *decode* steps
    (draft positions 1..K-1) as FULL CUDA graphs even though the target stays
    PIECEWISE. In stock 0.33 they run eagerly in that case.
 2. **`VLLM_SPEC_STEP_TIMING=<N>`**: a per-step phase timing log that averages over N
    decode steps. It records CUDA events and host timestamps and never synchronizes.
+3. **`VLLM_PLE_DISK_EARLY=1`**: the hooks of the `qwen4exp-ple-disk` early row fetch
+   (plan step A2). After sampling and after each draft pass but the last, the
+   runner and speculator hand the new token of the next verify batch to
+   `ple_early_begin` / `ple_early_token`, which hash it and read its PLE rows
+   during drafting. What, why and how to verify: that overlay's README,
+   "Early row fetch".
 
 Line numbers below refer to the pristine 0.33.0 files.
 
@@ -117,15 +123,17 @@ Paths mirror the package, relative to `vllm/`.
 | File | Kind | Hunks (all marked `[spec-step]`) |
 |---|---|---|
 | `vllm/v1/worker/gpu/spec_step_timing.py` | new | `SpecStepTimer`: `begin_step` / `set_label` / `mark(name)` / `end_step`. A phase is the interval since the previous mark, with host time (`perf_counter`) and GPU time (CUDA events on the current stream). Completed steps are resolved with `Event.query()` and never synchronize. Every N `decode` steps it logs averages. Module singleton `SPEC_STEP_TIMER` is `None` unless `VLLM_SPEC_STEP_TIMING>0`. |
-| `vllm/v1/worker/gpu/model_runner.py` | full copy of 0.33 (sha256 `9145e260…0121`) | Import of `SPEC_STEP_TIMER`. `execute_model`: `begin_step` (non-dummy), `set_label("decode")` when the batch is a uniform spec-decode batch (`uniform_tok_count == decode_query_len`), marks `prep` (before the forward) and `target` (after it). `sample_tokens`: marks `gap` (entry), `sample` (after `self.sample`), `post` (before `propose`), `tail`, then `end_step`. Each call site is one `is not None` check. |
-| `vllm/v1/worker/gpu/spec_decode/target_dependent_ar/speculator.py` | full copy of 0.33 (sha256 `511b337a…e318`) | (a) `init_cudagraph_manager`: with `VLLM_SPEC_STEP_DRAFT_FULL_CG=1`, a non-NONE target mode, and draft attention support ≥ `UNIFORM_SINGLE_TOKEN_DECODE`, the draft decode manager gets `FULL_DECODE_ONLY` instead of `NONE`, with a one-line log. Everything downstream is stock: capture (`capture()` → `decode_cudagraph_manager.capture(_generate_draft)`), dispatch and `_multi_step_decode`'s `run_fullgraph` branch are the path 0.33 already takes whenever the target is FULL_AND_PIECEWISE. (b) Timing marks: `draft_prep`, `draft0_<mode>`, `draft_dec_prep`, `draft<s>_meta`, `draft<s>_<mode>` per decode pass, and `draft_fused_*` on the fused path. |
+| `vllm/v1/worker/gpu/model_runner.py` | full copy of 0.33 (sha256 `9145e260…0121`) | Import of `SPEC_STEP_TIMER`. `execute_model`: `begin_step` (non-dummy), `set_label("decode")` when the batch is a uniform spec-decode batch (`uniform_tok_count == decode_query_len`), marks `prep` (before the forward) and `target` (after it). `sample_tokens`: marks `gap` (entry), `sample` (after `self.sample`), `post` (before `propose`), `tail`, then `end_step`. Each call site is one `is not None` check. Early PLE fetch: `import os`, the `_PLE_EARLY` switch, and in `sample_tokens` after `postprocess_sampled` (before the `post` mark), with one request and drafts to propose, `ple_early_begin(all_token_ids, num_computed_tokens, last_sampled_tokens, idx_mapping)`. |
+| `vllm/v1/worker/gpu/spec_decode/target_dependent_ar/speculator.py` | full copy of 0.33 (sha256 `511b337a…e318`) | (a) `init_cudagraph_manager`: with `VLLM_SPEC_STEP_DRAFT_FULL_CG=1`, a non-NONE target mode, and draft attention support ≥ `UNIFORM_SINGLE_TOKEN_DECODE`, the draft decode manager gets `FULL_DECODE_ONLY` instead of `NONE`, with a one-line log. Everything downstream is stock: capture (`capture()` → `decode_cudagraph_manager.capture(_generate_draft)`), dispatch and `_multi_step_decode`'s `run_fullgraph` branch are the path 0.33 already takes whenever the target is FULL_AND_PIECEWISE. (b) Timing marks: `draft_prep`, `draft0_<mode>`, `draft_dec_prep`, `draft<s>_meta`, `draft<s>_<mode>` per decode pass, and `draft_fused_*` on the fused path. (c) Early PLE fetch: the `_PLE_EARLY` switch; `ple_early_token(draft_tokens[:1, 0])` after draft pass 0 when K ≥ 2, and `ple_early_token(draft_tokens[:1, step])` after decode pass `step` for `step < K - 1` (outside the graphs, between replays). |
 
 The draft prefill (pass 0) is unchanged: it stays PIECEWISE and reuses the target's
 metadata.
 
 ## Docker mounts
 
-Mount all three together: both modified files import the new module. The container
+Mount all three together: both modified files import the new module. With
+`VLLM_PLE_DISK_EARLY=1` the `qwen4exp-ple-disk` mounts are needed too (the hooks
+import `vllm.models.qwen4_exp.common.ple_disk` at the first step). The container
 package root is `/usr/local/lib/python3.12/dist-packages/vllm`.
 
 ```bash
@@ -146,8 +154,9 @@ No other overlay touches these files.
 |---|---|---|
 | `VLLM_SPEC_STEP_DRAFT_FULL_CG` | `0` | `1` captures and replays FULL graphs for MTP draft decode passes 1..K-1 while the target stays PIECEWISE. No effect with `cudagraph_mode=NONE` / `--enforce-eager`, or when the target is already FULL for decode. |
 | `VLLM_SPEC_STEP_TIMING` | `0` | `N>0` logs one line per N uniform spec-decode steps. Other steps (prefill chunks, mixed) are counted but not averaged. |
+| `VLLM_PLE_DISK_EARLY` | `0` | `1` calls the early PLE row fetch hooks (`qwen4exp-ple-disk`). Each call site is one module-level bool check when off. |
 
-vLLM will warn "Unknown vLLM environment variable detected" for both. That is harmless.
+vLLM will warn "Unknown vLLM environment variable detected" for these. That is harmless.
 
 ## Verifying from the log
 
@@ -228,5 +237,9 @@ is needed in this overlay: `_configure_decode_metadata_update` will then pick
 - `spec_step_timing.py` driven on CPU with a stub `torch.cuda.Event` (7 synthetic
   steps, window 3, one non-decode step): averages and labels as expected, marks
   outside a step ignored.
-- **Not run:** no import of the patched runner or speculator inside the 0.33 image,
-  no server start, no capture, no device timing, no A/B. Nothing was run on Thor.
+- Early PLE fetch hunks (2026-11-15): the patched runner and speculator import in
+  the 0.33 image (CPU container) with `VLLM_PLE_DISK_EARLY=1`. The hook logic is
+  tested in `qwen4exp-ple-disk/tests/test_ple_disk_early.py`.
+- **Not run (original hunks, at writing):** no import of the patched runner or
+  speculator inside the 0.33 image, no server start, no capture, no device timing,
+  no A/B. **Not run (early hunks):** no server start, no GPU run, no A/B.
