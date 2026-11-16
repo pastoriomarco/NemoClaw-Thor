@@ -409,3 +409,30 @@ ManyForge integration layer. As of May 2026 the fork relationship has been
 detached on GitHub; this is now an independent project. Credit to the
 original maintainer for the initial Thor onboarding scaffolding that made the
 first weeks easier.
+
+### Serving (Qwen3.8-Flash-Next on Thor): sources and credits
+
+What the `serving/` recipes take from others, and what for:
+
+- **NVIDIA** checkpoints [`nvidia/Qwen3.8-Flash-Next-NVFP4`](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4)
+  and [`nvidia/Qwen3.8-Flash-Next-FP4-Local`](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-FP4-Local), served on the
+  official [vLLM](https://github.com/vllm-project/vllm) image with [FlashInfer](https://github.com/flashinfer-ai/flashinfer)
+  kernels. Overlay files are copies of their files and keep their license headers.
+- **vLLM pull requests** used or backported: #64312 (CSF-compressed NVFP4 scales) and #64869 (weights mapper) for
+  FP4-Local, #60566 (screened lm_head, backported as the screened target head).
+- **FlashInfer** [#7827](https://github.com/flashinfer-ai/flashinfer/pull/7827) and vLLM issue
+  [#65054](https://github.com/vllm-project/vllm/issues/65054): GDN prefill on sm_110 (overlay
+  `flashinfer-gdn-prefill-sm110`, a minimal backport; prepared, not measured yet), including the Thor kernel
+  benchmarks.
+- **[TensorRT Edge-LLM](https://github.com/NVIDIA/TensorRT-Edge-LLM)** 0.12 `--ple-residency cached`: the design of
+  the CLOCK slot-pool PLE cache (`qwen4exp-ple-disk`).
+- **[Mjolnir](https://github.com/GoBrrr-ai/mjolnir)**: its draft-decode CUDA graph capture, together with our own
+  step timing, motivated capturing the MTP draft passes as full graphs (`qwen4exp-spec-step`). Its other overlaps
+  with our recipes (reduced draft vocabulary, FP8 heads, the `cooperative_topk` guard) predate our review of it or
+  were found independently; dated record in [`THOR-ACCELERATOR-ROI.md`](serving/docs/THOR-ACCELERATOR-ROI.md).
+- **[RadixArk](https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4)** checkpoint: base of the earlier FP8 hybrid
+  recipe.
+- **Benchmarks**: `sgbench.sh` from [azampatti/GB10-3.8-Flash-Next](https://github.com/azampatti/GB10-3.8-Flash-Next),
+  `bench_categories.py` from [tonyd2wild/Qwen3.8-Flash-Next-NVFP4-DGX-Spark](https://github.com/tonyd2wild/Qwen3.8-Flash-Next-NVFP4-DGX-Spark),
+  [llama-benchy](https://github.com/eugr/llama-benchy) (eugr), [tool-eval-bench](https://github.com/SeraphimSerapis/tool-eval-bench)
+  and [EvalPlus](https://github.com/evalplus/evalplus) (HumanEval/HumanEval+).

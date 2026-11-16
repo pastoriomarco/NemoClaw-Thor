@@ -528,7 +528,7 @@ a verdict needs an agent-style workload with thinking on. The current vocabulary
 
 Two recipes, same stack, start script [`scripts/flash-next-thor-serve.sh`](../scripts/flash-next-thor-serve.sh)
 (`n3|r8b single|multi`; copy on Thor `~/fn-bench/flash-next-thor-serve.sh`). It lists every mount, env and argument,
-and maps each Thor overlay folder to its source under `docker/patches/`. Pick **N3 + C1 + C2** for tool-heavy agent
+and maps each Thor overlay folder to its source under `docker/patches/`. Sources and credits: the repository README, "Acknowledgements". Pick **N3 + C1 + C2** for tool-heavy agent
 work (best Tool Eval, passes the prompt-injection scenario TC-81) and **R8b + C3 + C2** for speed (2–9 % faster,
 best HumanEval, 37 GB smaller). Keep desktop GPU monitors closed on Thor while serving (~3 ms per step).
 
@@ -601,6 +601,38 @@ lists every strategy tried so far, kept or not. Result: the two recipes in "Curr
 
 **Later:** see "Later" in the speed plan (adaptive draft length, prompt-lookup drafts, NVFP4 draft head, prefill
 kernels), plus TensorRT Edge-LLM 0.12 as a reference point and side layers NVFP4 (−6 ms, quality unknown).
+
+## Upstream status (checked 2026-11-16)
+
+vLLM 0.33.0 is still the latest release. FlashInfer 0.7.4 is the latest; vLLM main pins it. Evaluate each item below when
+moving to the next vLLM release (likely together with Qwen4).
+
+Covered on vLLM main, not yet released. Drop the overlay once a release has it:
+
+| Our overlay | Upstream |
+|---|---|
+| FP4-Local scale decode, `WeightsMapper` (`~/fn-local-patch`) | #64312, #64869 merged |
+| `qsa_indexer.py` `persistent_topk` on sm_110 | main skips `cooperative_topk` on families 110 and 120 |
+| PLE table from disk (base path) | #59958 `--engram-config '{"disk_offload": true}'` (`preadv` into fixed buffers). Compare it with our CLOCK slot pool (−2 ms, +163K KV tokens) before switching; open PRs #66464 and #66941 add O_DIRECT reads and next-chunk prefetch |
+| `moe_utils.py` arch list (1 of the 4 CuTe DSL MoE lines) | FlashInfer main / 0.7.4 |
+
+To evaluate:
+- **Side FP8 (N3) through the stock flag.** `--quantization-config '{"targets": …}'` already works in 0.33. Our
+  `QWEN4EXP_SIDE_FP8` only adds a guard against requantizing a checkpoint that already quantizes the side layers,
+  and N3's checkpoint does not. With C1 the indexer is its own linear, so a stock target regex can leave it out.
+  If the stock flag gives the same 192 − 12 matrices, step time and Tool Eval, drop `QWEN4EXP_SIDE_FP8` and
+  `QWEN4EXP_SIDE_FP8_SKIP`.
+- **CuTe DSL GDN prefill** (`--gdn-prefill-backend cutedsl`, #65050, opt-in; `auto` stays Triton/FLA on sm_110).
+  Flash-Next's GDN layers have exactly the shapes benchmarked in issue #65054 (16 key / 48 value heads, K=V=128,
+  36 layers). Kernel times there: per layer at 8,192 tokens, FLA 11.4 ms, CuTe DSL 7.3 ms, FlashInfer 1.7 ms. For
+  36 layers that is about 0.41 s (our measured 430 ms), 0.26 s and 0.06 s per 8K tokens. The FlashInfer GDN kernel
+  is still blocked on sm_110 by FlashInfer's own major-10 check (issue #65054).
+- **`flashinfer-cutlass-moe-sm110` overlay:** mounted in both recipes but never selected (CuTe DSL MoE wins), and
+  upstream disabled that path on sm_110 on purpose (#62275). Candidate to drop.
+- Not covered upstream (carry or upstream): CuTe DSL NVFP4 MoE gates (FlashInfer FC1/FC2, vLLM
+  `_supports_current_device`), MXFP8 small-M tactic, screened head (#60566 open), reduced draft vocabulary
+  (#58578 request), C1, C2, MTP dense FP8, draft-step FULL graphs (main reworked the speculator in #60989; port
+  and recheck).
 
 ## To test later
 - [ ] `QWEN4EXP_MTP_DENSE_FP8` A/B (kept for now, 2026-11-16): the current recipe (`flash-next-thor-serve.sh`, N3 and R8b) with and without it, same setup otherwise. Measure decode step time (`FN_STATS=1`) and acceptance on the same prompts. Estimated ~0.3 ms and 67 MB; never measured alone. Remove it if nothing is measurable.

@@ -10,7 +10,9 @@ none of the variables set the behaviour is stock:
 
 1. **`VLLM_SPEC_STEP_DRAFT_FULL_CG=1`**: capture the MTP draft *decode* steps
    (draft positions 1..K-1) as FULL CUDA graphs even though the target stays
-   PIECEWISE. In stock 0.33 they run eagerly in that case.
+   PIECEWISE. In stock 0.33 they run eagerly in that case. Motivated by our
+   step timing (draft passes host-bound) and by the draft-decode capture in
+   [Mjolnir](https://github.com/GoBrrr-ai/mjolnir) (GoBrrr-ai).
 2. **`VLLM_SPEC_STEP_TIMING=<N>`**: a per-step phase timing log that averages over N
    decode steps. It records CUDA events and host timestamps and never synchronizes.
 3. **`VLLM_PLE_DISK_EARLY=1`**: the hooks of the `qwen4exp-ple-disk` early row fetch
